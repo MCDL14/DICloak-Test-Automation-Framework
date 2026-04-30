@@ -612,6 +612,60 @@ class EnvironmentPage(BasePage):
             f"direction={direction}, serials={last_serials}"
         )
 
+    def environment_header_texts(self) -> list[str]:
+        value = self.cdp.evaluate(
+            """
+            () => {
+                const visible = (el) => {
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                };
+                return Array.from(document.querySelectorAll(".el-table__header th, thead th"))
+                    .filter(visible)
+                    .map((th) => (th.innerText || th.textContent || "").trim())
+                    .filter(Boolean);
+            }
+            """
+        )
+        return value if isinstance(value, list) else []
+
+    def open_column_settings(self) -> None:
+        self.dismiss_blocking_overlays()
+        self.cdp.click_element_by_script(self._column_settings_button_script())
+        self._wait_column_settings_dialog_visible()
+
+    def move_column_before(self, source_text: str, target_text: str) -> None:
+        self.cdp.drag_element_by_script_to_element_by_script(
+            self._column_settings_sort_icon_script(source_text),
+            self._column_settings_sortable_item_script(target_text),
+            target_y_ratio=-0.2,
+        )
+        self._wait_column_settings_field_before(source_text, target_text)
+
+    def move_column_after(self, source_text: str, target_text: str) -> None:
+        self.cdp.drag_element_by_script_to_element_by_script(
+            self._column_settings_sort_icon_script(source_text),
+            self._column_settings_sortable_item_script(target_text),
+            target_y_ratio=1.2,
+        )
+        self._wait_column_settings_field_after(source_text, target_text)
+
+    def confirm_column_settings(self) -> None:
+        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
+        self._wait_for_overlay_closed()
+        self._wait_for_environment_list()
+
+    def wait_header_order(self, expected_prefix: list[str], timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_headers: list[str] = []
+        while time.time() < deadline:
+            last_headers = self.environment_header_texts()
+            if last_headers[: len(expected_prefix)] == expected_prefix:
+                return
+            time.sleep(0.5)
+        raise TimeoutError(f"header order did not match expected prefix: expected={expected_prefix}, actual={last_headers}")
+
     def environment_name_by_serial(self, serial: str) -> str:
         row = self._environment_row_by_serial(serial)
         return str(row.get("name", "")).strip()
@@ -959,6 +1013,63 @@ class EnvironmentPage(BasePage):
                 .find((item) => (item.innerText || item.textContent || "").trim().includes("环境序号"));
             if (!th) return null;
             return th.querySelector(`.sort-caret.${{expectedDirection}}`) || null;
+        }}
+        """
+
+    def _column_settings_button_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+            const headers = Array.from(document.querySelectorAll(".el-table__header th, thead th"))
+                .filter(visible);
+            for (const th of headers) {
+                if (!(th.innerText || th.textContent || "").includes("操作")) continue;
+                const button = th.querySelector(".custom-list, .icon-custom");
+                if (button && visible(button)) return button;
+            }
+            return Array.from(document.querySelectorAll(".custom-list, .icon-custom")).find(visible) || null;
+        }
+        """
+
+    def _column_settings_sortable_item_script(self, field_text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {field_text!r};
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            const dialogs = Array.from(document.querySelectorAll(".el-dialog"))
+                .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
+            for (const dialog of dialogs.reverse()) {{
+                const item = Array.from(dialog.querySelectorAll(".sortable"))
+                    .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText);
+                if (item) return item;
+            }}
+            return null;
+        }}
+        """
+
+    def _column_settings_sort_icon_script(self, field_text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {field_text!r};
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            const dialogs = Array.from(document.querySelectorAll(".el-dialog"))
+                .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
+            for (const dialog of dialogs.reverse()) {{
+                const item = Array.from(dialog.querySelectorAll(".sortable"))
+                    .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText);
+                if (!item) continue;
+                return item.querySelector(".sortable-icon, .icon-sort") || item;
+            }}
+            return null;
         }}
         """
 
@@ -1614,6 +1725,72 @@ class EnvironmentPage(BasePage):
                 return
             time.sleep(0.3)
         raise TimeoutError("quick edit environment name dialog did not appear")
+
+    def _wait_column_settings_dialog_visible(self) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            visible = self.cdp.evaluate(
+                """
+                () => {
+                    const visible = (el) => {
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    return Array.from(document.querySelectorAll(".el-dialog"))
+                        .some((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
+                }
+                """
+            )
+            if visible:
+                return
+            time.sleep(0.3)
+        raise TimeoutError("column settings dialog did not appear")
+
+    def _wait_column_settings_field_before(self, source_text: str, target_text: str) -> None:
+        self._wait_column_settings_field_relative(source_text, target_text, before=True)
+
+    def _wait_column_settings_field_after(self, source_text: str, target_text: str) -> None:
+        self._wait_column_settings_field_relative(source_text, target_text, before=False)
+
+    def _wait_column_settings_field_relative(self, source_text: str, target_text: str, before: bool) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            order = self._column_settings_field_order()
+            try:
+                source_index = order.index(source_text)
+                target_index = order.index(target_text)
+            except ValueError:
+                source_index = -1
+                target_index = -1
+            if source_index >= 0 and target_index >= 0:
+                if before and source_index < target_index:
+                    return
+                if not before and source_index > target_index:
+                    return
+            time.sleep(0.3)
+        relation = "before" if before else "after"
+        raise TimeoutError(f"column settings field was not moved {relation}: source={source_text}, target={target_text}")
+
+    def _column_settings_field_order(self) -> list[str]:
+        value = self.cdp.evaluate(
+            """
+            () => {
+                const visible = (el) => {
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                };
+                const dialogs = Array.from(document.querySelectorAll(".el-dialog"))
+                    .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
+                const dialog = dialogs[dialogs.length - 1];
+                if (!dialog) return [];
+                return Array.from(dialog.querySelectorAll(".sortable"))
+                    .filter(visible)
+                    .map((item) => (item.innerText || item.textContent || "").trim())
+                    .filter(Boolean);
+            }
+            """
+        )
+        return value if isinstance(value, list) else []
 
     def _quick_edit_environment_name_input_script(self) -> str:
         return """

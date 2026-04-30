@@ -178,6 +178,40 @@ class CDPDriver:
         element = self._wait_for_element_by_script(script, timeout=timeout)
         element.hover(timeout=timeout)
 
+    def drag_element_by_script_to_element_by_script(
+        self,
+        source_script: str,
+        target_script: str,
+        target_y_ratio: float = 0.5,
+        timeout: int | None = None,
+    ) -> None:
+        # 用真实鼠标拖拽处理 Sortable/HTML5 拖动类控件；target_y_ratio 控制落点在目标元素内的垂直位置。
+        timeout = timeout if timeout is not None else self._script_element_timeout_ms()
+        source = self._wait_for_element_by_script(source_script, timeout=timeout)
+        target = self._wait_for_element_by_script(target_script, timeout=timeout)
+        source_box = source.bounding_box()
+        target_box = target.bounding_box()
+        if not source_box or not target_box:
+            raise TimeoutError("source or target bounding box was not available before drag")
+
+        start_x = source_box["x"] + source_box["width"] / 2
+        start_y = source_box["y"] + source_box["height"] / 2
+        end_x = target_box["x"] + target_box["width"] / 2
+        end_y = target_box["y"] + target_box["height"] * target_y_ratio
+
+        mouse = self._page().mouse
+        mouse.move(start_x, start_y)
+        time.sleep(0.2)
+        mouse.down()
+        time.sleep(0.5)
+        for step in range(1, 41):
+            x = start_x + (end_x - start_x) * step / 40
+            y = start_y + (end_y - start_y) * step / 40
+            mouse.move(x, y)
+            time.sleep(0.02)
+        time.sleep(0.5)
+        mouse.up()
+
     def click_element_by_script_and_wait_for_request(
         self,
         script: str,

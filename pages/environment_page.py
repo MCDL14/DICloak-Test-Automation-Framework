@@ -70,6 +70,46 @@ class EnvironmentPage(BasePage):
         self.cdp.click_element_by_script(self._clear_search_button_script())
         self._wait_for_environment_list()
 
+    def filter_by_environment_group(self, group_name: str) -> None:
+        # 环境分组筛选框位于“序号/名称/备注”输入框左侧，筛选后需要点击搜索按钮才会刷新列表。
+        self.clear_selected_environments()
+        self._wait_for_environment_group_filter_visible()
+        self.cdp.click_element_by_script(self._environment_group_filter_select_script())
+        self.cdp.click_element_by_script(self._select_dropdown_option_script(group_name))
+        self._wait_environment_group_filter_selected(group_name)
+        self.cdp.click_element_by_script(self._search_button_script())
+        self.wait_environment_groups_in_current_list(group_name)
+
+    def environment_group_values_in_current_list(self) -> list[str]:
+        return [
+            str(row.get("group", "")).strip()
+            for row in self._environment_rows()
+            if str(row.get("group", "")).strip()
+        ]
+
+    def wait_environment_groups_in_current_list(
+        self,
+        group_name: str,
+        timeout_seconds: int | None = None,
+    ) -> list[str]:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_groups: list[str] = []
+        while time.time() < deadline:
+            rows = self._environment_rows()
+            last_groups = [
+                str(row.get("group", "")).strip()
+                for row in rows
+                if str(row.get("group", "")).strip()
+            ]
+            if rows and last_groups and all(group == group_name for group in last_groups):
+                return last_groups
+            time.sleep(0.5)
+        raise TimeoutError(
+            "environment group filter result did not match expected group: "
+            f"expected={group_name}, actual={last_groups}"
+        )
+
     def dismiss_blocking_overlays(self) -> None:
         # 调试中断后可能残留创建环境抽屉、二次确认弹窗等，先关闭避免遮挡列表按钮。
         for _ in range(4):
@@ -129,6 +169,95 @@ class EnvironmentPage(BasePage):
 
     def _fill_search_input(self, name: str) -> None:
         self.cdp.fill("input[placeholder='序号/名称/备注']", name)
+
+    def _wait_for_environment_group_filter_visible(self) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self.cdp.evaluate(
+                """
+                () => {
+                    const input = document.querySelector("input[placeholder='序号/名称/备注']");
+                    if (!input) return false;
+                    const inputRect = input.getBoundingClientRect();
+                    const visible = (el) => {
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    return Array.from(document.querySelectorAll(".el-select"))
+                        .filter(visible)
+                        .some((select) => {
+                            const rect = select.getBoundingClientRect();
+                            return rect.x < inputRect.x && Math.abs(rect.y - inputRect.y) < 30;
+                        });
+                }
+                """
+            ):
+                return
+            time.sleep(0.2)
+        raise RuntimeError("environment group filter did not appear")
+
+    def _environment_group_filter_select_script(self) -> str:
+        # 环境分组筛选控件没有稳定的业务 id；按“搜索输入框左侧同一行最近的 el-select”定位。
+        return """
+        () => {
+            const input = document.querySelector("input[placeholder='序号/名称/备注']");
+            if (!input) return null;
+            const inputRect = input.getBoundingClientRect();
+            const visible = (el) => {
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+            const selects = Array.from(document.querySelectorAll(".el-select"))
+                .filter(visible)
+                .map((select) => {
+                    const rect = select.getBoundingClientRect();
+                    return { select, rect };
+                })
+                .filter((item) => item.rect.x < inputRect.x)
+                .filter((item) => Math.abs(item.rect.y - inputRect.y) < 30)
+                .sort((left, right) => right.rect.x - left.rect.x);
+            const select = selects[0]?.select || null;
+            if (!select) return null;
+            return select.querySelector(".el-select__wrapper, input") || select;
+        }
+        """
+
+    def _wait_environment_group_filter_selected(self, group_name: str) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        expected = json.dumps(str(group_name))
+        while time.time() < deadline:
+            selected = self.cdp.evaluate(
+                f"""
+                () => {{
+                    const expected = {expected};
+                    const input = document.querySelector("input[placeholder='序号/名称/备注']");
+                    if (!input) return false;
+                    const inputRect = input.getBoundingClientRect();
+                    const visible = (el) => {{
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    }};
+                    const selects = Array.from(document.querySelectorAll(".el-select"))
+                        .filter(visible)
+                        .map((select) => {{
+                            const rect = select.getBoundingClientRect();
+                            return {{ select, rect }};
+                        }})
+                        .filter((item) => item.rect.x < inputRect.x)
+                        .filter((item) => Math.abs(item.rect.y - inputRect.y) < 30)
+                        .sort((left, right) => right.rect.x - left.rect.x);
+                    const select = selects[0]?.select || null;
+                    if (!select) return false;
+                    const text = (select.innerText || select.textContent || "").trim();
+                    const value = select.querySelector("input")?.value || "";
+                    return text.includes(expected) || value.includes(expected);
+                }}
+                """,
+            )
+            if selected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"environment group filter was not selected: {group_name}")
 
     def _search_button_script(self) -> str:
         # 放大镜只负责提交搜索；按输入框右侧同一行的搜索按钮定位，避免点到表格行按钮。
@@ -1123,6 +1252,7 @@ class EnvironmentPage(BasePage):
                     return {
                         serial: cells[0] || "",
                         name: cells[1] || "",
+                        group: cells[3] || "",
                         cells,
                         action: buttons.find((text) => ["打开", "关闭"].includes(text)) || "",
                     };

@@ -97,6 +97,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "fixed_url": "https://bilibili.com",
             "url_keyword": "bilibili.com",
         },
+        "environment_filter_group": {
+            "group_name": "自动化分组",
+        },
         "environment_batch_create": {
             "environment_name_prefix": "自动化-批量创建环境",
             "create_count": 5,

@@ -161,6 +161,11 @@ test_data:
     # 校验内核标签页时使用的 URL 关键字，兼容跳转到 www 子域等情况
     url_keyword: "bilibili.com"
 
+  # 环境列表筛选-自动化分组用例数据
+  environment_filter_group:
+    # 环境列表“环境分组”筛选框选择的分组名称；用例会校验列表环境分组列均为该值
+    group_name: "自动化分组"
+
   # 批量创建环境用例数据
   environment_batch_create:
     # 批量创建时填写的环境名称前缀；用例会清理该前缀下的自动化环境

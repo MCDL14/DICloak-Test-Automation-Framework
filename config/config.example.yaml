@@ -1,0 +1,262 @@
+# APP 启动与进程配置
+app:
+  # Dicloak APP 的 exe 完整路径
+  exe_path: "C:/Program Files/Dicloak/Dicloak.exe"
+  # Dicloak APP 的工作目录
+  work_dir: "C:/Program Files/Dicloak"
+  # APP 启动参数；CDP 参数必须拆成两个独立参数
+  startup_args:
+    - "--remote-debugging-port=9222"
+    - "--remote-allow-origins=*"
+  # Windows 进程名，用于检测、关闭已有 APP
+  process_name: "DICloak.exe"
+  # 启动前是否结束已有 Dicloak APP 实例；当前使用 taskkill /F /T，避免 APP 退出确认弹窗卡住流程
+  close_existing_before_start: true
+  # 启动后检测 APP 进程的超时时间，单位秒
+  process_check_timeout: 30
+  # APP 启动总超时时间，单位秒
+  startup_timeout: 60
+  # APP 强制结束后的等待超时时间，单位秒
+  shutdown_timeout: 20
+
+# Electron CDP 连接配置
+cdp:
+  # CDP 服务地址
+  host: "127.0.0.1"
+  # CDP 服务端口，需要和 startup_args 中 remote-debugging-port 一致
+  port: 9222
+  # 首选 CDP 驱动，当前优先使用 playwright
+  driver: "playwright"
+  # 首选驱动失败时的兜底驱动
+  fallback_driver: "websocket"
+  # CDP 连接超时时间，单位秒
+  connect_timeout: 30
+  # 默认目标页面 URL 关键字；为空时后续通过页面标题或关键元素识别
+  default_page_url_keyword: ""
+
+# 登录账号配置
+account:
+  # 自动化登录账号
+  username: "your_username"
+  # 自动化登录密码
+  password: "your_password"
+  # 自动化账号登录后必须切换到的团队名称；外部账号可能拥有多个团队
+  team_name: "【内部】UI自动化测试团队-勿删勿改！！"
+  # 点击“切换团队”后等待团队列表接口返回的超时时间，单位秒
+  team_switch_timeout: 20
+
+# 飞书通知配置
+feishu:
+  # 是否启用飞书通知
+  enabled: true
+  # 飞书自定义机器人 webhook
+  webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/xxxx"
+  # 需要 @ 的飞书用户 open_id；为空则不 @ 人
+  at_open_id: ""
+  # @ 人显示名称
+  at_name: ""
+  # 成功时是否发送通知
+  notify_on_success: false
+  # 失败时是否发送通知
+  notify_on_failure: true
+  # 飞书请求超时时间，单位秒
+  timeout: 10
+
+# 报告配置，第一版先预留
+report:
+  # 是否启用 HTML 报告服务
+  enabled: false
+  # HTML 报告文件名
+  html_file: "test_report.html"
+  # 本地报告服务端口
+  port: 9091
+
+# 超时时间配置，单位均为秒
+timeouts:
+  # 普通元素操作等待时间；点击、输入、读取文本前会等待元素可见，点击/输入还会等待可用
+  element_seconds: 10
+  # 通过脚本动态定位元素的等待时间；用于表格行内按钮、动态弹层按钮等
+  script_element_seconds: 10
+  # 普通请求/响应监听等待时间；打开环境等特殊场景会使用更长的业务超时
+  request_seconds: 30
+  # 普通页面区域加载等待时间；用于环境列表、基础设置页等页面内容出现
+  page_seconds: 10
+  # 登录态标识等待时间；用于判断头像等已登录元素是否存在
+  login_marker_seconds: 3
+  # 环境列表筛选后等待搜索结果出现的时间
+  search_result_seconds: 10
+  # 基础设置页读取环境缓存目录的等待时间
+  settings_cache_dir_seconds: 15
+  # 打开环境并等待 open_env 请求、按钮变为关闭的时间
+  environment_open_seconds: 90
+  # 关闭环境并等待按钮变回打开的时间
+  environment_close_seconds: 90
+  # 等待内核主进程启动或退出的时间
+  kernel_process_seconds: 90
+  # 等待内核 CDP 端口可访问的时间
+  kernel_cdp_seconds: 30
+  # 校验候选内核 CDP 端口是否可用的快速探测时间
+  kernel_cdp_probe_seconds: 3
+  # 单次访问 /json/version 等 HTTP 探测接口的超时时间
+  http_probe_seconds: 2
+  # 内核下载完成等待时间；下载 134/142 内核时等待 browsers 目录出现对应版本文件夹
+  kernel_download_seconds: 300
+  # 批量导入提交后等待“导入结果”弹窗和结果表格的时间
+  batch_import_seconds: 120
+
+# 测试数据配置
+test_data:
+  # 自动化新建环境名称前缀
+  environment_name_prefix: "auto_env"
+  # P0 内核场景中 142 环境名称
+  kernel_142_environment_name: "142环境"
+  # P0 内核场景中 134 环境名称
+  kernel_134_environment_name: "134环境"
+  # 内核完整性校验数据
+  kernel_integrity:
+    # 优先校验和打开的 142 内核环境名称
+    environment_name: "142内核环境-4"
+    # 首行不是目标环境时，在筛选框中输入的关键字
+    fallback_search_keyword: "142"
+    # 打开环境后等待启动/关闭的浏览器进程名
+    browser_process_name: "GinsBrowser.exe"
+    # 系统进程里显示的内核进程名称，用于读取版本号
+    kernel_process_name: "GinsBrowser"
+    # 期望内核版本号前缀
+    expected_kernel_prefix: "142"
+    # 期望 134 内核版本号前缀
+    expected_134_kernel_prefix: "134"
+    # 134 内核环境筛选关键字
+    kernel_134_search_keyword: "134内核"
+    # 需要下载的 134 内核大版本
+    kernel_134_download_major: "134"
+    # 环境缓存目录下需要清空的子目录
+    cache_subdir_name: "browsers"
+
+  # 创建默认配置环境用例数据
+  environment_create_default:
+    # 用例中创建、打开、关闭、删除的环境名称
+    environment_name: "自动化-创建环境"
+
+  # 创建 134 内核环境用例数据
+  environment_create_134_kernel:
+    # 用例中创建、打开、校验、关闭、删除的环境名称
+    environment_name: "自动化-创建134内核环境"
+    # 创建环境时在“浏览器内核”下拉框选择的内核
+    kernel_label: "ChromeBrowser 134"
+    # 打开环境后通过内核 CDP 校验的版本号前缀
+    expected_kernel_prefix: "134"
+
+  # 编辑环境名称用例数据
+  environment_edit_name:
+    # 临时修改后的环境名称；用例结束前会按环境序号还原原始名称
+    temporary_name: "自动化-编辑环境名称"
+
+  # 编辑固定打开网址用例数据
+  environment_edit_fixed_open_url:
+    # 用例会筛选并编辑的预置环境名称；该环境由自动化团队提前准备
+    environment_name: "自动化编辑打开网址"
+    # 写入“高级设置 - 固定打开网页”的网址
+    fixed_url: "https://bilibili.com"
+    # 校验内核标签页时使用的 URL 关键字，兼容跳转到 www 子域等情况
+    url_keyword: "bilibili.com"
+
+  # 批量创建环境用例数据
+  environment_batch_create:
+    # 批量创建时填写的环境名称前缀；用例会清理该前缀下的自动化环境
+    environment_name_prefix: "自动化-批量创建环境"
+    # 批量创建数量
+    create_count: 5
+
+  # 批量创建 134 内核环境用例数据
+  environment_batch_create_134_kernel:
+    # 批量创建时填写的环境名称前缀；用例会清理该前缀下的自动化环境
+    environment_name_prefix: "自动化-批量创建134内核环境"
+    # 批量创建数量
+    create_count: 3
+    # 批量创建时在“浏览器内核”下拉框选择的内核
+    kernel_label: "ChromeBrowser 134"
+    # 打开环境后通过每个内核 CDP 校验的版本号前缀
+    expected_kernel_prefix: "134"
+
+  # 书签相关测试数据
+  bookmark:
+    # 书签文件存放目录
+    storage_dir: "C:/testdata/bookmarks"
+    # 覆盖书签场景使用的文件名
+    overwrite_file_name: "overwrite_bookmarks.html"
+    # 追加书签场景使用的文件名
+    append_file_name: "append_bookmarks.html"
+    # 覆盖书签场景使用的数据行；可按字符串列表或对象列表维护
+    overwrite_rows: ["覆盖书签示例", "自动化测试"]
+    # 追加书签场景使用的数据行；可按字符串列表或对象列表维护
+    append_rows: ["追加书签示例", "自动化测试"]
+
+  # 成员导出校验数据
+  member_export:
+    # 预先准备的正确成员文件完整路径
+    expected_file_full_path: "C:/testdata/member_export/expected_members.xlsx"
+    # APP 导出成员文件的输出目录
+    export_dir: "C:/testdata/member_export/output"
+    # 固定导出文件名；成员导出文件带时间戳时保持为空
+    export_file_name: ""
+    # 成员导出文件名正则；示例：导出成员列表 - 202604281947.xlsx
+    export_file_regex: "^导出成员列表 - \\d{12}\\.xlsx$"
+
+  # 批量导入数据
+  batch_import:
+    # 批量导入文件所在目录
+    file_dir: "C:/testdata/import"
+    # 批量导入 xlsx 文件名
+    file_name: "dicloak_import.xlsx"
+
+  # 批量导出校验数据
+  batch_export:
+    # 批量导出文件输出目录
+    export_dir: "C:/testdata/export"
+    # 批量导出文件名
+    export_file_name: "environments.xlsx"
+
+  # 抓包进程拦截验证数据
+  packet_capture:
+    # 抓包工具进程名；APP 内置功能会基于该进程名阻止打开环境
+    process_name: "Charles.exe"
+    # 抓包工具启动路径；自动化只负责启动或确认进程存在，不进入工具内部操作
+    startup_path: "C:/Program Files/Charles/Charles.exe"
+
+  # 本地扩展包数据
+  local_extension:
+    # 本地扩展包文件名
+    package_name: "local_extension.zip"
+    # 本地扩展包所在目录；如果这里直接配置 zip 完整路径，也会兼容
+    package_path: "C:/testdata/extensions"
+
+# 运行控制配置
+run:
+  # 默认执行用例级别
+  case_level: "P0"
+  # 是否并行执行；第一版默认关闭
+  default_parallel: false
+  # 是否启用带 UI 的启动界面；第一版默认关闭
+  enable_launcher_ui: false
+  # 失败重试次数
+  retry_times: 1
+  # 重试间隔，单位秒
+  retry_interval_seconds: 3
+  # 执行用例前是否先进行环境预检
+  precheck_before_run: true
+  # 登录失败时是否触发熔断
+  stop_on_login_failed: true
+  # 用例失败时是否截图
+  screenshot_on_failure: true
+  # 用例失败时是否采集日志
+  collect_log_on_failure: true
+
+# 日志配置
+log:
+  # 日志级别
+  level: "INFO"
+  # 日志输出目录
+  dir: "logs"
+  # 日志保留天数
+  keep_days: 14

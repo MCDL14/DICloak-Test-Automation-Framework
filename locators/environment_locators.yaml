@@ -1,0 +1,95 @@
+# 左侧菜单“环境管理”。当前 EnvironmentPage.open_list 使用可见文本兜底点击。
+environment_menu:
+  selector: "li:has-text('环境管理'), a:has-text('环境管理')"
+
+# 环境列表表格容器。读取整表文本时使用。
+environment_table:
+  selector: ".el-table"
+
+# “创建环境”按钮。实测有稳定 id=createEnvBtn。
+create_button:
+  selector: "#createEnvBtn, button:has-text('创建环境')"
+
+# “批量创建”按钮。未选中环境时显示在环境列表顶部工具栏，点击后打开批量创建抽屉。
+batch_create_button:
+  selector: "button:has-text('批量创建'), div:has-text('批量创建')"
+
+# 批量创建抽屉里的“创建数量”输入框。placeholder 为“请输入创建数量”，类型为 number。
+batch_create_count_input:
+  selector: "input[placeholder='请输入创建数量']"
+
+# 批量创建抽屉里的“环境名称前缀”输入框。用例通过该前缀筛选并清理本次创建的数据。
+batch_create_name_prefix_input:
+  selector: "input[placeholder='请输入环境名称前缀']"
+
+# 创建环境右侧抽屉里的环境名称输入框。placeholder 为“请填写环境名称”。
+environment_name_input:
+  selector: "input[placeholder='请填写环境名称']"
+
+# 创建环境右侧抽屉里的“指纹设置”折叠面板标题。创建 134 内核环境时需要先展开该面板。
+fingerprint_settings_header:
+  selector: ".el-drawer .el-collapse-item__header:has-text('指纹设置')"
+
+# “指纹设置”面板里的“更多指纹”展开入口。它是 div 结构，需要点击带 tw-cursor-pointer 的容器。
+more_fingerprint_button:
+  selector: ".el-drawer .tw-cursor-pointer:has-text('更多指纹')"
+
+# “更多指纹”展开后的“浏览器内核”下拉框。实际点击时通过 label=浏览器内核 找到同一 form-item 内的 el-select。
+browser_kernel_select:
+  selector: ".el-drawer .el-form-item:has(label:has-text('浏览器内核')) .el-select__wrapper"
+
+# “浏览器内核”下拉框里的 ChromeBrowser 134 选项。
+browser_kernel_134_option:
+  selector: ".el-select__popper .el-select-dropdown__item:has-text('ChromeBrowser 134')"
+
+# 创建环境右侧抽屉里的确认按钮。实际点击时限定在可见 drawer/dialog/message-box 内按文案“确定”查找。
+save_button:
+  selector: ".el-drawer button:has-text('确定'), .el-dialog button:has-text('确定')"
+
+# 环境列表右上角筛选输入框。该输入框默认展示，不需要点击放大镜展开。
+search_input:
+  selector: "input[placeholder='序号/名称/备注']"
+
+# 环境列表右上角放大镜按钮。只用于提交搜索，不负责展开搜索框。
+search_button:
+  selector: "button:has(.icon-search)"
+
+# 环境行内“打开”按钮。实际点击时需要先按环境名找到对应行，再在行内找按钮。
+open_environment_button:
+  selector: "button:has-text('打开')"
+
+# 环境行内“关闭”按钮。实际点击时需要先按环境名找到对应行，再在行内找按钮。
+close_environment_button:
+  selector: "button:has-text('关闭')"
+
+# 环境行最左侧选择框。批量操作时需要先按环境名找到对应行，再点击行内 checkbox。
+environment_row_checkbox:
+  selector: ".el-table__row .el-checkbox"
+
+# 选中环境后顶部批量工具栏里的“打开环境”。该控件是 div 结构，不是 button。
+batch_open_environment:
+  selector: "div:has-text('打开环境')"
+
+# 选中环境后顶部批量工具栏里的“关闭环境”。该控件是 div 结构，不是 button。
+batch_close_environment:
+  selector: "div:has-text('关闭环境')"
+
+# 选中环境后顶部批量工具栏里的“更多操作”。需要真实 hover 后才会展开批量更多菜单。
+batch_more_operation:
+  selector: ".el-sub-menu__title:has-text('更多操作')"
+
+# 顶部批量工具栏“更多操作”展开后的“删除环境”菜单项。批量删除环境必须使用该入口。
+batch_delete_environment:
+  selector: ".el-menu--popup .el-menu-item:has-text('删除环境')"
+
+# 环境行内“打开”按钮右侧更多 icon。实际点击时需要先按环境名找到对应行，再点行内 button.more-btn。
+more_environment_button:
+  selector: "button.more-btn:has(.icon-more)"
+
+# 环境更多菜单里的“删除”项。实测位于 el-dropdown-menu__item，需先展开目标行更多菜单。
+delete_environment_button:
+  selector: ".el-dropdown-menu__item:has-text('删除')"
+
+# 通用确认按钮。删除环境二次弹窗可能显示“确认”或“确定”。
+confirm_button:
+  selector: ".el-message-box button:has-text('确认'), .el-message-box button:has-text('确定'), .el-dialog button:has-text('确认'), .el-dialog button:has-text('确定')"

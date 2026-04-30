@@ -1,0 +1,14 @@
+batch_import_menu:
+  selector: ""
+import_panel:
+  selector: ""
+file_input:
+  selector: ""
+choose_file_button:
+  selector: ""
+submit_import_button:
+  selector: ""
+import_result:
+  selector: ""
+failed_environment_list:
+  selector: ""

@@ -1,0 +1,14 @@
+kernel_menu:
+  selector: ""
+kernel_table:
+  selector: ""
+kernel_search_input:
+  selector: ""
+delete_kernel_button:
+  selector: ""
+download_kernel_button:
+  selector: ""
+environment_kernel_version:
+  selector: ""
+confirm_button:
+  selector: ""

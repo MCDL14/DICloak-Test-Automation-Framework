@@ -1,0 +1,43 @@
+# 登录页账号输入框。登录态失效时使用；如果 APP 改了 placeholder，优先改这里。
+username_input:
+  selector: "input[placeholder='请输入邮箱或账号']"
+
+# 登录页密码输入框。登录态失效时使用；如果 APP 改了 placeholder 或 input type，优先改这里。
+password_input:
+  selector: "input[type='password'][placeholder='请输入密码']"
+
+# 登录页提交按钮。当前按按钮文案“立即登录”定位。
+login_button:
+  selector: "button:has-text('立即登录')"
+
+# 已登录标识。头像区域存在即认为当前页面处于已登录主界面。
+logged_in_marker:
+  selector: "header.el-header .tool-bar-ri .avatar"
+
+# 登录失败提示。当前没有稳定选择器，暂时为空。
+login_error:
+  selector: ""
+
+# 顶部账号/头像菜单入口。个人设置、切换团队、退出登录都从这里打开。
+account_menu:
+  selector: "header.el-header .tool-bar-ri .avatar"
+
+# 账号菜单里的当前账号文本。当前主要从 localStorage.basic:state 读取账号，这里是兜底。
+current_account:
+  selector: "header.el-header .tool-bar-ri .avatar .username"
+
+# 账号菜单里的当前团队文本。当前主要从 localStorage.basic:state 读取团队，这里是兜底。
+current_team:
+  selector: ".userInfo-popover li:first-child"
+
+# 账号菜单里的“切换团队”按钮。外部账号需要切到自动化团队时使用。
+switch_team_button:
+  selector: ".userInfo-popover button:has-text('切换团队')"
+
+# 账号菜单里的退出登录入口。账号不一致时会退出后重登。
+logout_button:
+  selector: ".userInfo-popover li:last-child"
+
+# 退出登录确认弹窗里的确定按钮。
+confirm_logout_button:
+  selector: ".el-message-box button:has-text('确定')"

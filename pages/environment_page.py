@@ -670,6 +670,17 @@ class EnvironmentPage(BasePage):
         self._confirm_edit_save_message_if_present()
         self._wait_for_overlay_closed()
 
+    def quick_edit_environment_name_by_serial(self, serial: str, new_name: str) -> None:
+        # 列表快捷编辑入口在环境名称列内，必须先点名称再点名称右侧的 edit 图标。
+        self.dismiss_blocking_overlays()
+        self.cdp.click_element_by_script(self._environment_name_text_by_serial_script(serial))
+        self.cdp.click_element_by_script(self._environment_name_quick_edit_button_by_serial_script(serial))
+        self._wait_quick_edit_environment_name_dialog_visible()
+        self.cdp.fill_element_by_script(self._quick_edit_environment_name_input_script(), new_name)
+        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
+        self._confirm_edit_save_message_if_present()
+        self._wait_for_overlay_closed()
+
     def edit_environment_fixed_open_url(self, name: str, fixed_url: str) -> None:
         # 编辑环境 -> 高级设置 -> 固定打开网页。按表单标签定位 textarea，避免依赖输入框顺序。
         self.click_environment_more(name)
@@ -795,6 +806,55 @@ class EnvironmentPage(BasePage):
                 const button = Array.from(row.querySelectorAll("button.more-btn"))
                     .find((el) => visible(el) && el.querySelector(".icon-more"));
                 if (button) return button;
+            }}
+            return null;
+        }}
+        """
+
+    def _environment_name_text_by_serial_script(self, serial: str) -> str:
+        return f"""
+        () => {{
+            const expectedSerial = {serial!r};
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            const rows = Array.from(document.querySelectorAll(".el-table__row, tbody tr"))
+                .filter(visible);
+            for (const row of rows) {{
+                const rawCells = Array.from(row.querySelectorAll("td"));
+                const cells = rawCells
+                    .map((cell) => (cell.innerText || cell.textContent || "").trim())
+                    .filter(Boolean);
+                if (cells[0] !== expectedSerial) continue;
+                const nameCell = rawCells[2];
+                return nameCell?.querySelector(".sle") || nameCell || null;
+            }}
+            return null;
+        }}
+        """
+
+    def _environment_name_quick_edit_button_by_serial_script(self, serial: str) -> str:
+        return f"""
+        () => {{
+            const expectedSerial = {serial!r};
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            const rows = Array.from(document.querySelectorAll(".el-table__row, tbody tr"))
+                .filter(visible);
+            for (const row of rows) {{
+                const rawCells = Array.from(row.querySelectorAll("td"));
+                const cells = rawCells
+                    .map((cell) => (cell.innerText || cell.textContent || "").trim())
+                    .filter(Boolean);
+                if (cells[0] !== expectedSerial) continue;
+                const nameCell = rawCells[2];
+                if (!nameCell) continue;
+                return nameCell.querySelector(".edit-btn-on-hover .icon-edit")
+                    || nameCell.querySelector(".edit-btn-on-hover")
+                    || null;
             }}
             return null;
         }}
@@ -1424,6 +1484,44 @@ class EnvironmentPage(BasePage):
                 return
             time.sleep(0.3)
         raise TimeoutError("edit environment drawer did not appear")
+
+    def _wait_quick_edit_environment_name_dialog_visible(self) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            visible = self.cdp.evaluate(
+                """
+                () => {
+                    const visible = (el) => {
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    return Array.from(document.querySelectorAll(".env-update-dialog, .el-dialog"))
+                        .some((dialog) => visible(dialog) && (dialog.innerText || "").includes("编辑环境名称"));
+                }
+                """
+            )
+            if visible:
+                return
+            time.sleep(0.3)
+        raise TimeoutError("quick edit environment name dialog did not appear")
+
+    def _quick_edit_environment_name_input_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+            const dialogs = Array.from(document.querySelectorAll(".env-update-dialog, .el-dialog"))
+                .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("编辑环境名称"));
+            for (const dialog of dialogs) {
+                const input = Array.from(dialog.querySelectorAll("input"))
+                    .find((el) => visible(el) && el.getAttribute("placeholder") === "请填写环境名称");
+                if (input) return input;
+            }
+            return null;
+        }
+        """
 
     def _confirm_edit_save_message_if_present(self) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)

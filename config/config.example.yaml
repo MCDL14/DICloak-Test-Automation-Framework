@@ -152,6 +152,11 @@ test_data:
     # 临时修改后的环境名称；用例结束前会按环境序号还原原始名称
     temporary_name: "自动化-编辑环境名称"
 
+  # 列表快捷修改环境名称用例数据
+  environment_quick_edit_name:
+    # 通过环境列表名称右侧快捷编辑入口临时修改后的环境名称；用例结束前会按环境序号还原原始名称
+    temporary_name: "自动化-列表快捷修改环境名称"
+
   # 编辑固定打开网址用例数据
   environment_edit_fixed_open_url:
     # 用例会筛选并编辑的预置环境名称；该环境由自动化团队提前准备

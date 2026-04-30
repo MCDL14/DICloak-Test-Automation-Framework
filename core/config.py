@@ -92,6 +92,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "environment_edit_name": {
             "temporary_name": "自动化-编辑环境名称",
         },
+        "environment_quick_edit_name": {
+            "temporary_name": "自动化-列表快捷修改环境名称",
+        },
         "environment_edit_fixed_open_url": {
             "environment_name": "自动化编辑打开网址",
             "fixed_url": "https://bilibili.com",

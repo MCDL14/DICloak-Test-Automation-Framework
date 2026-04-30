@@ -62,7 +62,7 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。
 
-当前已完成并验证环境管理模块 11 条 P0 用例，文件位于 `tests/p0/environment_management/`：
+当前已完成并验证环境管理模块 12 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
 - `test_01_kernel_integrity.py`
 - `test_02_create_default_environment.py`
@@ -75,5 +75,6 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 - `test_09_filter_environment_group.py`
 - `test_10_filter_environment_remark.py`
 - `test_11_top_environment.py`
+- `test_12_quick_edit_environment_name.py`
 
 已预留代理管理、扩展管理、环境分组管理、成员管理、全局设置模块目录，后续新增用例时按业务模块放入对应目录。

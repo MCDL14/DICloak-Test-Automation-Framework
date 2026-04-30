@@ -515,9 +515,68 @@ class EnvironmentPage(BasePage):
             raise RuntimeError("environment list has no visible rows")
         return str(rows[0].get("serial", "")).strip(), str(rows[0].get("name", "")).strip()
 
+    def environment_serial_at_position(self, position: int) -> str:
+        rows = self._environment_rows()
+        if position <= 0:
+            raise ValueError(f"environment row position must be 1-based: {position}")
+        if len(rows) < position:
+            raise RuntimeError(f"environment list has fewer than {position} visible rows: actual={len(rows)}")
+        return str(rows[position - 1].get("serial", "")).strip()
+
+    def first_environment_serial(self) -> str:
+        return self.environment_serial_at_position(1)
+
     def environment_name_by_serial(self, serial: str) -> str:
         row = self._environment_row_by_serial(serial)
         return str(row.get("name", "")).strip()
+
+    def top_environment_by_serial(self, serial: str) -> None:
+        # 行内“置顶”会调用 env/batch/top；等待接口响应后再交给用例校验列表排序。
+        self.click_environment_more_by_serial(serial)
+        response = self.cdp.click_element_by_script_and_wait_for_response(
+            self._visible_dropdown_item_script("置顶"),
+            "env/batch/top",
+        )
+        self._assert_response_success(response, "top environment")
+
+    def cancel_top_environment_by_serial(self, serial: str) -> None:
+        # 取消置顶使用同一个 env/batch/top 接口，菜单文案变为“取消置顶”。
+        self.click_environment_more_by_serial(serial)
+        response = self.cdp.click_element_by_script_and_wait_for_response(
+            self._visible_dropdown_item_script("取消置顶"),
+            "env/batch/top",
+        )
+        self._assert_response_success(response, "cancel top environment")
+
+    def wait_first_environment_serial(
+        self,
+        serial: str,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_serial = ""
+        while time.time() < deadline:
+            last_serial = self.first_environment_serial()
+            if last_serial == serial:
+                return
+            time.sleep(0.5)
+        raise TimeoutError(f"first environment serial did not become expected: expected={serial}, actual={last_serial}")
+
+    def wait_first_environment_serial_not(
+        self,
+        serial: str,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_serial = ""
+        while time.time() < deadline:
+            last_serial = self.first_environment_serial()
+            if last_serial != serial:
+                return
+            time.sleep(0.5)
+        raise TimeoutError(f"first environment serial was still unexpected top serial: {last_serial}")
 
     def environment_action_text(self, name: str) -> str:
         row = self._environment_row(name)
@@ -1271,6 +1330,11 @@ class EnvironmentPage(BasePage):
             if str(row.get("serial", "")).strip() == str(serial).strip():
                 return row
         raise RuntimeError(f"environment row was not found by serial: {serial}")
+
+    def _assert_response_success(self, response: dict[str, str | int], action_name: str) -> None:
+        status = int(response.get("status", 0) or 0)
+        if not 200 <= status < 300:
+            raise RuntimeError(f"{action_name} request failed: status={status}, response={response}")
 
     def _environment_rows(self) -> list[dict]:
         # Element Plus 表格列可能动态隐藏/冻结；这里读取可见 tr/td，并约定 cells[1] 是环境名称列。

@@ -1,6 +1,6 @@
 # Dicloak 自动化框架
 
-本项目用于 Dicloak Electron APP 的自动化测试，第一版目标是先完成框架基础能力，再讨论并实现 P0 验证用例。
+本项目用于 Dicloak Electron APP 的自动化测试。当前框架已具备配置读取、环境预检、APP 生命周期管理、CDP 连接、飞书通知、用例运行编排和 P0 环境管理用例执行能力。
 
 ## 环境准备
 
@@ -62,4 +62,15 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。
 
-P0 用例还未编写。下一步需要先确认 P0-1、P0-2、P0-3 的具体页面元素定位、测试数据准备方式和清理规则。
+当前已完成并验证环境管理模块 8 条 P0 用例，文件位于 `tests/p0/environment_management/`：
+
+- `test_01_kernel_integrity.py`
+- `test_02_create_default_environment.py`
+- `test_03_batch_create_environments.py`
+- `test_04_create_134_kernel_environment.py`
+- `test_05_batch_create_134_kernel_environments.py`
+- `test_06_batch_import_environments.py`
+- `test_07_edit_environment_name.py`
+- `test_08_edit_fixed_open_url.py`
+
+已预留代理管理、扩展管理、环境分组管理、成员管理、全局设置模块目录，后续新增用例时按业务模块放入对应目录。

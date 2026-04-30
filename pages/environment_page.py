@@ -526,6 +526,92 @@ class EnvironmentPage(BasePage):
     def first_environment_serial(self) -> str:
         return self.environment_serial_at_position(1)
 
+    def environment_serials_in_current_list(self) -> list[int]:
+        serials: list[int] = []
+        for row in self._environment_rows():
+            serial_text = str(row.get("serial", "")).strip()
+            if not serial_text:
+                continue
+            try:
+                serials.append(int(serial_text))
+            except ValueError:
+                continue
+        return serials
+
+    def environment_serial_sort_state(self) -> str:
+        # Element Plus 会把当前排序方向挂在表头 th class 上：ascending、descending 或无排序。
+        value = self.cdp.evaluate(
+            """
+            () => {
+                const th = (() => {
+                    const visible = (el) => {
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    return Array.from(document.querySelectorAll(".el-table__header th, thead th"))
+                        .filter(visible)
+                        .find((item) => (item.innerText || item.textContent || "").trim().includes("环境序号"));
+                })();
+                if (!th) return "unknown";
+                if (th.classList.contains("ascending")) return "ascending";
+                if (th.classList.contains("descending")) return "descending";
+                return "none";
+            }
+            """
+        )
+        return str(value or "unknown")
+
+    def clear_environment_serial_sort_if_active(self) -> None:
+        state = self.environment_serial_sort_state()
+        if state not in {"ascending", "descending"}:
+            return
+        self.click_environment_serial_sort(state)
+        self.wait_environment_serial_sort_state("none")
+
+    def click_environment_serial_sort(self, direction: str) -> None:
+        if direction not in {"ascending", "descending"}:
+            raise ValueError(f"unsupported environment serial sort direction: {direction}")
+        self.dismiss_blocking_overlays()
+        self.cdp.click_element_by_script(self._environment_serial_sort_caret_script(direction))
+
+    def wait_environment_serial_sort_state(
+        self,
+        expected_state: str,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_state = ""
+        while time.time() < deadline:
+            last_state = self.environment_serial_sort_state()
+            if last_state == expected_state:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(
+            "environment serial sort state did not become expected: "
+            f"expected={expected_state}, actual={last_state}"
+        )
+
+    def wait_environment_serials_sorted(
+        self,
+        direction: str,
+        timeout_seconds: int | None = None,
+    ) -> list[int]:
+        if direction not in {"ascending", "descending"}:
+            raise ValueError(f"unsupported environment serial sort direction: {direction}")
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_serials: list[int] = []
+        while time.time() < deadline:
+            last_serials = self.environment_serials_in_current_list()
+            if len(last_serials) >= 2 and self._serials_match_sort(last_serials, direction):
+                return last_serials
+            time.sleep(0.5)
+        raise TimeoutError(
+            "environment serials did not match sort direction: "
+            f"direction={direction}, serials={last_serials}"
+        )
+
     def environment_name_by_serial(self, serial: str) -> str:
         row = self._environment_row_by_serial(serial)
         return str(row.get("name", "")).strip()
@@ -857,6 +943,22 @@ class EnvironmentPage(BasePage):
                     || null;
             }}
             return null;
+        }}
+        """
+
+    def _environment_serial_sort_caret_script(self, direction: str) -> str:
+        return f"""
+        () => {{
+            const expectedDirection = {direction!r};
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            const th = Array.from(document.querySelectorAll(".el-table__header th, thead th"))
+                .filter(visible)
+                .find((item) => (item.innerText || item.textContent || "").trim().includes("环境序号"));
+            if (!th) return null;
+            return th.querySelector(`.sort-caret.${{expectedDirection}}`) || null;
         }}
         """
 
@@ -1395,6 +1497,14 @@ class EnvironmentPage(BasePage):
         status = int(response.get("status", 0) or 0)
         if not 200 <= status < 300:
             raise RuntimeError(f"{action_name} request failed: status={status}, response={response}")
+
+    @staticmethod
+    def _serials_match_sort(serials: list[int], direction: str) -> bool:
+        if direction == "ascending":
+            return all(left <= right for left, right in zip(serials, serials[1:]))
+        if direction == "descending":
+            return all(left >= right for left, right in zip(serials, serials[1:]))
+        return False
 
     def _environment_rows(self) -> list[dict]:
         # Element Plus 表格列可能动态隐藏/冻结；这里读取可见 tr/td，并约定 cells[1] 是环境名称列。

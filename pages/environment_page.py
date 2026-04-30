@@ -57,6 +57,7 @@ class EnvironmentPage(BasePage):
 
     def search_environment(self, name: str) -> None:
         # “序号/名称/备注”筛选框默认展示；直接 fill 触发 Vue/Element Plus 的真实输入绑定。
+        self.dismiss_blocking_overlays()
         self.clear_selected_environments()
         self._wait_for_search_input_visible()
         self._fill_search_input(name)
@@ -65,6 +66,7 @@ class EnvironmentPage(BasePage):
 
     def clear_search(self) -> None:
         # 清空筛选按钮在搜索按钮右侧更靠后的位置；按输入框同一行、按钮 x 坐标顺序定位。
+        self.dismiss_blocking_overlays()
         self.clear_selected_environments()
         self._wait_for_search_input_visible()
         self.cdp.click_element_by_script(self._clear_search_button_script())
@@ -72,6 +74,7 @@ class EnvironmentPage(BasePage):
 
     def filter_by_environment_group(self, group_name: str) -> None:
         # 环境分组筛选框位于“序号/名称/备注”输入框左侧，筛选后需要点击搜索按钮才会刷新列表。
+        self.dismiss_blocking_overlays()
         self.clear_selected_environments()
         self._wait_for_environment_group_filter_visible()
         self.cdp.click_element_by_script(self._environment_group_filter_select_script())
@@ -80,11 +83,28 @@ class EnvironmentPage(BasePage):
         self.cdp.click_element_by_script(self._search_button_script())
         self.wait_environment_groups_in_current_list(group_name)
 
+    def filter_by_remark_keyword(self, remark_keyword: str) -> None:
+        # 备注筛选复用“序号/名称/备注”输入框；筛选后逐行校验备注列，而不是只判断页面有关键字。
+        keyword = str(remark_keyword).strip()
+        self.dismiss_blocking_overlays()
+        self.clear_selected_environments()
+        self._wait_for_search_input_visible()
+        self._fill_search_input(keyword)
+        self.cdp.click_element_by_script(self._search_button_script())
+        self.wait_environment_remarks_contain_in_current_list(keyword)
+
     def environment_group_values_in_current_list(self) -> list[str]:
         return [
             str(row.get("group", "")).strip()
             for row in self._environment_rows()
             if str(row.get("group", "")).strip()
+        ]
+
+    def environment_remark_values_in_current_list(self) -> list[str]:
+        return [
+            str(row.get("remark", "")).strip()
+            for row in self._environment_rows()
+            if str(row.get("remark", "")).strip()
         ]
 
     def wait_environment_groups_in_current_list(
@@ -108,6 +128,30 @@ class EnvironmentPage(BasePage):
         raise TimeoutError(
             "environment group filter result did not match expected group: "
             f"expected={group_name}, actual={last_groups}"
+        )
+
+    def wait_environment_remarks_contain_in_current_list(
+        self,
+        remark_keyword: str,
+        timeout_seconds: int | None = None,
+    ) -> list[str]:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        keyword = str(remark_keyword).strip()
+        deadline = time.time() + timeout_seconds
+        last_remarks: list[str] = []
+        while time.time() < deadline:
+            rows = self._environment_rows()
+            last_remarks = [
+                str(row.get("remark", "")).strip()
+                for row in rows
+                if str(row.get("remark", "")).strip()
+            ]
+            if rows and last_remarks and all(keyword in remark for remark in last_remarks):
+                return last_remarks
+            time.sleep(0.5)
+        raise TimeoutError(
+            "environment remark filter result did not match expected keyword: "
+            f"expected_contains={keyword}, actual={last_remarks}"
         )
 
     def dismiss_blocking_overlays(self) -> None:
@@ -388,6 +432,7 @@ class EnvironmentPage(BasePage):
         raise TimeoutError(f"environment still exists by prefix: {name_prefix}")
 
     def search_environment_without_assert(self, name: str) -> None:
+        self.dismiss_blocking_overlays()
         self.clear_selected_environments()
         self._wait_for_search_input_visible()
         self._fill_search_input(name)
@@ -1252,6 +1297,7 @@ class EnvironmentPage(BasePage):
                     return {
                         serial: cells[0] || "",
                         name: cells[1] || "",
+                        remark: cells[2] || "",
                         group: cells[3] || "",
                         cells,
                         action: buttons.find((text) => ["打开", "关闭"].includes(text)) || "",

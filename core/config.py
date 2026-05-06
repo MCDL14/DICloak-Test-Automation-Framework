@@ -12,6 +12,7 @@ class ConfigError(Exception):
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
+    "test_data_file": "",
     "app": {
         "exe_path": "",
         "work_dir": "",
@@ -65,6 +66,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "http_probe_seconds": 2,
         "kernel_download_seconds": 300,
         "batch_import_seconds": 120,
+        "batch_export_seconds": 120,
     },
     "test_data": {
         "environment_name_prefix": "auto_env",
@@ -158,7 +160,6 @@ REQUIRED_SECTIONS = (
     "account",
     "feishu",
     "timeouts",
-    "test_data",
     "run",
     "log",
 )
@@ -171,23 +172,74 @@ def load_config(path: Path) -> dict[str, Any]:
     if not config_path.is_file():
         raise ConfigError(f"config path is not a file: {config_path}")
 
-    try:
-        with config_path.open("r", encoding="utf-8") as file_obj:
-            loaded = yaml.safe_load(file_obj) or {}
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"invalid YAML in {config_path}: {exc}") from exc
-    except OSError as exc:
-        raise ConfigError(f"cannot read config file {config_path}: {exc}") from exc
+    loaded = _read_yaml_file(config_path, "config")
 
     if not isinstance(loaded, dict):
         raise ConfigError("config root must be a YAML mapping")
 
     validate_required_sections(loaded)
+    loaded = _merge_external_test_data(config_path, loaded)
     merged = deep_merge(DEFAULT_CONFIG, loaded)
     validate_config(merged)
     merged["_config_file"] = str(config_path.resolve())
+    test_data_file = str(merged.get("_test_data_file", "")).strip()
+    if test_data_file:
+        merged["_test_data_file"] = str(Path(test_data_file).resolve())
     merged["_project_root"] = str(Path.cwd().resolve())
     return merged
+
+
+def _read_yaml_file(path: Path, label: str) -> dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as file_obj:
+            loaded = yaml.safe_load(file_obj) or {}
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"invalid YAML in {path}: {exc}") from exc
+    except OSError as exc:
+        raise ConfigError(f"cannot read {label} file {path}: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise ConfigError(f"{label} file root must be a YAML mapping: {path}")
+    return loaded
+
+
+def _merge_external_test_data(config_path: Path, loaded: dict[str, Any]) -> dict[str, Any]:
+    merged_loaded = deepcopy(loaded)
+    configured_path = str(merged_loaded.get("test_data_file", "")).strip()
+    candidate = _resolve_test_data_path(config_path, configured_path)
+
+    if not candidate.exists():
+        if configured_path:
+            raise ConfigError(f"test data file does not exist: {candidate}")
+        return merged_loaded
+    if not candidate.is_file():
+        raise ConfigError(f"test data path is not a file: {candidate}")
+
+    external = _read_yaml_file(candidate, "test data")
+    external_test_data = external.get("test_data", external)
+    if not isinstance(external_test_data, dict):
+        raise ConfigError(f"test data root must be a YAML mapping: {candidate}")
+
+    inline_test_data = merged_loaded.get("test_data", {})
+    if inline_test_data and not isinstance(inline_test_data, dict):
+        raise ConfigError("config.test_data must be a YAML mapping when provided")
+    merged_loaded["test_data"] = deep_merge(inline_test_data if isinstance(inline_test_data, dict) else {}, external_test_data)
+    merged_loaded["_test_data_file"] = str(candidate)
+    return merged_loaded
+
+
+def _resolve_test_data_path(config_path: Path, configured_path: str) -> Path:
+    if not configured_path:
+        return config_path.with_name("test_data.yaml")
+    candidate = Path(configured_path)
+    if candidate.is_absolute():
+        return candidate
+    project_candidate = Path.cwd() / candidate
+    if project_candidate.exists():
+        return project_candidate
+    config_candidate = config_path.parent / candidate
+    if config_candidate.exists():
+        return config_candidate
+    return project_candidate
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

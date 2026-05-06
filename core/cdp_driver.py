@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from core.config import timeout_ms
@@ -177,6 +178,24 @@ class CDPDriver:
         timeout = timeout if timeout is not None else self._script_element_timeout_ms()
         element = self._wait_for_element_by_script(script, timeout=timeout)
         element.hover(timeout=timeout)
+
+    def click_element_by_script_and_save_download(
+        self,
+        script: str,
+        file_path: str | Path,
+        timeout: int | None = None,
+    ) -> str:
+        # 导出类操作可能不会弹 Windows 保存框，而是直接触发 Chromium 下载事件；这里捕获后保存到配置路径。
+        timeout = timeout if timeout is not None else self._request_timeout_ms()
+        element = self._wait_for_element_by_script(script, timeout=timeout)
+        target = Path(file_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with self._page().expect_download(timeout=timeout) as download_info:
+            element.click(timeout=timeout)
+        download = download_info.value
+        suggested_filename = download.suggested_filename
+        download.save_as(str(target))
+        return suggested_filename
 
     def drag_element_by_script_to_element_by_script(
         self,

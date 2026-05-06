@@ -9,6 +9,7 @@ venv/
 env/
 
 config/config.yaml
+config/test_data.yaml
 logs/*
 reports/*
 screenshots/*
@@ -21,6 +22,8 @@ test_data/export/*
 test_data/bookmarks/*
 test_data/members/*
 test_data/extensions/*
+test_data/Tools/*
+!test_data/Tools/.gitkeep
 !test_data/import/.gitkeep
 !test_data/export/.gitkeep
 !test_data/bookmarks/.gitkeep

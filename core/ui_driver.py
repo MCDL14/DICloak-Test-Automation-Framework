@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,55 @@ class UIDriver:
         if not open_button.Exists(maxSearchSeconds=timeout):
             raise UIAutomationError("open button was not found in file picker")
         open_button.Click()
+
+    def save_file_in_dialog(self, file_path: str | Path, timeout: int = 10) -> None:
+        # 导出环境会弹出 Windows 原生“另存为”窗口；直接在文件名输入框写入完整路径再点保存。
+        target = Path(file_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        dialog = self.auto.WindowControl(searchDepth=1, ClassName="#32770")
+        if not dialog.Exists(maxSearchSeconds=timeout):
+            raise UIAutomationError("Windows save dialog was not found")
+        edit = dialog.EditControl()
+        if not edit.Exists(maxSearchSeconds=timeout):
+            raise UIAutomationError("file path input was not found in save dialog")
+        edit.SetValue(str(target))
+
+        save_button = self._dialog_button(dialog, ("保存", "Save"), timeout=timeout)
+        if save_button is None:
+            raise UIAutomationError("save button was not found in save dialog")
+        save_button.Click()
+        self._confirm_overwrite_if_present(timeout=timeout)
+
+    def _dialog_button(self, dialog, names: tuple[str, ...], timeout: int = 10):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for name in names:
+                button = dialog.ButtonControl(Name=name)
+                if button.Exists(maxSearchSeconds=1):
+                    return button
+                button = dialog.ButtonControl(RegexName=f".*{name}.*")
+                if button.Exists(maxSearchSeconds=1):
+                    return button
+            time.sleep(0.2)
+        return None
+
+    def _confirm_overwrite_if_present(self, timeout: int = 3) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            popup = self.auto.WindowControl(searchDepth=1, ClassName="#32770")
+            if popup.Exists(maxSearchSeconds=1):
+                for name in ("是", "Yes", "确认", "确定", "OK"):
+                    button = popup.ButtonControl(Name=name)
+                    if button.Exists(maxSearchSeconds=1):
+                        button.Click()
+                        return True
+                    button = popup.ButtonControl(RegexName=f".*{name}.*")
+                    if button.Exists(maxSearchSeconds=1):
+                        button.Click()
+                        return True
+            time.sleep(0.2)
+        return False
 
     def confirm_or_close_popup(self, timeout: int = 5) -> bool:
         popup = self.auto.WindowControl(searchDepth=1, RegexName=".*")

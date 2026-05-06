@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 from core.config import timeout_seconds as config_timeout_seconds
 from core.process import main_process_ids, wait_for_new_main_process_ids
@@ -106,6 +107,20 @@ class EnvironmentPage(BasePage):
             for row in self._environment_rows()
             if str(row.get("remark", "")).strip()
         ]
+
+    def environment_infos_in_current_list(self) -> list[dict[str, str]]:
+        # 读取当前可见环境列表的核心字段，供导出、筛选等用例与外部文件内容做一致性校验。
+        infos: list[dict[str, str]] = []
+        for row in self._environment_rows():
+            infos.append(
+                {
+                    "serial": str(row.get("serial", "")).strip(),
+                    "name": str(row.get("name", "")).strip(),
+                    "remark": str(row.get("remark", "")).strip(),
+                    "group": str(row.get("group", "")).strip(),
+                }
+            )
+        return infos
 
     def wait_environment_groups_in_current_list(
         self,
@@ -355,7 +370,7 @@ class EnvironmentPage(BasePage):
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             rows = self._environment_rows()
-            if rows and any(keyword in "\n".join(row.get("cells", [])) for row in rows):
+            if rows and all(keyword in "\n".join(row.get("cells", [])) for row in rows):
                 return
             time.sleep(0.5)
         raise TimeoutError(f"environment search result did not appear: {keyword}")
@@ -731,6 +746,16 @@ class EnvironmentPage(BasePage):
             self.cdp.click_element_by_script(self._environment_checkbox_script(name))
         self._wait_selected_count(len(names))
 
+    def select_all_environments_in_current_list(self) -> int:
+        # 表头最左侧全选框只选择当前筛选结果页内的行；先清空旧选择，避免跨用例残留选择影响导出。
+        self.clear_selected_environments()
+        rows = self._environment_rows()
+        if not rows:
+            raise RuntimeError("cannot select all environments because current list is empty")
+        self.cdp.click_element_by_script(self._header_select_all_checkbox_script())
+        self._wait_selected_count(len(rows))
+        return len(rows)
+
     def clear_selected_environments(self) -> None:
         # 列表选择状态会影响顶部工具栏；用例开始和切换操作前统一清掉已有选择。
         for _ in range(5):
@@ -765,6 +790,30 @@ class EnvironmentPage(BasePage):
         self.cdp.hover_element_by_script(self._batch_more_operation_script())
         self.cdp.click_element_by_script(self._batch_more_menu_item_script("删除环境"))
         self.confirm_secondary_dialog()
+
+    def open_export_selected_environments_dialog(self) -> None:
+        # 顶部批量工具栏“更多操作”里先展开“导出环境”，再点击二级菜单“导出所选”。
+        self.cdp.hover_element_by_script(self._batch_more_operation_script())
+        self.cdp.hover_element_by_script(self._batch_more_menu_item_script("导出环境"))
+        self.cdp.click_element_by_script(self._batch_more_menu_item_script("导出所选"))
+        self._wait_export_environment_dialog_visible()
+
+    def confirm_export_environment(self) -> None:
+        # “导出环境”弹窗确认按钮；确认后可能触发浏览器下载，也可能弹出系统保存窗口。
+        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
+
+    def confirm_export_environment_and_save_download(
+        self,
+        file_path: str | Path,
+        timeout_seconds: int | None = None,
+    ) -> str:
+        # Chromium 下载事件路径：确认导出后直接把下载文件保存到配置中的导出路径。
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "batch_export_seconds", 120)
+        return self.cdp.click_element_by_script_and_save_download(
+            self._active_overlay_button_script("确定"),
+            file_path,
+            timeout=timeout_seconds * 1000,
+        )
 
     def wait_environments_action_text(
         self,
@@ -1090,6 +1139,25 @@ class EnvironmentPage(BasePage):
             }}
             return null;
         }}
+        """
+
+    def _header_select_all_checkbox_script(self) -> str:
+        # 环境列表表头最左侧 checkbox，用于批量导出/删除等当前列表全选操作。
+        return """
+        () => {
+            const visible = (el) => {
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+            const headers = Array.from(document.querySelectorAll(".el-table__header-wrapper, thead"))
+                .filter(visible);
+            for (const header of headers) {
+                const checkbox = Array.from(header.querySelectorAll(".el-checkbox, label"))
+                    .find((el) => visible(el));
+                if (checkbox) return checkbox;
+            }
+            return null;
+        }
         """
 
     def _expand_create_environment_fingerprint_settings(self) -> None:
@@ -1725,6 +1793,26 @@ class EnvironmentPage(BasePage):
                 return
             time.sleep(0.3)
         raise TimeoutError("quick edit environment name dialog did not appear")
+
+    def _wait_export_environment_dialog_visible(self) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            visible = self.cdp.evaluate(
+                """
+                () => {
+                    const visible = (el) => {
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    return Array.from(document.querySelectorAll(".el-dialog"))
+                        .some((dialog) => visible(dialog) && (dialog.innerText || "").includes("导出环境"));
+                }
+                """
+            )
+            if visible:
+                return
+            time.sleep(0.3)
+        raise TimeoutError("export environment dialog did not appear")
 
     def _wait_column_settings_dialog_visible(self) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)

@@ -7,6 +7,7 @@ from core.assertions import assert_equal, assert_true
 from core.cdp_driver import CDPDriver
 from core.config import load_config, timeout_seconds
 from core.logger import setup_logger
+from core.test_names import cleanup_prefix, test_prefix
 from pages.environment_page import EnvironmentPage
 from pages.login_page import LoginPage
 
@@ -29,7 +30,8 @@ class TestBatchCreateEnvironments(unittest.TestCase):
 
     def test_batch_create_open_close_delete_environments(self) -> None:
         data = self.config["test_data"]["environment_batch_create"]
-        name_prefix = str(data.get("environment_name_prefix", "自动化-批量创建环境"))
+        name_prefix = test_prefix(self.config, "batch-create")
+        name_cleanup_prefix = cleanup_prefix(self.config, "batch-create")
         create_count = int(data.get("create_count", 5))
         environment_open_timeout = timeout_seconds(self.config, "environment_open_seconds", 90)
         environment_close_timeout = timeout_seconds(self.config, "environment_close_seconds", 90)
@@ -40,15 +42,15 @@ class TestBatchCreateEnvironments(unittest.TestCase):
 
         try:
             environment_page.open_list()
-            environment_page.search_environment_without_assert(name_prefix)
-            existing_names = environment_page.environment_names_by_prefix_in_current_list(name_prefix)
+            environment_page.search_environment_without_assert(name_cleanup_prefix)
+            existing_names = environment_page.environment_names_by_prefix_in_current_list(name_cleanup_prefix)
             self._close_environments_if_open(
                 environment_page,
                 existing_names,
                 timeout_seconds=environment_close_timeout,
             )
-            environment_page.delete_environments_by_prefix_from_current_list(name_prefix)
-            environment_page.wait_no_environment_by_prefix_in_current_list(name_prefix)
+            environment_page.delete_environments_by_prefix_from_current_list(name_cleanup_prefix)
+            environment_page.wait_no_environment_by_prefix_in_current_list(name_cleanup_prefix)
 
             environment_page.batch_create_environments(name_prefix, create_count)
             environment_page.search_environment_without_assert(name_prefix)

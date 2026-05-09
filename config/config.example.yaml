@@ -130,6 +130,8 @@ run:
   screenshot_on_failure: true
   # 用例失败时是否采集日志
   collect_log_on_failure: true
+  # 是否启用用例前后恢复机制；启用后会先恢复 APP 稳定态，再由具体业务模块恢复到模块首页
+  recovery_enabled: true
 
 # 日志配置
 log:

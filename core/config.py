@@ -69,33 +69,28 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "batch_export_seconds": 120,
     },
     "test_data": {
-        "environment_name_prefix": "auto_env",
-        "kernel_142_environment_name": "",
-        "kernel_134_environment_name": "",
+        "naming": {
+            "prefix": "auto",
+        },
         "kernel_integrity": {
             "environment_name": "142内核环境-4",
             "fallback_search_keyword": "142",
-            "browser_process_name": "GinsBrowser.exe",
-            "kernel_process_name": "GinsBrowser",
-            "expected_kernel_prefix": "142",
-            "expected_134_kernel_prefix": "134",
             "kernel_134_search_keyword": "134内核",
-            "kernel_134_download_major": "134",
-            "cache_subdir_name": "browsers",
         },
-        "environment_create_default": {
-            "environment_name": "自动化-创建环境",
+        "environment_create_multi_group": {
+            "group_names": ["分组三", "分组二"],
         },
-        "environment_create_134_kernel": {
-            "environment_name": "自动化-创建134内核环境",
-            "kernel_label": "ChromeBrowser 134",
-            "expected_kernel_prefix": "134",
+        "environment_edit_single_multi_group": {
+            "group_name": "分组二",
         },
-        "environment_edit_name": {
-            "temporary_name": "自动化-编辑环境名称",
+        "environment_batch_edit_multi_group": {
+            "target_count": 3,
+            "append_group_name": "分组二",
+            "overwrite_group_names": ["分组三", "分组二"],
+            "reset_group_name": "未分组",
         },
-        "environment_quick_edit_name": {
-            "temporary_name": "自动化-列表快捷修改环境名称",
+        "environment_create_with_tags": {
+            "tag_names": ["标签1", "标签2"],
         },
         "environment_edit_fixed_open_url": {
             "environment_name": "自动化编辑打开网址",
@@ -108,15 +103,31 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "environment_filter_remark": {
             "remark_keyword": "备注UI自动化",
         },
+        "environment_filter_tag": {
+            "tag_name": "标签2",
+        },
         "environment_batch_create": {
-            "environment_name_prefix": "自动化-批量创建环境",
             "create_count": 5,
         },
         "environment_batch_create_134_kernel": {
-            "environment_name_prefix": "自动化-批量创建134内核环境",
             "create_count": 3,
-            "kernel_label": "ChromeBrowser 134",
-            "expected_kernel_prefix": "134",
+        },
+        "environment_batch_create_multi_group": {
+            "create_count": 3,
+            "group_names": ["分组三", "分组二"],
+        },
+        "environment_batch_create_with_tags": {
+            "create_count": 3,
+            "tag_names": ["标签1", "标签2"],
+        },
+        "environment_batch_edit_tags": {
+            "target_count": 3,
+            "append_tag_name": "标签7",
+            "overwrite_tag_names": ["标签5", "标签1"],
+            "final_tag_name": "标签1",
+        },
+        "environment_edit_tags": {
+            "target_tag_name": "标签9",
         },
         "bookmark": {
             "storage_dir": "",
@@ -149,6 +160,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "stop_on_login_failed": True,
         "screenshot_on_failure": True,
         "collect_log_on_failure": True,
+        "recovery_enabled": True,
     },
     "log": {"level": "INFO", "dir": "logs", "keep_days": 14},
 }

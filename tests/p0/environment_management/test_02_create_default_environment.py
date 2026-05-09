@@ -7,6 +7,7 @@ from core.assertions import assert_equal, assert_true
 from core.cdp_driver import CDPDriver
 from core.config import load_config, timeout_seconds
 from core.logger import setup_logger
+from core.test_names import cleanup_prefix, test_name
 from pages.environment_page import EnvironmentPage
 from pages.login_page import LoginPage
 
@@ -28,8 +29,8 @@ class TestCreateDefaultEnvironment(unittest.TestCase):
         cls.cdp.close()
 
     def test_create_open_close_delete_default_environment(self) -> None:
-        data = self.config["test_data"]["environment_create_default"]
-        environment_name = str(data.get("environment_name", "自动化-创建环境"))
+        environment_name = test_name(self.config, "create-default")
+        environment_cleanup_prefix = cleanup_prefix(self.config, "create-default")
         environment_open_timeout = timeout_seconds(self.config, "environment_open_seconds", 90)
         environment_close_timeout = timeout_seconds(self.config, "environment_close_seconds", 90)
 
@@ -39,13 +40,9 @@ class TestCreateDefaultEnvironment(unittest.TestCase):
 
         try:
             environment_page.open_list()
-            environment_page.search_environment_without_assert(environment_name)
-            if environment_page.environment_visible_in_current_list(environment_name):
-                environment_page.delete_environment_from_current_list(environment_name)
-                assert_true(
-                    not environment_page.environment_visible_in_current_list(environment_name),
-                    f"existing test environment was not cleaned before create: {environment_name}",
-                )
+            environment_page.search_environment_without_assert(environment_cleanup_prefix)
+            environment_page.delete_environments_by_prefix_from_current_list(environment_cleanup_prefix)
+            environment_page.wait_no_environment_by_prefix_in_current_list(environment_cleanup_prefix)
 
             environment_page.create_environment(environment_name)
             environment_created = True

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import logging
 import sys
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -265,6 +267,121 @@ class AutomationRunner:
         return True
 
     def _run_suite(self, suite: unittest.TestSuite) -> RunResult:
+        retry_times = self._retry_times()
+        retry_interval_seconds = self._retry_interval_seconds()
+        if retry_times > 0:
+            return self._run_suite_with_retry(
+                suite=suite,
+                retry_times=retry_times,
+                retry_interval_seconds=retry_interval_seconds,
+            )
+
         runner = AutomationTextRunner(stream=sys.stdout, verbosity=2)
         unittest_result = runner.run(suite)
         return unittest_result.run_result
+
+    def _run_suite_with_retry(
+        self,
+        suite: unittest.TestSuite,
+        retry_times: int,
+        retry_interval_seconds: float,
+    ) -> RunResult:
+        tests = list(self._iter_tests(suite))
+        aggregate = RunResult(total=len(tests))
+        max_attempts = retry_times + 1
+
+        for test in tests:
+            test_id = test.id()
+            final_result: RunResult | None = None
+            for attempt in range(1, max_attempts + 1):
+                attempt_test = self._reload_test(test_id)
+                attempt_result, attempt_output = self._run_single_test_attempt(attempt_test)
+                final_result = attempt_result
+
+                if attempt_result.success:
+                    self._write_attempt_output(attempt_output)
+                    if attempt > 1 and attempt_result.passed > 0:
+                        aggregate.flaky += 1
+                        self.logger.info(
+                            "Test passed after retry: %s, attempt %s/%s",
+                            test_id,
+                            attempt,
+                            max_attempts,
+                        )
+                    self._merge_final_test_result(aggregate, attempt_result)
+                    break
+
+                if attempt < max_attempts:
+                    self.logger.warning(
+                        "Test failed on attempt %s/%s: %s\n%s",
+                        attempt,
+                        max_attempts,
+                        test_id,
+                        attempt_result.failed_summary(),
+                    )
+                    if retry_interval_seconds > 0:
+                        self.logger.info(
+                            "Retrying %s after %.1f second(s)",
+                            test_id,
+                            retry_interval_seconds,
+                        )
+                        time.sleep(retry_interval_seconds)
+                else:
+                    self._write_attempt_output(attempt_output)
+            else:
+                if final_result is not None:
+                    self._merge_final_test_result(aggregate, final_result)
+
+        self.logger.info(
+            "Final test summary: total=%s passed=%s failed=%s errors=%s skipped=%s flaky=%s",
+            aggregate.total,
+            aggregate.passed,
+            aggregate.failed,
+            aggregate.errors,
+            aggregate.skipped,
+            aggregate.flaky,
+        )
+        return aggregate
+
+    def _run_single_test_attempt(self, test: unittest.TestCase) -> tuple[RunResult, str]:
+        output = io.StringIO()
+        runner = AutomationTextRunner(stream=output, verbosity=2)
+        unittest_result = runner.run(unittest.TestSuite([test]))
+        return unittest_result.run_result, output.getvalue()
+
+    def _write_attempt_output(self, output: str) -> None:
+        if output:
+            sys.stdout.write(output)
+            sys.stdout.flush()
+
+    def _reload_test(self, test_id: str) -> unittest.TestCase:
+        suite = unittest.defaultTestLoader.loadTestsFromName(test_id)
+        tests = list(self._iter_tests(suite))
+        if len(tests) != 1:
+            raise RuntimeError(f"Cannot reload exactly one test for retry: {test_id}")
+        return tests[0]
+
+    def _merge_final_test_result(self, aggregate: RunResult, result: RunResult) -> None:
+        aggregate.passed += result.passed
+        aggregate.failed += result.failed
+        aggregate.errors += result.errors
+        aggregate.skipped += result.skipped
+        aggregate.failures.extend(result.failures)
+
+    def _retry_times(self) -> int:
+        value = self.config.get("run", {}).get("retry_times", 0)
+        try:
+            retry_times = int(value)
+        except (TypeError, ValueError):
+            self.logger.warning("Invalid run.retry_times value %r, fallback to 0", value)
+            return 0
+        return max(0, retry_times)
+
+    def _retry_interval_seconds(self) -> float:
+        value = self.config.get("run", {}).get("retry_interval_seconds", 0)
+        try:
+            retry_interval_seconds = float(value)
+        except (TypeError, ValueError):
+            self.logger.warning("Invalid run.retry_interval_seconds value %r, fallback to 0", value)
+            return 0
+        return max(0, retry_interval_seconds)

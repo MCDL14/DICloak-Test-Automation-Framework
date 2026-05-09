@@ -69,6 +69,7 @@ class FeishuNotifier:
             f"失败：{result.failed}\n"
             f"异常：{result.errors}\n"
             f"跳过：{result.skipped}\n"
+            f"重试后通过：{result.flaky}\n"
             f"通过率：{result.pass_rate}%"
         )
         if result.failures:

@@ -18,6 +18,11 @@ from pages.personal_settings_page import PersonalSettingsPage
 
 
 CASE_MODULE = "环境管理"
+KERNEL_142_PREFIX = "142"
+KERNEL_134_PREFIX = "134"
+KERNEL_134_DOWNLOAD_MAJOR = "134"
+KERNEL_CACHE_SUBDIR = "browsers"
+BROWSER_PROCESS_NAME = "GinsBrowser.exe"
 
 
 class TestKernelIntegrity(unittest.TestCase):
@@ -37,12 +42,7 @@ class TestKernelIntegrity(unittest.TestCase):
         data = self.config["test_data"]["kernel_integrity"]
         environment_name = str(data.get("environment_name", "142内核环境-4"))
         fallback_keyword = str(data.get("fallback_search_keyword", "142"))
-        expected_kernel_prefix = str(data.get("expected_kernel_prefix", "142"))
-        expected_134_kernel_prefix = str(data.get("expected_134_kernel_prefix", "134"))
         kernel_134_search_keyword = str(data.get("kernel_134_search_keyword", "134内核"))
-        kernel_134_download_major = str(data.get("kernel_134_download_major", "134"))
-        cache_subdir_name = str(data.get("cache_subdir_name", "browsers"))
-        browser_process_name = str(data.get("browser_process_name", "GinsBrowser.exe"))
         environment_open_timeout = timeout_seconds(self.config, "environment_open_seconds", 90)
         environment_close_timeout = timeout_seconds(self.config, "environment_close_seconds", 90)
         kernel_process_timeout = timeout_seconds(self.config, "kernel_process_seconds", 90)
@@ -55,7 +55,7 @@ class TestKernelIntegrity(unittest.TestCase):
         settings_page.open_from_avatar()
         settings_page.open_basic_settings()
         cache_dir = settings_page.environment_cache_dir()
-        browsers_dir = self._clear_cache_subdir(cache_dir, cache_subdir_name)
+        browsers_dir = self._clear_cache_subdir(cache_dir, KERNEL_CACHE_SUBDIR)
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         try:
@@ -66,7 +66,7 @@ class TestKernelIntegrity(unittest.TestCase):
             self._open_environment_assert_kernel_and_close(
                 environment_page=environment_page,
                 environment_name=environment_name,
-                expected_kernel_prefix=expected_kernel_prefix,
+                expected_kernel_prefix=KERNEL_142_PREFIX,
                 environment_open_timeout=environment_open_timeout,
                 environment_close_timeout=environment_close_timeout,
                 kernel_process_timeout=kernel_process_timeout,
@@ -80,7 +80,7 @@ class TestKernelIntegrity(unittest.TestCase):
 
             kernel_142_dir = wait_for_kernel_version_dir(
                 browsers_dir,
-                expected_kernel_prefix,
+                KERNEL_142_PREFIX,
                 timeout_seconds=kernel_download_timeout,
             )
 
@@ -89,7 +89,7 @@ class TestKernelIntegrity(unittest.TestCase):
             self._open_environment_assert_kernel_and_close(
                 environment_page=environment_page,
                 environment_name=environment_name,
-                expected_kernel_prefix=expected_kernel_prefix,
+                expected_kernel_prefix=KERNEL_142_PREFIX,
                 environment_open_timeout=environment_open_timeout,
                 environment_close_timeout=environment_close_timeout,
                 kernel_process_timeout=kernel_process_timeout,
@@ -102,11 +102,11 @@ class TestKernelIntegrity(unittest.TestCase):
             settings_page.open_from_avatar()
             settings_page.open_basic_settings()
             settings_page.delete_download_record_kernels_except_first()
-            settings_page.download_latest_kernel(kernel_134_download_major)
+            settings_page.download_latest_kernel(KERNEL_134_DOWNLOAD_MAJOR)
             wait_for_kernel_executable_dir(
                 browsers_dir,
-                expected_134_kernel_prefix,
-                executable_name=browser_process_name,
+                KERNEL_134_PREFIX,
+                executable_name=BROWSER_PROCESS_NAME,
                 timeout_seconds=kernel_download_timeout,
             )
 
@@ -116,7 +116,7 @@ class TestKernelIntegrity(unittest.TestCase):
             self._open_environment_assert_kernel_and_close(
                 environment_page=environment_page,
                 environment_name=environment_134_name,
-                expected_kernel_prefix=expected_134_kernel_prefix,
+                expected_kernel_prefix=KERNEL_134_PREFIX,
                 environment_open_timeout=environment_open_timeout,
                 environment_close_timeout=environment_close_timeout,
                 kernel_process_timeout=kernel_process_timeout,

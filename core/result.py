@@ -5,6 +5,8 @@ import traceback
 import unittest
 from dataclasses import dataclass, field
 
+from core.recovery import TestRecoveryManager
+
 
 @dataclass
 class CaseFailure:
@@ -47,6 +49,7 @@ class AutomationTestResult(unittest.TextTestResult):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.run_result = RunResult()
+        self.recovery = TestRecoveryManager()
 
     def startTestRun(self) -> None:
         super().startTestRun()
@@ -55,6 +58,11 @@ class AutomationTestResult(unittest.TextTestResult):
     def startTest(self, test: unittest.case.TestCase) -> None:
         super().startTest(test)
         self.run_result.total += 1
+        self.recovery.recover_before_test(test)
+
+    def stopTest(self, test: unittest.case.TestCase) -> None:
+        self.recovery.recover_after_test(test)
+        super().stopTest(test)
 
     def addSuccess(self, test: unittest.case.TestCase) -> None:
         super().addSuccess(test)

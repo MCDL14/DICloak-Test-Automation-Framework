@@ -9,11 +9,14 @@ from core.config import load_config, timeout_seconds
 from core.kernel_process import kernel_version_from_cdp, kernel_version_from_command_line, resolve_kernel_runtime
 from core.logger import setup_logger
 from core.process import wait_for_pid_running, wait_for_pid_stopped
+from core.test_names import cleanup_prefix, test_prefix
 from pages.environment_page import EnvironmentPage
 from pages.login_page import LoginPage
 
 
 CASE_MODULE = "环境管理"
+KERNEL_134_LABEL = "ChromeBrowser 134"
+KERNEL_134_PREFIX = "134"
 
 
 class TestBatchCreate134KernelEnvironments(unittest.TestCase):
@@ -31,10 +34,9 @@ class TestBatchCreate134KernelEnvironments(unittest.TestCase):
 
     def test_batch_create_open_verify_close_delete_134_kernel_environments(self) -> None:
         data = self.config["test_data"]["environment_batch_create_134_kernel"]
-        name_prefix = str(data.get("environment_name_prefix", "自动化-批量创建134内核环境"))
+        name_prefix = test_prefix(self.config, "batch-create-134")
+        name_cleanup_prefix = cleanup_prefix(self.config, "batch-create-134")
         create_count = int(data.get("create_count", 3))
-        kernel_label = str(data.get("kernel_label", "ChromeBrowser 134"))
-        expected_kernel_prefix = str(data.get("expected_kernel_prefix", "134"))
         environment_open_timeout = timeout_seconds(self.config, "environment_open_seconds", 90)
         environment_close_timeout = timeout_seconds(self.config, "environment_close_seconds", 90)
         kernel_process_timeout = timeout_seconds(self.config, "kernel_process_seconds", 90)
@@ -49,8 +51,8 @@ class TestBatchCreate134KernelEnvironments(unittest.TestCase):
 
         try:
             environment_page.open_list()
-            environment_page.search_environment_without_assert(name_prefix)
-            existing_names = environment_page.environment_names_by_prefix_in_current_list(name_prefix)
+            environment_page.search_environment_without_assert(name_cleanup_prefix)
+            existing_names = environment_page.environment_names_by_prefix_in_current_list(name_cleanup_prefix)
             self._close_environments_if_open(
                 environment_page,
                 existing_names,
@@ -58,10 +60,10 @@ class TestBatchCreate134KernelEnvironments(unittest.TestCase):
                 kernel_pids=[],
                 kernel_process_timeout=kernel_process_timeout,
             )
-            environment_page.delete_environments_by_prefix_from_current_list(name_prefix)
-            environment_page.wait_no_environment_by_prefix_in_current_list(name_prefix)
+            environment_page.delete_environments_by_prefix_from_current_list(name_cleanup_prefix)
+            environment_page.wait_no_environment_by_prefix_in_current_list(name_cleanup_prefix)
 
-            environment_page.batch_create_environments_with_kernel(name_prefix, create_count, kernel_label)
+            environment_page.batch_create_environments_with_kernel(name_prefix, create_count, KERNEL_134_LABEL)
             environment_page.search_environment_without_assert(name_prefix)
             created_names = environment_page.wait_environment_count_by_prefix_in_current_list(
                 name_prefix,
@@ -113,8 +115,8 @@ class TestBatchCreate134KernelEnvironments(unittest.TestCase):
                 if not kernel_version:
                     kernel_version = kernel_version_from_command_line(kernel_runtime.command_line)
                 assert_true(
-                    kernel_version.startswith(expected_kernel_prefix),
-                    f"kernel version should start with {expected_kernel_prefix}: name={name}, actual={kernel_version}",
+                    kernel_version.startswith(KERNEL_134_PREFIX),
+                    f"kernel version should start with {KERNEL_134_PREFIX}: name={name}, actual={kernel_version}",
                 )
 
             environment_page.select_environments(created_names)

@@ -42,6 +42,32 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 这个模式只适合本地调试。正式自动化运行仍建议让框架按配置统一管理 APP 生命周期。
 
+## 失败恢复机制
+
+框架已在 `core/result.py` 的 unittest 执行结果层接入用例前后恢复机制，避免某条用例失败后残留弹窗、抽屉、下拉框、遮罩或筛选状态影响下一条用例。
+
+恢复分三层：
+
+- 全局 APP 稳定态恢复：`pages/app_page.py` 只负责选择正确的 Dicloak 主页面、关闭阻塞弹窗/抽屉/下拉浮层、等待加载遮罩消失，并确认 APP 外壳可操作；这一层不进入任何业务模块。
+- 模块级恢复：当前环境管理模块通过 `EnvironmentPage.recover_to_module_home()` 进入环境管理列表，清除环境管理模块自己的筛选和选中状态。后续代理管理、扩展管理、成员管理等模块需要各自实现自己的模块首页恢复入口。
+- 用例级清理：具体用例创建的数据仍由用例自己的 `finally` 或后置逻辑清理，因为只有用例知道哪些数据是本次运行创建的。
+
+全局恢复不会强制跳回“环境管理”，所以后续新增其他模块用例时，不会被环境管理页面状态绑死。
+
+## 失败重试机制
+
+框架在 `core/runner.py` 的执行编排层接入用例级重试。`run.retry_times` 表示失败后额外重试次数，例如 `retry_times: 1` 表示最多执行 2 次；`run.retry_interval_seconds` 表示两次尝试之间的等待秒数。
+
+重试按单条 unittest 用例重新加载新的 `TestCase` 实例，并完整执行一轮用例生命周期，所以每次重试都会重新触发：
+
+- `setUpClass` / `setUp`
+- `AutomationTestResult.startTest()` 中的用例前恢复
+- 用例方法
+- `tearDown` / `tearDownClass`
+- `AutomationTestResult.stopTest()` 中的用例后恢复
+
+这样第一次失败后残留的弹窗、筛选、选中行、遮罩或模块页面状态，会先经过全局恢复和模块级恢复，再进入下一次尝试。重试后通过的用例会计入 `flaky`，飞书汇总中显示为“重试后通过”。
+
 ## 退出码
 
 - `0`：全部通过
@@ -66,7 +92,7 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。
 
-当前已完成并验证环境管理模块 15 条 P0 用例，文件位于 `tests/p0/environment_management/`：
+当前已完成并验证环境管理模块 25 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
 - `test_01_kernel_integrity.py`
 - `test_02_create_default_environment.py`
@@ -83,5 +109,19 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 - `test_13_sort_environment_serial.py`
 - `test_14_move_remark_column.py`
 - `test_15_export_environment.py`
+- `test_16_create_multi_group_environment.py`
+- `test_17_batch_create_multi_group_environments.py`
+- `test_18_edit_single_environment_multi_group.py`
+- `test_19_batch_edit_environment_multi_group.py`
+- `test_20_create_tag.py`
+- `test_21_create_environment_with_tags.py`
+- `test_22_batch_create_environments_with_tags.py`
+- `test_23_batch_edit_environment_tags.py`
+- `test_24_edit_environment_tags.py`
+- `test_25_filter_environment_tag.py`
 
-已预留代理管理、扩展管理、环境分组管理、成员管理、全局设置模块目录，后续新增用例时按业务模块放入对应目录。
+当前已开始编写并验证全局设置模块 P0 用例，文件位于 `tests/p0/global_settings/`：
+
+- `test_01_disable_view_password.py`
+
+已预留代理管理、扩展管理、环境分组管理、成员管理等模块目录，后续新增用例时按业务模块放入对应目录。

@@ -7,6 +7,7 @@ from core.assertions import assert_equal, assert_true
 from core.cdp_driver import CDPDriver
 from core.config import load_config, timeout_seconds
 from core.logger import setup_logger
+from core.test_names import test_name
 from pages.environment_page import EnvironmentPage
 from pages.login_page import LoginPage
 
@@ -28,8 +29,7 @@ class TestEditEnvironmentName(unittest.TestCase):
         cls.cdp.close()
 
     def test_edit_environment_name_and_restore(self) -> None:
-        data = self.config["test_data"]["environment_edit_name"]
-        temporary_name = str(data.get("temporary_name", "自动化-编辑环境名称"))
+        temporary_name = test_name(self.config, "edit-name")
         search_timeout = timeout_seconds(self.config, "search_result_seconds", 10)
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)

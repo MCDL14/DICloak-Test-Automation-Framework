@@ -1,55 +1,42 @@
 # 测试数据配置
 test_data:
-  # 自动化新建环境名称前缀
-  environment_name_prefix: "auto_env"
-  # P0 内核场景中 142 环境名称
-  kernel_142_environment_name: "142环境"
-  # P0 内核场景中 134 环境名称
-  kernel_134_environment_name: "134环境"
+  # 自动化临时数据命名前缀；用例会自动拼接场景名和本次运行 ID，避免同名冲突
+  naming:
+    prefix: "auto"
   # 内核完整性校验数据
   kernel_integrity:
     # 优先校验和打开的 142 内核环境名称
     environment_name: "142内核环境-4"
     # 首行不是目标环境时，在筛选框中输入的关键字
     fallback_search_keyword: "142"
-    # 打开环境后等待启动/关闭的浏览器进程名
-    browser_process_name: "GinsBrowser.exe"
-    # 系统进程里显示的内核进程名称，用于读取版本号
-    kernel_process_name: "GinsBrowser"
-    # 期望内核版本号前缀
-    expected_kernel_prefix: "142"
-    # 期望 134 内核版本号前缀
-    expected_134_kernel_prefix: "134"
     # 134 内核环境筛选关键字
     kernel_134_search_keyword: "134内核"
-    # 需要下载的 134 内核大版本
-    kernel_134_download_major: "134"
-    # 环境缓存目录下需要清空的子目录
-    cache_subdir_name: "browsers"
 
-  # 创建默认配置环境用例数据
-  environment_create_default:
-    # 用例中创建、打开、关闭、删除的环境名称
-    environment_name: "自动化-创建环境"
+  # 创建多分组环境用例数据
+  environment_create_multi_group:
+    # 创建环境时需要补充选择的环境分组；如果创建抽屉默认已有分组，用例会保留并一起校验
+    group_names: ["分组三", "分组二"]
 
-  # 创建 134 内核环境用例数据
-  environment_create_134_kernel:
-    # 用例中创建、打开、校验、关闭、删除的环境名称
-    environment_name: "自动化-创建134内核环境"
-    # 创建环境时在“浏览器内核”下拉框选择的内核
-    kernel_label: "ChromeBrowser 134"
-    # 打开环境后通过内核 CDP 校验的版本号前缀
-    expected_kernel_prefix: "134"
+  # 单环境编辑多分组用例数据
+  environment_edit_single_multi_group:
+    # 用例会在第一个环境上追加选择并最终取消选择的环境分组
+    group_name: "分组二"
 
-  # 编辑环境名称用例数据
-  environment_edit_name:
-    # 临时修改后的环境名称；用例结束前会按环境序号还原原始名称
-    temporary_name: "自动化-编辑环境名称"
+  # 批量编辑环境多分组用例数据
+  environment_batch_edit_multi_group:
+    # 用例会获取并编辑环境列表前 N 个环境
+    target_count: 3
+    # 批量设置环境分组时，“修改方式=追加”要选择的环境分组
+    append_group_name: "分组二"
+    # 批量设置环境分组时，“修改方式=覆盖”要选择的环境分组
+    overwrite_group_names: ["分组三", "分组二"]
+    # 用例最后通过“覆盖”恢复为未分组时选择的分组名称
+    reset_group_name: "未分组"
 
-  # 列表快捷修改环境名称用例数据
-  environment_quick_edit_name:
-    # 通过环境列表名称右侧快捷编辑入口临时修改后的环境名称；用例结束前会按环境序号还原原始名称
-    temporary_name: "自动化-列表快捷修改环境名称"
+  # 创建带有标签的环境用例数据
+  environment_create_with_tags:
+    # 创建环境时需要选择的标签名称
+    tag_names: ["标签1", "标签2"]
 
   # 编辑固定打开网址用例数据
   environment_edit_fixed_open_url:
@@ -70,23 +57,50 @@ test_data:
     # 在“序号/名称/备注”筛选框输入的备注关键字；用例会校验列表备注列均包含该关键字
     remark_keyword: "备注UI自动化"
 
+  # 环境列表标签筛选用例数据
+  environment_filter_tag:
+    # 在“更多筛选”抽屉的“标签”输入框中输入的标签名称；用例会校验列表标签列均包含该标签
+    tag_name: "标签2"
+
   # 批量创建环境用例数据
   environment_batch_create:
-    # 批量创建时填写的环境名称前缀；用例会清理该前缀下的自动化环境
-    environment_name_prefix: "自动化-批量创建环境"
     # 批量创建数量
     create_count: 5
 
   # 批量创建 134 内核环境用例数据
   environment_batch_create_134_kernel:
-    # 批量创建时填写的环境名称前缀；用例会清理该前缀下的自动化环境
-    environment_name_prefix: "自动化-批量创建134内核环境"
     # 批量创建数量
     create_count: 3
-    # 批量创建时在“浏览器内核”下拉框选择的内核
-    kernel_label: "ChromeBrowser 134"
-    # 打开环境后通过每个内核 CDP 校验的版本号前缀
-    expected_kernel_prefix: "134"
+
+  # 批量创建多分组环境用例数据
+  environment_batch_create_multi_group:
+    # 批量创建数量
+    create_count: 3
+    # 批量创建时需要补充选择的环境分组；如果批量创建抽屉默认已有分组，用例会保留并一起校验
+    group_names: ["分组三", "分组二"]
+
+  # 批量创建带有标签的环境用例数据
+  environment_batch_create_with_tags:
+    # 批量创建数量
+    create_count: 3
+    # 批量创建时需要选择的标签名称
+    tag_names: ["标签1", "标签2"]
+
+  # 批量编辑环境标签用例数据
+  environment_batch_edit_tags:
+    # 取当前列表前几个环境执行批量编辑
+    target_count: 3
+    # “追加标签”时选择的标签名称
+    append_tag_name: "标签7"
+    # “覆盖标签”时选择的标签名称
+    overwrite_tag_names: ["标签5", "标签1"]
+    # 清空后再次覆盖恢复的标签名称
+    final_tag_name: "标签1"
+
+  # 编辑单个环境标签用例数据
+  environment_edit_tags:
+    # 编辑环境时要新增的标签名称
+    target_tag_name: "标签9"
 
   # 书签相关测试数据
   bookmark:

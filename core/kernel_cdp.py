@@ -65,6 +65,40 @@ class ExtensionInstallBlockResult:
     evidence: str = ""
 
 
+@dataclass
+class ExtensionPagesBlockResult:
+    extensions_requested_url: str
+    extensions_target_url: str
+    extensions_blocked: bool
+    extensions_evidence: str
+    webstore_requested_url: str
+    webstore_target_url: str
+    webstore_blocked: bool
+    webstore_evidence: str
+    target_id: str
+    title: str
+    kernel_window_maximized: bool = False
+    evidence: str = ""
+
+
+@dataclass
+class UrlBlockCheck:
+    requested_url: str
+    target_url: str
+    title: str
+    blocked: bool
+    evidence: str
+    error_text: str = ""
+    loaded: bool = False
+
+
+@dataclass
+class UrlsBlockResult:
+    target_id: str
+    checks: list[UrlBlockCheck]
+    kernel_window_maximized: bool = False
+
+
 def open_kernel_url_and_read_page(
     port: int,
     url: str,
@@ -115,6 +149,397 @@ def open_kernel_url_and_read_page(
             title=title,
             text=text,
             error_text=error_text,
+        )
+    finally:
+        try:
+            ws.close()
+        finally:
+            _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+
+
+def verify_kernel_urls_blocked(
+    port: int,
+    urls: list[str],
+    expected_block_text: str = "ERR_BLOCKED_BY_CLIENT",
+    timeout_seconds: int = 45,
+    http_timeout_seconds: int = 2,
+) -> UrlsBlockResult:
+    if port <= 0:
+        raise ValueError(f"kernel CDP port must be positive: {port}")
+    if not urls:
+        raise ValueError("urls must not be empty")
+
+    target = _create_target(port, "about:blank", timeout_seconds=http_timeout_seconds)
+    target_id = str(target.get("id", ""))
+    websocket_url = str(target.get("webSocketDebuggerUrl", ""))
+    if not target_id or not websocket_url:
+        raise RuntimeError(f"kernel CDP target was not created correctly: {target}")
+
+    try:
+        import websocket
+    except ImportError as exc:
+        _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+        raise RuntimeError("websocket-client is required to operate kernel CDP pages") from exc
+
+    ws = websocket.create_connection(websocket_url, timeout=http_timeout_seconds, suppress_origin=True)
+    try:
+        deadline = time.time() + timeout_seconds
+        _send_and_wait(ws, "Page.enable", {}, deadline)
+        _send_and_wait(ws, "Runtime.enable", {}, deadline)
+        _send_and_wait(ws, "Page.bringToFront", {}, deadline)
+        kernel_window_maximized = _maximize_target_window(ws, target_id, deadline)
+
+        checks: list[UrlBlockCheck] = []
+        for url in urls:
+            navigate_response = _send_and_wait(ws, "Page.navigate", {"url": url}, deadline)
+            error_text = str(navigate_response.get("result", {}).get("errorText", "") or "")
+            snapshot = _wait_page_evidence(
+                ws,
+                expected_text=expected_block_text,
+                deadline=deadline,
+                fallback_wait_seconds=8,
+            )
+            evidence = "\n".join(
+                [
+                    error_text,
+                    str(snapshot.get("title", "")),
+                    str(snapshot.get("url", "")),
+                    str(snapshot.get("text", "")),
+                ]
+            )
+            checks.append(
+                UrlBlockCheck(
+                    requested_url=url,
+                    target_url=str(snapshot.get("url", "")),
+                    title=str(snapshot.get("title", "")),
+                    blocked=expected_block_text in evidence,
+                    evidence=evidence,
+                    error_text=error_text,
+                    loaded=False,
+                )
+            )
+
+        return UrlsBlockResult(
+            target_id=target_id,
+            checks=checks,
+            kernel_window_maximized=kernel_window_maximized,
+        )
+    finally:
+        try:
+            ws.close()
+        finally:
+            _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+
+
+def verify_kernel_website_blocklist_rules(
+    port: int,
+    blocked_urls: list[str],
+    allowed_url: str,
+    expected_block_text: str = "ERR_BLOCKED_BY_CLIENT",
+    timeout_seconds: int = 60,
+    http_timeout_seconds: int = 2,
+) -> UrlsBlockResult:
+    if port <= 0:
+        raise ValueError(f"kernel CDP port must be positive: {port}")
+    if not blocked_urls:
+        raise ValueError("blocked_urls must not be empty")
+    if not allowed_url:
+        raise ValueError("allowed_url is required")
+
+    target = _create_target(port, "about:blank", timeout_seconds=http_timeout_seconds)
+    target_id = str(target.get("id", ""))
+    websocket_url = str(target.get("webSocketDebuggerUrl", ""))
+    if not target_id or not websocket_url:
+        raise RuntimeError(f"kernel CDP target was not created correctly: {target}")
+
+    try:
+        import websocket
+    except ImportError as exc:
+        _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+        raise RuntimeError("websocket-client is required to operate kernel CDP pages") from exc
+
+    ws = websocket.create_connection(websocket_url, timeout=http_timeout_seconds, suppress_origin=True)
+    try:
+        deadline = time.time() + timeout_seconds
+        _send_and_wait(ws, "Page.enable", {}, deadline)
+        _send_and_wait(ws, "Runtime.enable", {}, deadline)
+        _send_and_wait(ws, "Page.bringToFront", {}, deadline)
+        kernel_window_maximized = _maximize_target_window(ws, target_id, deadline)
+
+        checks: list[UrlBlockCheck] = []
+        for url in blocked_urls:
+            navigate_response = _send_and_wait(ws, "Page.navigate", {"url": url}, deadline)
+            error_text = str(navigate_response.get("result", {}).get("errorText", "") or "")
+            snapshot = _wait_page_evidence(
+                ws,
+                expected_text=expected_block_text,
+                deadline=deadline,
+                fallback_wait_seconds=8,
+            )
+            evidence = "\n".join(
+                [
+                    error_text,
+                    str(snapshot.get("title", "")),
+                    str(snapshot.get("url", "")),
+                    str(snapshot.get("text", "")),
+                ]
+            )
+            checks.append(
+                UrlBlockCheck(
+                    requested_url=url,
+                    target_url=str(snapshot.get("url", "")),
+                    title=str(snapshot.get("title", "")),
+                    blocked=expected_block_text in evidence,
+                    loaded=False,
+                    evidence=evidence,
+                    error_text=error_text,
+                )
+            )
+
+        allowed_nav = _send_and_wait(ws, "Page.navigate", {"url": allowed_url}, deadline)
+        allowed_error = str(allowed_nav.get("result", {}).get("errorText", "") or "")
+        allowed_snapshot = _wait_allowed_url_evidence(
+            ws,
+            requested_url=allowed_url,
+            expected_block_text=expected_block_text,
+            deadline=deadline,
+            fallback_wait_seconds=18,
+        )
+        allowed_evidence = "\n".join(
+            [
+                allowed_error,
+                str(allowed_snapshot.get("title", "")),
+                str(allowed_snapshot.get("url", "")),
+                str(allowed_snapshot.get("text", "")),
+            ]
+        )
+        allowed_blocked = expected_block_text in allowed_evidence
+        allowed_loaded = (
+            not allowed_blocked
+            and _url_host_matches(allowed_url, str(allowed_snapshot.get("url", "")))
+            and len(str(allowed_snapshot.get("text", ""))) > 20
+        )
+        checks.append(
+            UrlBlockCheck(
+                requested_url=allowed_url,
+                target_url=str(allowed_snapshot.get("url", "")),
+                title=str(allowed_snapshot.get("title", "")),
+                blocked=allowed_blocked,
+                loaded=allowed_loaded,
+                evidence=allowed_evidence,
+                error_text=allowed_error,
+            )
+        )
+
+        return UrlsBlockResult(
+            target_id=target_id,
+            checks=checks,
+            kernel_window_maximized=kernel_window_maximized,
+        )
+    finally:
+        try:
+            ws.close()
+        finally:
+            _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+
+
+def verify_kernel_website_allowlist_rules(
+    port: int,
+    allowed_url: str,
+    blocked_urls: list[str],
+    expected_block_text: str = "ERR_BLOCKED_BY_CLIENT",
+    timeout_seconds: int = 60,
+    http_timeout_seconds: int = 2,
+) -> UrlsBlockResult:
+    if port <= 0:
+        raise ValueError(f"kernel CDP port must be positive: {port}")
+    if not allowed_url:
+        raise ValueError("allowed_url is required")
+    if not blocked_urls:
+        raise ValueError("blocked_urls must not be empty")
+
+    target = _create_target(port, "about:blank", timeout_seconds=http_timeout_seconds)
+    target_id = str(target.get("id", ""))
+    websocket_url = str(target.get("webSocketDebuggerUrl", ""))
+    if not target_id or not websocket_url:
+        raise RuntimeError(f"kernel CDP target was not created correctly: {target}")
+
+    try:
+        import websocket
+    except ImportError as exc:
+        _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+        raise RuntimeError("websocket-client is required to operate kernel CDP pages") from exc
+
+    ws = websocket.create_connection(websocket_url, timeout=http_timeout_seconds, suppress_origin=True)
+    try:
+        deadline = time.time() + timeout_seconds
+        _send_and_wait(ws, "Page.enable", {}, deadline)
+        _send_and_wait(ws, "Runtime.enable", {}, deadline)
+        _send_and_wait(ws, "Page.bringToFront", {}, deadline)
+        kernel_window_maximized = _maximize_target_window(ws, target_id, deadline)
+
+        checks: list[UrlBlockCheck] = []
+        allowed_nav = _send_and_wait(ws, "Page.navigate", {"url": allowed_url}, deadline)
+        allowed_error = str(allowed_nav.get("result", {}).get("errorText", "") or "")
+        allowed_snapshot = _wait_allowed_url_evidence(
+            ws,
+            requested_url=allowed_url,
+            expected_block_text=expected_block_text,
+            deadline=deadline,
+            fallback_wait_seconds=18,
+        )
+        allowed_evidence = "\n".join(
+            [
+                allowed_error,
+                str(allowed_snapshot.get("title", "")),
+                str(allowed_snapshot.get("url", "")),
+                str(allowed_snapshot.get("text", "")),
+            ]
+        )
+        allowed_blocked = expected_block_text in allowed_evidence
+        allowed_loaded = (
+            not allowed_blocked
+            and _url_host_matches(allowed_url, str(allowed_snapshot.get("url", "")))
+            and len(str(allowed_snapshot.get("text", ""))) > 20
+        )
+        checks.append(
+            UrlBlockCheck(
+                requested_url=allowed_url,
+                target_url=str(allowed_snapshot.get("url", "")),
+                title=str(allowed_snapshot.get("title", "")),
+                blocked=allowed_blocked,
+                loaded=allowed_loaded,
+                evidence=allowed_evidence,
+                error_text=allowed_error,
+            )
+        )
+
+        for url in blocked_urls:
+            navigate_response = _send_and_wait(ws, "Page.navigate", {"url": url}, deadline)
+            error_text = str(navigate_response.get("result", {}).get("errorText", "") or "")
+            snapshot = _wait_page_evidence(
+                ws,
+                expected_text=expected_block_text,
+                deadline=deadline,
+                fallback_wait_seconds=8,
+            )
+            evidence = "\n".join(
+                [
+                    error_text,
+                    str(snapshot.get("title", "")),
+                    str(snapshot.get("url", "")),
+                    str(snapshot.get("text", "")),
+                ]
+            )
+            checks.append(
+                UrlBlockCheck(
+                    requested_url=url,
+                    target_url=str(snapshot.get("url", "")),
+                    title=str(snapshot.get("title", "")),
+                    blocked=expected_block_text in evidence,
+                    loaded=False,
+                    evidence=evidence,
+                    error_text=error_text,
+                )
+            )
+
+        return UrlsBlockResult(
+            target_id=target_id,
+            checks=checks,
+            kernel_window_maximized=kernel_window_maximized,
+        )
+    finally:
+        try:
+            ws.close()
+        finally:
+            _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+
+
+def verify_extension_pages_blocked(
+    port: int,
+    extensions_url: str = "chrome://extensions/",
+    webstore_url: str = "",
+    expected_block_text: str = "ERR_BLOCKED_BY_CLIENT",
+    timeout_seconds: int = 45,
+    http_timeout_seconds: int = 2,
+) -> ExtensionPagesBlockResult:
+    if port <= 0:
+        raise ValueError(f"kernel CDP port must be positive: {port}")
+    if not webstore_url:
+        raise ValueError("webstore_url is required")
+
+    target = _create_target(port, "about:blank", timeout_seconds=http_timeout_seconds)
+    target_id = str(target.get("id", ""))
+    websocket_url = str(target.get("webSocketDebuggerUrl", ""))
+    if not target_id or not websocket_url:
+        raise RuntimeError(f"kernel CDP target was not created correctly: {target}")
+
+    try:
+        import websocket
+    except ImportError as exc:
+        _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+        raise RuntimeError("websocket-client is required to operate kernel CDP pages") from exc
+
+    ws = websocket.create_connection(websocket_url, timeout=http_timeout_seconds, suppress_origin=True)
+    try:
+        deadline = time.time() + timeout_seconds
+        _send_and_wait(ws, "Page.enable", {}, deadline)
+        _send_and_wait(ws, "Runtime.enable", {}, deadline)
+        _send_and_wait(ws, "Page.bringToFront", {}, deadline)
+        kernel_window_maximized = _maximize_target_window(ws, target_id, deadline)
+
+        extension_nav = _send_and_wait(ws, "Page.navigate", {"url": extensions_url}, deadline)
+        extension_error = str(extension_nav.get("result", {}).get("errorText", "") or "")
+        extensions_snapshot = _wait_page_evidence(
+            ws,
+            expected_text=expected_block_text,
+            deadline=deadline,
+            fallback_wait_seconds=6,
+        )
+        extensions_evidence = "\n".join(
+            [
+                extension_error,
+                str(extensions_snapshot.get("title", "")),
+                str(extensions_snapshot.get("url", "")),
+                str(extensions_snapshot.get("text", "")),
+            ]
+        )
+        extensions_blocked = expected_block_text in extensions_evidence
+
+        webstore_nav = _send_and_wait(ws, "Page.navigate", {"url": webstore_url}, deadline)
+        webstore_error = str(webstore_nav.get("result", {}).get("errorText", "") or "")
+        webstore_snapshot = _wait_page_evidence(
+            ws,
+            expected_text=expected_block_text,
+            deadline=deadline,
+            fallback_wait_seconds=8,
+        )
+        webstore_evidence = "\n".join(
+            [
+                webstore_error,
+                str(webstore_snapshot.get("title", "")),
+                str(webstore_snapshot.get("url", "")),
+                str(webstore_snapshot.get("text", "")),
+            ]
+        )
+        webstore_blocked = expected_block_text in webstore_evidence
+
+        return ExtensionPagesBlockResult(
+            extensions_requested_url=extensions_url,
+            extensions_target_url=str(extensions_snapshot.get("url", "")),
+            extensions_blocked=extensions_blocked,
+            extensions_evidence=extensions_evidence,
+            webstore_requested_url=webstore_url,
+            webstore_target_url=str(webstore_snapshot.get("url", "")),
+            webstore_blocked=webstore_blocked,
+            webstore_evidence=webstore_evidence,
+            target_id=target_id,
+            title=str(webstore_snapshot.get("title", "")),
+            kernel_window_maximized=kernel_window_maximized,
+            evidence=(
+                f"extensions={extensions_evidence[:1000]}, webstore={webstore_evidence[:1000]}, "
+                f"kernel_window_maximized={kernel_window_maximized}"
+            ),
         )
     finally:
         try:
@@ -529,6 +954,46 @@ def _wait_bilibili_body_ready(ws, deadline: float) -> None:
             return
         time.sleep(0.5)
     raise TimeoutError("bilibili page did not become ready")
+
+
+def _wait_allowed_url_evidence(
+    ws,
+    requested_url: str,
+    expected_block_text: str,
+    deadline: float,
+    fallback_wait_seconds: int = 12,
+) -> dict[str, str]:
+    fallback_deadline = min(deadline, time.time() + fallback_wait_seconds)
+    last_snapshot: dict[str, str] = {}
+    while time.time() < fallback_deadline:
+        last_snapshot = _evaluate_page_snapshot(ws, deadline)
+        evidence = "\n".join(
+            [
+                str(last_snapshot.get("title", "")),
+                str(last_snapshot.get("url", "")),
+                str(last_snapshot.get("text", "")),
+            ]
+        )
+        if expected_block_text in evidence:
+            return last_snapshot
+        if (
+            _url_host_matches(requested_url, str(last_snapshot.get("url", "")))
+            and len(str(last_snapshot.get("text", ""))) > 20
+            and _document_ready(ws, deadline)
+        ):
+            return last_snapshot
+        time.sleep(0.3)
+    return last_snapshot
+
+
+def _url_host_matches(requested_url: str, target_url: str) -> bool:
+    requested_host = urllib.parse.urlparse(requested_url).hostname or ""
+    target_host = urllib.parse.urlparse(target_url).hostname or ""
+    if not requested_host or not target_host:
+        return False
+    requested_host = requested_host.lower().lstrip("www.")
+    target_host = target_host.lower().lstrip("www.")
+    return requested_host == target_host or target_host.endswith(f".{requested_host}")
 
 
 def _wait_page_evidence(

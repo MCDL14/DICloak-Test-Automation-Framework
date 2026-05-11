@@ -122,8 +122,11 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 当前已开始编写并验证全局设置模块 P0 用例，文件位于 `tests/p0/global_settings/`：
 
-- `test_01_disable_view_password.py`
-- `test_02_disable_browser_devtools.py`
-- `test_03_disable_extension_management.py`
+- `test_01_disable_view_password.py`：校验禁止查看网站密码。
+- `test_02_disable_browser_devtools.py`：禁止打开浏览器开发者工具。
+- `test_03_disable_extension_management.py`：禁止管理/移除扩展，以及从本地安装扩展至浏览器。
+- `test_04_disable_member_access_google_extension_pages.py`：禁止成员访问谷歌扩展商店和扩展设置页面。
+- `test_05_block_specific_websites_google_and_baidu.py`：禁止访问指定网址-快捷勾选谷歌应用商店、百度，并校验 b 站可正常访问。
+- `test_06_allow_specific_website_bilibili.py`：允许访问指定网址-b 站。
 
 已预留代理管理、扩展管理、环境分组管理、成员管理等模块目录，后续新增用例时按业务模块放入对应目录。

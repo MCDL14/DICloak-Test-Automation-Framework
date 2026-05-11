@@ -14,25 +14,61 @@ class GlobalSettingsPage(BasePage):
 
     def ensure_disable_view_password_enabled(self) -> bool:
         """Return True when this method changed the setting."""
-        self._wait_for_disable_view_password_checkbox()
+        return self.ensure_checkbox_enabled("禁止查看网站密码")
+
+    def ensure_disable_devtools_enabled(self) -> bool:
+        """Return True when this method changed the setting."""
+        return self.ensure_checkbox_enabled("禁止打开浏览器开发者工具界面")
+
+    def ensure_disable_extension_management_enabled(self) -> bool:
+        """Return True when this method changed the setting."""
+        return self.ensure_checkbox_enabled("禁止管理/移除扩展，以及从本地安装扩展至浏览器")
+
+    def ensure_disable_extension_management_disabled(self) -> bool:
+        """Return True when this method changed the setting."""
+        return self.ensure_checkbox_disabled("禁止管理/移除扩展，以及从本地安装扩展至浏览器")
+
+    def ensure_checkbox_enabled(self, label_text: str) -> bool:
+        """Enable one global setting checkbox without allowing other checkbox changes."""
+        self._wait_for_checkbox(label_text)
         before_states = self._wait_checkbox_states_stable()
-        if self.disable_view_password_checked():
+        if self.checkbox_checked(label_text):
             return False
 
-        self.cdp.click_element_by_script(self._disable_view_password_checkbox_script())
-        self._wait_disable_view_password_checked(True)
+        self.cdp.click_element_by_script(self._checkbox_script(label_text))
+        self._wait_checkbox_checked(label_text, True)
         after_states = self.checkbox_states()
-        self._assert_only_disable_view_password_changed(before_states, after_states)
+        self._assert_only_checkbox_changed(label_text, before_states, after_states)
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
         self._wait_save_finished()
         self._wait_checkbox_states_stable()
-        self._wait_disable_view_password_checked(True)
+        self._wait_checkbox_checked(label_text, True)
+        return True
+
+    def ensure_checkbox_disabled(self, label_text: str) -> bool:
+        """Disable one global setting checkbox without allowing other checkbox changes."""
+        self._wait_for_checkbox(label_text)
+        before_states = self._wait_checkbox_states_stable()
+        if not self.checkbox_checked(label_text):
+            return False
+
+        self.cdp.click_element_by_script(self._checkbox_script(label_text))
+        self._wait_checkbox_checked(label_text, False)
+        after_states = self.checkbox_states()
+        self._assert_only_checkbox_changed(label_text, before_states, after_states, expected_change=(True, False))
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self._wait_checkbox_states_stable()
+        self._wait_checkbox_checked(label_text, False)
         return True
 
     def disable_view_password_checked(self) -> bool:
-        value = self.cdp.evaluate(self._disable_view_password_checked_script())
+        return self.checkbox_checked("禁止查看网站密码")
+
+    def checkbox_checked(self, label_text: str) -> bool:
+        value = self.cdp.evaluate(self._checkbox_checked_script(label_text))
         if value is None:
-            raise RuntimeError("禁止查看网站密码 checkbox was not found")
+            raise RuntimeError(f"{label_text} checkbox was not found")
         return bool(value)
 
     def checkbox_states(self) -> dict[str, bool]:
@@ -80,24 +116,29 @@ class GlobalSettingsPage(BasePage):
             time.sleep(0.2)
         raise TimeoutError("global settings page did not appear")
 
-    def _wait_for_disable_view_password_checkbox(self, timeout_seconds: int | None = None) -> None:
+    def _wait_for_checkbox(self, label_text: str, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
-            if self.cdp.evaluate(self._disable_view_password_exists_script()):
+            if self.cdp.evaluate(self._checkbox_exists_script(label_text)):
                 return
             time.sleep(0.2)
-        raise TimeoutError("禁止查看网站密码 checkbox did not appear")
+        raise TimeoutError(f"{label_text} checkbox did not appear")
 
-    def _wait_disable_view_password_checked(self, expected: bool, timeout_seconds: int | None = None) -> None:
+    def _wait_checkbox_checked(
+        self,
+        label_text: str,
+        expected: bool,
+        timeout_seconds: int | None = None,
+    ) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
-            value = self.cdp.evaluate(self._disable_view_password_checked_script())
+            value = self.cdp.evaluate(self._checkbox_checked_script(label_text))
             if value is expected:
                 return
             time.sleep(0.2)
-        raise TimeoutError(f"禁止查看网站密码 checkbox state did not become expected: {expected}")
+        raise TimeoutError(f"{label_text} checkbox state did not become expected: {expected}")
 
     def _wait_checkbox_states_stable(self, timeout_seconds: int | None = None) -> dict[str, bool]:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -120,17 +161,19 @@ class GlobalSettingsPage(BasePage):
             time.sleep(0.3)
         raise TimeoutError(f"global settings checkbox states did not become stable: {last}")
 
-    def _assert_only_disable_view_password_changed(
+    def _assert_only_checkbox_changed(
         self,
+        label_text: str,
         before_states: dict[str, bool],
         after_states: dict[str, bool],
+        expected_change: tuple[bool, bool] = (False, True),
     ) -> None:
         changed = {
             name: (before_states.get(name), after_states.get(name))
             for name in sorted(set(before_states) | set(after_states))
             if before_states.get(name) != after_states.get(name)
         }
-        allowed = {"禁止查看网站密码": (False, True)}
+        allowed = {label_text: expected_change}
         unexpected = {
             name: value
             for name, value in changed.items()
@@ -218,10 +261,10 @@ class GlobalSettingsPage(BasePage):
                 self.cdp.press("Escape")
             time.sleep(0.3)
 
-    def _disable_view_password_exists_script(self) -> str:
+    def _checkbox_exists_script(self, label_text: str) -> str:
         return """
         () => Boolean((() => {
-            const text = "禁止查看网站密码";
+            const text = __TEXT__;
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
@@ -230,12 +273,12 @@ class GlobalSettingsPage(BasePage):
                 .filter(visible)
                 .find((el) => (el.innerText || el.textContent || "").includes(text));
         })())
-        """
+        """.replace("__TEXT__", repr(label_text))
 
-    def _disable_view_password_checkbox_script(self) -> str:
+    def _checkbox_script(self, label_text: str) -> str:
         return """
         () => {
-            const text = "禁止查看网站密码";
+            const text = __TEXT__;
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
@@ -247,12 +290,12 @@ class GlobalSettingsPage(BasePage):
             if (!checkbox) return null;
             return checkbox.querySelector(".el-checkbox__input, input[type='checkbox']") || checkbox;
         }
-        """
+        """.replace("__TEXT__", repr(label_text))
 
-    def _disable_view_password_checked_script(self) -> str:
+    def _checkbox_checked_script(self, label_text: str) -> str:
         return """
         () => {
-            const text = "禁止查看网站密码";
+            const text = __TEXT__;
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
@@ -270,7 +313,7 @@ class GlobalSettingsPage(BasePage):
             if (ariaChecked === "false") return false;
             return stateEl.classList.contains("is-checked") || checkbox.classList.contains("is-checked");
         }
-        """
+        """.replace("__TEXT__", repr(label_text))
 
     def _visible_menu_item_script(self, text: str) -> str:
         return f"""

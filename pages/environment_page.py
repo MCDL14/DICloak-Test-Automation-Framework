@@ -768,10 +768,15 @@ class EnvironmentPage(BasePage):
         return self.text("environment_table")
 
     def first_environment_name(self) -> str:
+        return self.environment_name_at_position(1)
+
+    def environment_name_at_position(self, position: int) -> str:
         rows = self._environment_rows()
-        if not rows:
-            raise RuntimeError("environment list has no visible rows")
-        return str(rows[0].get("name", "")).strip()
+        if position <= 0:
+            raise ValueError(f"environment row position must be 1-based: {position}")
+        if len(rows) < position:
+            raise RuntimeError(f"environment list has fewer than {position} visible rows: actual={len(rows)}")
+        return str(rows[position - 1].get("name", "")).strip()
 
     def first_environment_serial_and_name(self) -> tuple[str, str]:
         rows = self._environment_rows()

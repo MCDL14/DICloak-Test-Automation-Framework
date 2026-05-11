@@ -123,5 +123,7 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 当前已开始编写并验证全局设置模块 P0 用例，文件位于 `tests/p0/global_settings/`：
 
 - `test_01_disable_view_password.py`
+- `test_02_disable_browser_devtools.py`
+- `test_03_disable_extension_management.py`
 
 已预留代理管理、扩展管理、环境分组管理、成员管理等模块目录，后续新增用例时按业务模块放入对应目录。

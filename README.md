@@ -68,6 +68,21 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 这样第一次失败后残留的弹窗、筛选、选中行、遮罩或模块页面状态，会先经过全局恢复和模块级恢复，再进入下一次尝试。重试后通过的用例会计入 `flaky`，飞书汇总中显示为“重试后通过”。
 
+## 失败截图机制
+
+框架在 `core/result.py` 的 `addFailure` 和 `addError` 阶段接入失败截图，截图会发生在用例后恢复机制之前，尽量保留失败现场。
+
+截图由 `core/screenshot.py` 统一处理，默认通过 `run.screenshot_on_failure: true` 开启，策略如下：
+
+1. 如果当前用例存在可用 CDP，优先通过 Playwright/CDP 截取 APP 页面。
+2. 如果 CDP 截图失败，尝试桌面截图。
+3. 桌面截图优先使用 `mss`，兼容 Windows 和 macOS。
+4. Windows 下如果 `mss` 截图失败，再回退到现有 UIAutomation 桌面截图能力。
+5. 所有截图保存到 `screenshots/` 目录。
+6. 截图成功后会返回截图路径，写入失败摘要和日志；飞书执行总结中的失败摘要也会带上该路径。
+
+截图失败不会覆盖原始用例失败原因，只会写入 warning 日志并继续执行后续恢复流程。
+
 ## 退出码
 
 - `0`：全部通过
@@ -128,5 +143,6 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 - `test_04_disable_member_access_google_extension_pages.py`：禁止成员访问谷歌扩展商店和扩展设置页面。
 - `test_05_block_specific_websites_google_and_baidu.py`：禁止访问指定网址-快捷勾选谷歌应用商店、百度，并校验 b 站可正常访问。
 - `test_06_allow_specific_website_bilibili.py`：允许访问指定网址-b 站。
+- `test_07_disable_packet_capture_software.py`：禁用抓包软件，校验抓包进程存在时禁止打开环境，关闭抓包软件后环境可正常打开。
 
 已预留代理管理、扩展管理、环境分组管理、成员管理等模块目录，后续新增用例时按业务模块放入对应目录。

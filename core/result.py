@@ -4,8 +4,10 @@ import sys
 import traceback
 import unittest
 from dataclasses import dataclass, field
+from typing import Any
 
 from core.recovery import TestRecoveryManager
+from core.screenshot import capture_failure_screenshot
 
 
 @dataclass
@@ -13,6 +15,7 @@ class CaseFailure:
     test_id: str
     status: str
     message: str
+    screenshot_path: str = ""
 
 
 @dataclass
@@ -41,7 +44,8 @@ class RunResult:
         lines = []
         for failure in self.failures:
             first_line = failure.message.splitlines()[0] if failure.message else ""
-            lines.append(f"{failure.status}: {failure.test_id} - {first_line}")
+            screenshot = f" screenshot={failure.screenshot_path}" if failure.screenshot_path else ""
+            lines.append(f"{failure.status}: {failure.test_id} - {first_line}{screenshot}")
         return "\n".join(lines)
 
 
@@ -71,24 +75,48 @@ class AutomationTestResult(unittest.TextTestResult):
     def addFailure(self, test: unittest.case.TestCase, err) -> None:
         super().addFailure(test, err)
         self.run_result.failed += 1
-        self.run_result.failures.append(
-            CaseFailure(test.id(), "failed", _format_error(err))
-        )
+        self._record_case_failure(test, "failed", err)
 
     def addError(self, test: unittest.case.TestCase, err) -> None:
         super().addError(test, err)
         self.run_result.errors += 1
-        self.run_result.failures.append(
-            CaseFailure(test.id(), "error", _format_error(err))
-        )
+        self._record_case_failure(test, "error", err)
 
     def addSkip(self, test: unittest.case.TestCase, reason: str) -> None:
         super().addSkip(test, reason)
         self.run_result.skipped += 1
 
+    def _record_case_failure(self, test: unittest.case.TestCase, status: str, err) -> None:
+        screenshot_path = self._capture_screenshot(test)
+        self.run_result.failures.append(
+            CaseFailure(test.id(), status, _format_error(err), screenshot_path=screenshot_path)
+        )
+
+    def _capture_screenshot(self, test: unittest.case.TestCase) -> str:
+        config = _test_attr(test, "config", {})
+        if not isinstance(config, dict):
+            config = {}
+        if not config.get("run", {}).get("screenshot_on_failure", True):
+            return ""
+        logger = _test_attr(test, "logger", None)
+        screenshot_path = capture_failure_screenshot(
+            config=config,
+            test_id=test.id(),
+            cdp=_test_attr(test, "cdp", None),
+            ui=_test_attr(test, "ui", None),
+            logger=logger,
+        )
+        if logger and screenshot_path:
+            logger.info("Failure screenshot path recorded for %s: %s", test.id(), screenshot_path)
+        return screenshot_path
+
 
 def _format_error(err) -> str:
     return "".join(traceback.format_exception(*err)).strip()
+
+
+def _test_attr(test: unittest.case.TestCase, name: str, default: Any = None) -> Any:
+    return getattr(test, name, default)
 
 
 class AutomationTextRunner(unittest.TextTestRunner):

@@ -55,7 +55,11 @@ class UIDriver:
         edit = dialog.EditControl()
         if not edit.Exists(maxSearchSeconds=timeout):
             raise UIAutomationError("file path input was not found in file picker")
-        edit.SetValue(str(file_path))
+        self._set_edit_value(edit, str(file_path))
+        open_button = self._dialog_button(dialog, ("打开", "Open", "确定", "OK"), timeout=timeout)
+        if open_button is not None:
+            open_button.Click()
+            return
         open_button = dialog.ButtonControl(Name="打开")
         if not open_button.Exists(maxSearchSeconds=timeout):
             open_button = dialog.ButtonControl(Name="Open")
@@ -74,13 +78,31 @@ class UIDriver:
         edit = dialog.EditControl()
         if not edit.Exists(maxSearchSeconds=timeout):
             raise UIAutomationError("file path input was not found in save dialog")
-        edit.SetValue(str(target))
+        self._set_edit_value(edit, str(target))
 
         save_button = self._dialog_button(dialog, ("保存", "Save"), timeout=timeout)
         if save_button is None:
             raise UIAutomationError("save button was not found in save dialog")
         save_button.Click()
         self._confirm_overwrite_if_present(timeout=timeout)
+
+    def _set_edit_value(self, edit, value: str) -> None:
+        if hasattr(edit, "SetValue"):
+            edit.SetValue(value)
+            return
+
+        try:
+            pattern = edit.GetValuePattern()
+        except Exception:
+            pattern = None
+        if pattern is not None and hasattr(pattern, "SetValue"):
+            pattern.SetValue(value)
+            return
+
+        edit.Click()
+        time.sleep(0.2)
+        self.auto.SendKeys("{Ctrl}a", waitTime=0.05)
+        self.auto.SendKeys(value, waitTime=0.01)
 
     def _dialog_button(self, dialog, names: tuple[str, ...], timeout: int = 10):
         deadline = time.time() + timeout

@@ -2,17 +2,70 @@
 environment_menu:
   selector: "li:has-text('环境管理'), a:has-text('环境管理')"
 
+# 左侧菜单候选集合。页面对象会在候选中按精确文案选择“环境管理”。
+environment_menu_candidates:
+  selector: ".el-menu-item, li, a, button"
+
+# 页面上按可见文本点击的候选集合，例如“批量创建”。
+visible_text_candidates:
+  selector: "button, div, span, a"
+
+# 页面或弹层内的普通按钮候选。
+button:
+  selector: "button"
+
+# 可能遮挡环境列表的弹层。
+blocking_overlay:
+  selector: ".el-drawer, .el-dialog, .el-message-box"
+
+# 弹层关闭按钮候选。
+overlay_close_button:
+  selector: ".el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn, .el-overlay button[aria-label='Close']"
+
+# Element Plus 抽屉候选。
+drawer:
+  selector: ".el-drawer"
+
+# Element Plus 对话框候选。
+dialog:
+  selector: ".el-dialog"
+
+# Element Plus 消息确认框候选。
+message_box:
+  selector: ".el-message-box"
+
+# Element Plus 表单项候选。动态定位筛选项、标签输入框等区域时使用。
+form_item:
+  selector: ".el-form-item"
+
+# Element Plus 下拉选择控件候选。
+select:
+  selector: ".el-select"
+
+# 可编辑输入控件候选。
+input:
+  selector: "input"
+
+# 表格行候选。按环境名称、序号等动态定位仍在页面对象里完成。
+table_row:
+  selector: ".el-table__row, tbody tr"
+
+# 下拉浮层候选。
+popper:
+  selector: ".el-popper, .el-select__popper, .el-popover, .el-tooltip__popper"
+
 # 环境列表表格容器。读取整表文本时使用。
 environment_table:
   selector: ".el-table"
 
-# “创建环境”按钮。实测有稳定 id=createEnvBtn。
+# “创建环境”按钮。实测有稳定 id=createEnvBtn；不要在这里写 Playwright 专用 :has-text，
+# 页面对象中的 JS helper 使用浏览器原生 querySelectorAll。
 create_button:
-  selector: "#createEnvBtn, button:has-text('创建环境')"
+  selector: "#createEnvBtn"
 
-# “批量创建”按钮。未选中环境时显示在环境列表顶部工具栏，点击后打开批量创建抽屉。
+# “批量创建”按钮候选。页面对象按可见文案“批量创建”筛选。
 batch_create_button:
-  selector: "button:has-text('批量创建'), div:has-text('批量创建')"
+  selector: "button, div, span, a"
 
 # 批量创建抽屉里的“创建数量”输入框。placeholder 为“请输入创建数量”，类型为 number。
 batch_create_count_input:

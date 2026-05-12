@@ -99,6 +99,21 @@ class UrlsBlockResult:
     kernel_window_maximized: bool = False
 
 
+@dataclass
+class BookmarkCheckResult:
+    requested_url: str
+    target_id: str
+    target_url: str
+    title: str
+    names: list[str]
+    urls_by_name: dict[str, str]
+    expected_names: list[str]
+    forbidden_names: list[str]
+    expected_present: bool
+    forbidden_absent: bool
+    evidence: str = ""
+
+
 def open_kernel_url_and_read_page(
     port: int,
     url: str,
@@ -149,6 +164,185 @@ def open_kernel_url_and_read_page(
             title=title,
             text=text,
             error_text=error_text,
+        )
+    finally:
+        try:
+            ws.close()
+        finally:
+            _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+
+
+def create_kernel_bookmark_and_verify(
+    port: int,
+    name: str,
+    url: str,
+    timeout_seconds: int = 30,
+    http_timeout_seconds: int = 2,
+) -> BookmarkCheckResult:
+    clean_name = str(name or "").strip()
+    clean_url = str(url or "").strip()
+    if port <= 0:
+        raise ValueError(f"kernel CDP port must be positive: {port}")
+    if not clean_name:
+        raise ValueError("bookmark name is required")
+    if not clean_url:
+        raise ValueError("bookmark url is required")
+
+    target = _create_target(port, "chrome://bookmarks/", timeout_seconds=http_timeout_seconds)
+    target_id = str(target.get("id", ""))
+    websocket_url = str(target.get("webSocketDebuggerUrl", ""))
+    if not target_id or not websocket_url:
+        raise RuntimeError(f"kernel CDP target was not created correctly: {target}")
+
+    try:
+        import websocket
+    except ImportError as exc:
+        _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+        raise RuntimeError("websocket-client is required to operate kernel CDP pages") from exc
+
+    ws = websocket.create_connection(websocket_url, timeout=http_timeout_seconds, suppress_origin=True)
+    try:
+        deadline = time.time() + timeout_seconds
+        _send_and_wait(ws, "Page.enable", {}, deadline)
+        _send_and_wait(ws, "Runtime.enable", {}, deadline)
+        _send_and_wait(ws, "Page.bringToFront", {}, deadline)
+        _wait_bookmark_api_ready(ws, deadline)
+        create_result = _create_kernel_bookmark(ws, clean_name, clean_url, deadline)
+        if not create_result.get("ok"):
+            raise RuntimeError(f"kernel bookmark was not created: {create_result}")
+        state = _wait_kernel_bookmarks_state(
+            ws,
+            expected_names=[clean_name],
+            forbidden_names=[],
+            deadline=deadline,
+        )
+        snapshot = _safe_evaluate_page_snapshot(ws, min(deadline, time.time() + 3))
+        return BookmarkCheckResult(
+            requested_url="chrome://bookmarks/",
+            target_id=target_id,
+            target_url=str(snapshot.get("url", "")),
+            title=str(snapshot.get("title", "")),
+            names=state["names"],
+            urls_by_name=state["urls_by_name"],
+            expected_names=[clean_name],
+            forbidden_names=[],
+            expected_present=clean_name in state["names"],
+            forbidden_absent=True,
+            evidence=f"created={create_result}, names={state['names']}",
+        )
+    finally:
+        try:
+            ws.close()
+        finally:
+            _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+
+
+def verify_kernel_bookmarks(
+    port: int,
+    expected_names: list[str],
+    forbidden_names: list[str] | None = None,
+    timeout_seconds: int = 45,
+    http_timeout_seconds: int = 2,
+) -> BookmarkCheckResult:
+    clean_expected = [str(item).strip() for item in expected_names if str(item).strip()]
+    clean_forbidden = [str(item).strip() for item in (forbidden_names or []) if str(item).strip()]
+    if port <= 0:
+        raise ValueError(f"kernel CDP port must be positive: {port}")
+    if not clean_expected and not clean_forbidden:
+        raise ValueError("expected_names or forbidden_names is required")
+
+    target = _create_target(port, "chrome://bookmarks/", timeout_seconds=http_timeout_seconds)
+    target_id = str(target.get("id", ""))
+    websocket_url = str(target.get("webSocketDebuggerUrl", ""))
+    if not target_id or not websocket_url:
+        raise RuntimeError(f"kernel CDP target was not created correctly: {target}")
+
+    try:
+        import websocket
+    except ImportError as exc:
+        _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+        raise RuntimeError("websocket-client is required to operate kernel CDP pages") from exc
+
+    ws = websocket.create_connection(websocket_url, timeout=http_timeout_seconds, suppress_origin=True)
+    try:
+        deadline = time.time() + timeout_seconds
+        _send_and_wait(ws, "Page.enable", {}, deadline)
+        _send_and_wait(ws, "Runtime.enable", {}, deadline)
+        _send_and_wait(ws, "Page.bringToFront", {}, deadline)
+        _wait_bookmark_api_ready(ws, deadline)
+        state = _wait_kernel_bookmarks_state(
+            ws,
+            expected_names=clean_expected,
+            forbidden_names=clean_forbidden,
+            deadline=deadline,
+        )
+        snapshot = _safe_evaluate_page_snapshot(ws, min(deadline, time.time() + 3))
+        names = state["names"]
+        expected_present = all(item in names for item in clean_expected)
+        forbidden_absent = all(item not in names for item in clean_forbidden)
+        return BookmarkCheckResult(
+            requested_url="chrome://bookmarks/",
+            target_id=target_id,
+            target_url=str(snapshot.get("url", "")),
+            title=str(snapshot.get("title", "")),
+            names=names,
+            urls_by_name=state["urls_by_name"],
+            expected_names=clean_expected,
+            forbidden_names=clean_forbidden,
+            expected_present=expected_present,
+            forbidden_absent=forbidden_absent,
+            evidence=f"names={names}, urls_by_name={state['urls_by_name']}",
+        )
+    finally:
+        try:
+            ws.close()
+        finally:
+            _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+
+
+def read_kernel_bookmarks(
+    port: int,
+    timeout_seconds: int = 30,
+    http_timeout_seconds: int = 2,
+) -> BookmarkCheckResult:
+    if port <= 0:
+        raise ValueError(f"kernel CDP port must be positive: {port}")
+
+    target = _create_target(port, "chrome://bookmarks/", timeout_seconds=http_timeout_seconds)
+    target_id = str(target.get("id", ""))
+    websocket_url = str(target.get("webSocketDebuggerUrl", ""))
+    if not target_id or not websocket_url:
+        raise RuntimeError(f"kernel CDP target was not created correctly: {target}")
+
+    try:
+        import websocket
+    except ImportError as exc:
+        _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+        raise RuntimeError("websocket-client is required to operate kernel CDP pages") from exc
+
+    ws = websocket.create_connection(websocket_url, timeout=http_timeout_seconds, suppress_origin=True)
+    try:
+        deadline = time.time() + timeout_seconds
+        _send_and_wait(ws, "Page.enable", {}, deadline)
+        _send_and_wait(ws, "Runtime.enable", {}, deadline)
+        _send_and_wait(ws, "Page.bringToFront", {}, deadline)
+        _wait_bookmark_api_ready(ws, deadline)
+        state = _read_kernel_bookmarks_state(ws, deadline)
+        snapshot = _safe_evaluate_page_snapshot(ws, min(deadline, time.time() + 3))
+        names = [str(item) for item in state.get("names", [])]
+        urls_by_name = dict(state.get("urls_by_name", {}))
+        return BookmarkCheckResult(
+            requested_url="chrome://bookmarks/",
+            target_id=target_id,
+            target_url=str(snapshot.get("url", "")),
+            title=str(snapshot.get("title", "")),
+            names=names,
+            urls_by_name=urls_by_name,
+            expected_names=[],
+            forbidden_names=[],
+            expected_present=True,
+            forbidden_absent=True,
+            evidence=f"names={names}, urls_by_name={urls_by_name}",
         )
     finally:
         try:
@@ -779,6 +973,143 @@ def verify_bilibili_password_eye_blocked(
             ws.close()
         finally:
             _close_target(port, target_id, timeout_seconds=http_timeout_seconds)
+
+
+def _wait_bookmark_api_ready(ws, deadline: float) -> None:
+    while time.time() < deadline:
+        ready = _evaluate_value(
+            ws,
+            """
+            (() => Boolean(window.chrome && chrome.bookmarks && chrome.bookmarks.getTree && chrome.bookmarks.create))()
+            """,
+            deadline,
+        )
+        if ready:
+            return
+        time.sleep(0.3)
+    raise TimeoutError("chrome bookmarks API did not become ready")
+
+
+def _create_kernel_bookmark(ws, name: str, url: str, deadline: float) -> dict[str, Any]:
+    value = _evaluate_value(
+        ws,
+        """
+        (() => new Promise((resolve) => {
+            const title = __TITLE__;
+            const targetUrl = __URL__;
+            const finish = (value) => resolve(value);
+            const lastError = () => chrome.runtime && chrome.runtime.lastError
+                ? String(chrome.runtime.lastError.message || chrome.runtime.lastError)
+                : "";
+            try {
+                chrome.bookmarks.search({ title }, (items) => {
+                    const matches = (items || []).filter((item) => item.title === title && item.url === targetUrl);
+                    const create = () => {
+                        chrome.bookmarks.create({ parentId: "1", title, url: targetUrl }, (created) => {
+                            const error = lastError();
+                            if (error) {
+                                finish({ ok: false, error });
+                                return;
+                            }
+                            finish({
+                                ok: true,
+                                id: String(created && created.id || ""),
+                                title: String(created && created.title || ""),
+                                url: String(created && created.url || "")
+                            });
+                        });
+                    };
+                    if (!matches.length) {
+                        create();
+                        return;
+                    }
+                    let pending = matches.length;
+                    for (const item of matches) {
+                        chrome.bookmarks.remove(item.id, () => {
+                            pending -= 1;
+                            if (pending <= 0) create();
+                        });
+                    }
+                });
+            } catch (error) {
+                finish({ ok: false, error: String(error && error.message || error) });
+            }
+        }))()
+        """.replace("__TITLE__", json.dumps(name)).replace("__URL__", json.dumps(url)),
+        deadline,
+    )
+    return value if isinstance(value, dict) else {"ok": False, "error": f"unexpected value: {value}"}
+
+
+def _wait_kernel_bookmarks_state(
+    ws,
+    expected_names: list[str],
+    forbidden_names: list[str],
+    deadline: float,
+) -> dict[str, Any]:
+    last_state: dict[str, Any] = {"names": [], "urls_by_name": {}}
+    while time.time() < deadline:
+        last_state = _read_kernel_bookmarks_state(ws, deadline)
+        names = [str(item) for item in last_state.get("names", [])]
+        expected_present = all(name in names for name in expected_names)
+        forbidden_absent = all(name not in names for name in forbidden_names)
+        if expected_present and forbidden_absent:
+            return {"names": names, "urls_by_name": dict(last_state.get("urls_by_name", {}))}
+        time.sleep(0.5)
+    return {
+        "names": [str(item) for item in last_state.get("names", [])],
+        "urls_by_name": dict(last_state.get("urls_by_name", {})),
+    }
+
+
+def _read_kernel_bookmarks_state(ws, deadline: float) -> dict[str, Any]:
+    value = _evaluate_value(
+        ws,
+        """
+        (() => new Promise((resolve) => {
+            const defaultFolderTitles = new Set([
+                "书签栏",
+                "其他书签",
+                "移动设备书签",
+                "Bookmarks bar",
+                "Other bookmarks",
+                "Mobile bookmarks",
+            ]);
+            const flatten = (nodes, output = []) => {
+                for (const node of nodes || []) {
+                    const title = String(node.title || "");
+                    const url = String(node.url || "");
+                    if (url || (title && !defaultFolderTitles.has(title))) {
+                        output.push({
+                            id: String(node.id || ""),
+                            title,
+                            url
+                        });
+                    }
+                    if (node.children) flatten(node.children, output);
+                }
+                return output;
+            };
+            try {
+                chrome.bookmarks.getTree((tree) => {
+                    const items = flatten(tree);
+                    const names = [];
+                    const urlsByName = {};
+                    for (const item of items) {
+                        if (!item.title) continue;
+                        names.push(item.title);
+                        if (item.url) urlsByName[item.title] = item.url;
+                    }
+                    resolve({ names, urls_by_name: urlsByName, items });
+                });
+            } catch (error) {
+                resolve({ names: [], urls_by_name: {}, error: String(error && error.message || error) });
+            }
+        }))()
+        """,
+        deadline,
+    )
+    return value if isinstance(value, dict) else {"names": [], "urls_by_name": {}, "error": str(value)}
 
 
 def _create_target(port: int, url: str, timeout_seconds: int) -> dict[str, Any]:

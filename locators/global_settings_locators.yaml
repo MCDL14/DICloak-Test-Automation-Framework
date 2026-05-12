@@ -1,0 +1,39 @@
+# 左侧菜单“全局设置”。页面对象会在这些候选元素中按精确文案点击。
+global_settings_menu_candidates:
+  selector: ".el-menu-item, [role='menuitem'], a, button, .el-sub-menu__title"
+
+# 全局设置页面标识。页面对象会在 body 文本中校验“全局设置”和核心设置项。
+global_settings_page_marker:
+  selector: "body"
+
+# 全局设置页常见 loading 遮罩。
+loading_mask:
+  selector: ".el-loading-mask, .el-loading-spinner"
+
+# 可能遮挡页面操作的弹层。
+blocking_overlay:
+  selector: ".el-drawer, .el-dialog, .el-message-box"
+
+# 弹层关闭按钮候选。
+overlay_close_button:
+  selector: ".el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn, .el-overlay button[aria-label='Close']"
+
+# 页面或弹层内的普通按钮候选。页面对象会继续按可见文案筛选，例如“确定”。
+button:
+  selector: "button"
+
+# Element Plus checkbox 候选。具体业务项仍按 label 文案动态定位。
+checkbox_candidates:
+  selector: ".el-checkbox, label, .el-form-item"
+
+# Element Plus switch 候选。具体业务功能块仍按业务文案动态限定范围。
+switch:
+  selector: ".el-switch"
+
+# Element Plus 表单项候选。用于访问网站限制、禁用抓包软件等功能块的区域定位。
+form_item:
+  selector: ".el-form-item"
+
+# 访问网站限制、禁用抓包软件等区域内的可编辑输入控件候选。
+editable_field_candidates:
+  selector: "textarea, input"

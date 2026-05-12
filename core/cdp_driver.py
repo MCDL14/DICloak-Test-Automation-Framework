@@ -512,6 +512,9 @@ class CDPDriver:
     def evaluate(self, expression: str):
         return self._page().evaluate(expression)
 
+    def evaluate_with_args(self, expression: str, arg):
+        return self._page().evaluate(expression, arg)
+
     def reload(self, timeout: int | None = None) -> None:
         # 刷新 Electron 主页面，用于模拟用户在 APP 内刷新当前页面。
         timeout = timeout if timeout is not None else self._element_timeout_ms()

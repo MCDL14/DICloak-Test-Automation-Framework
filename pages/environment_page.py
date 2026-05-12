@@ -28,15 +28,15 @@ class EnvironmentPage(BasePage):
 
     def create_environment(self, name: str) -> None:
         self.dismiss_blocking_overlays()
-        self.cdp.click("#createEnvBtn, button:has-text('创建环境')")
-        self.cdp.fill("input[placeholder='请填写环境名称']", name)
+        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+        self.fill("environment_name_input", name)
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
 
     def create_environment_with_kernel(self, name: str, kernel_label: str) -> None:
         self.dismiss_blocking_overlays()
-        self.cdp.click("#createEnvBtn, button:has-text('创建环境')")
-        self.cdp.fill("input[placeholder='请填写环境名称']", name)
+        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+        self.fill("environment_name_input", name)
         self._expand_create_environment_fingerprint_settings()
         self._expand_more_fingerprint_settings()
         self._select_create_environment_kernel(kernel_label)
@@ -45,8 +45,8 @@ class EnvironmentPage(BasePage):
 
     def create_environment_with_groups(self, name: str, group_names: list[str]) -> tuple[list[str], list[str]]:
         self.dismiss_blocking_overlays()
-        self.cdp.click("#createEnvBtn, button:has-text('创建环境')")
-        self.cdp.fill("input[placeholder='请填写环境名称']", name)
+        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+        self.fill("environment_name_input", name)
         initial_groups = self.create_environment_selected_groups()
         self._select_create_environment_groups(group_names)
         expected_groups = self._unique_non_empty(initial_groups + self.create_environment_selected_groups() + group_names)
@@ -56,8 +56,8 @@ class EnvironmentPage(BasePage):
 
     def create_environment_with_tags(self, name: str, tag_names: list[str]) -> list[str]:
         self.dismiss_blocking_overlays()
-        self.cdp.click("#createEnvBtn, button:has-text('创建环境')")
-        self.cdp.fill("input[placeholder='请填写环境名称']", name)
+        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+        self.fill("environment_name_input", name)
         self.cdp.click_element_by_script(self._create_environment_set_tag_button_script())
         self._select_create_environment_tags(tag_names)
         selected_tags = self._unique_non_empty(tag_names)
@@ -70,18 +70,18 @@ class EnvironmentPage(BasePage):
     def batch_create_environments(self, name_prefix: str, count: int) -> None:
         self.dismiss_blocking_overlays()
         self.clear_selected_environments()
-        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建"))
-        self.cdp.fill("input[placeholder='请输入创建数量']", str(count))
-        self.cdp.fill("input[placeholder='请输入环境名称前缀']", name_prefix)
+        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
+        self.fill("batch_create_count_input", str(count))
+        self.fill("batch_create_name_prefix_input", name_prefix)
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
 
     def batch_create_environments_with_kernel(self, name_prefix: str, count: int, kernel_label: str) -> None:
         self.dismiss_blocking_overlays()
         self.clear_selected_environments()
-        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建"))
-        self.cdp.fill("input[placeholder='请输入创建数量']", str(count))
-        self.cdp.fill("input[placeholder='请输入环境名称前缀']", name_prefix)
+        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
+        self.fill("batch_create_count_input", str(count))
+        self.fill("batch_create_name_prefix_input", name_prefix)
         self._expand_create_environment_fingerprint_settings()
         self._expand_more_fingerprint_settings()
         self._select_create_environment_kernel(kernel_label)
@@ -96,9 +96,9 @@ class EnvironmentPage(BasePage):
     ) -> tuple[list[str], list[str]]:
         self.dismiss_blocking_overlays()
         self.clear_selected_environments()
-        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建"))
-        self.cdp.fill("input[placeholder='请输入创建数量']", str(count))
-        self.cdp.fill("input[placeholder='请输入环境名称前缀']", name_prefix)
+        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
+        self.fill("batch_create_count_input", str(count))
+        self.fill("batch_create_name_prefix_input", name_prefix)
         initial_groups = self.create_environment_selected_groups()
         self._select_create_environment_groups(group_names)
         expected_groups = self._unique_non_empty(initial_groups + self.create_environment_selected_groups() + group_names)
@@ -114,9 +114,9 @@ class EnvironmentPage(BasePage):
     ) -> list[str]:
         self.dismiss_blocking_overlays()
         self.clear_selected_environments()
-        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建"))
-        self.cdp.fill("input[placeholder='请输入创建数量']", str(count))
-        self.cdp.fill("input[placeholder='请输入环境名称前缀']", name_prefix)
+        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
+        self.fill("batch_create_count_input", str(count))
+        self.fill("batch_create_name_prefix_input", name_prefix)
         self.cdp.click_element_by_script(self._create_environment_set_tag_button_script())
         self._select_create_environment_tags(tag_names)
         selected_tags = self._unique_non_empty(tag_names)
@@ -293,34 +293,27 @@ class EnvironmentPage(BasePage):
         for _ in range(4):
             has_overlay = self.cdp.evaluate(
                 """
-                () => Boolean(document.querySelector(".el-drawer, .el-dialog, .el-message-box"))
-                """
+                () => Boolean(document.querySelector(__OVERLAY_SELECTOR__))
+                """.replace("__OVERLAY_SELECTOR__", repr(self.locator("blocking_overlay")))
             )
             if not has_overlay:
                 return
             clicked = self.cdp.evaluate(
                 """
                 () => {
+                    const closeButtonSelector = __CLOSE_BUTTON_SELECTOR__;
                     const visible = (el) => {
                         const rect = el.getBoundingClientRect();
                         return rect.width > 0 && rect.height > 0;
                     };
-                    const selectors = [
-                        ".el-drawer__close-btn",
-                        ".el-dialog__headerbtn",
-                        ".el-message-box__headerbtn",
-                        ".el-overlay button[aria-label='Close']",
-                    ];
-                    for (const selector of selectors) {
-                        const button = Array.from(document.querySelectorAll(selector)).find(visible);
-                        if (button) {
-                            button.click();
-                            return true;
-                        }
+                    const button = Array.from(document.querySelectorAll(closeButtonSelector)).find(visible);
+                    if (button) {
+                        button.click();
+                        return true;
                     }
                     return false;
                 }
-                """
+                """.replace("__CLOSE_BUTTON_SELECTOR__", repr(self.locator("overlay_close_button")))
             )
             if not clicked:
                 self.cdp.press("Escape")
@@ -337,16 +330,16 @@ class EnvironmentPage(BasePage):
     def _is_search_input_visible(self) -> bool:
         script = """
         () => {
-            const input = document.querySelector("input[placeholder='序号/名称/备注']");
+            const input = document.querySelector(__SEARCH_INPUT_SELECTOR__);
             if (!input) return false;
             const rect = input.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0;
         }
-        """
+        """.replace("__SEARCH_INPUT_SELECTOR__", repr(self.locator("search_input")))
         return bool(self.cdp.evaluate(script))
 
     def _fill_search_input(self, name: str) -> None:
-        self.cdp.fill("input[placeholder='序号/名称/备注']", name)
+        self.fill("search_input", name)
 
     def _wait_for_environment_group_filter_visible(self) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
@@ -354,21 +347,24 @@ class EnvironmentPage(BasePage):
             if self.cdp.evaluate(
                 """
                 () => {
-                    const input = document.querySelector("input[placeholder='序号/名称/备注']");
+                    const input = document.querySelector(__SEARCH_INPUT_SELECTOR__);
                     if (!input) return false;
                     const inputRect = input.getBoundingClientRect();
                     const visible = (el) => {
                         const rect = el.getBoundingClientRect();
                         return rect.width > 0 && rect.height > 0;
                     };
-                    return Array.from(document.querySelectorAll(".el-select"))
+                    return Array.from(document.querySelectorAll(__SELECT_SELECTOR__))
                         .filter(visible)
                         .some((select) => {
                             const rect = select.getBoundingClientRect();
                             return rect.x < inputRect.x && Math.abs(rect.y - inputRect.y) < 30;
                         });
                 }
-                """
+                """.replace("__SEARCH_INPUT_SELECTOR__", repr(self.locator("search_input"))).replace(
+                    "__SELECT_SELECTOR__",
+                    repr(self.locator("select")),
+                )
             ):
                 return
             time.sleep(0.2)
@@ -378,14 +374,14 @@ class EnvironmentPage(BasePage):
         # 环境分组筛选控件没有稳定的业务 id；按“搜索输入框左侧同一行最近的 el-select”定位。
         return """
         () => {
-            const input = document.querySelector("input[placeholder='序号/名称/备注']");
+            const input = document.querySelector(__SEARCH_INPUT_SELECTOR__);
             if (!input) return null;
             const inputRect = input.getBoundingClientRect();
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             };
-            const selects = Array.from(document.querySelectorAll(".el-select"))
+            const selects = Array.from(document.querySelectorAll(__SELECT_SELECTOR__))
                 .filter(visible)
                 .map((select) => {
                     const rect = select.getBoundingClientRect();
@@ -398,7 +394,10 @@ class EnvironmentPage(BasePage):
             if (!select) return null;
             return select.querySelector(".el-select__wrapper, input") || select;
         }
-        """
+        """.replace("__SEARCH_INPUT_SELECTOR__", repr(self.locator("search_input"))).replace(
+            "__SELECT_SELECTOR__",
+            repr(self.locator("select")),
+        )
 
     def _wait_environment_group_filter_selected(self, group_name: str) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
@@ -408,14 +407,14 @@ class EnvironmentPage(BasePage):
                 f"""
                 () => {{
                     const expected = {expected};
-                    const input = document.querySelector("input[placeholder='序号/名称/备注']");
+                    const input = document.querySelector({self.locator("search_input")!r});
                     if (!input) return false;
                     const inputRect = input.getBoundingClientRect();
                     const visible = (el) => {{
                         const rect = el.getBoundingClientRect();
                         return rect.width > 0 && rect.height > 0;
                     }};
-                    const selects = Array.from(document.querySelectorAll(".el-select"))
+                    const selects = Array.from(document.querySelectorAll({self.locator("select")!r}))
                         .filter(visible)
                         .map((select) => {{
                             const rect = select.getBoundingClientRect();
@@ -447,14 +446,14 @@ class EnvironmentPage(BasePage):
         # 放大镜只负责提交搜索；按输入框右侧同一行的搜索按钮定位，避免点到表格行按钮。
         return """
         () => {
-            const input = document.querySelector("input[placeholder='序号/名称/备注']");
+            const input = document.querySelector(__SEARCH_INPUT_SELECTOR__);
             if (!input) return null;
             const inputRect = input.getBoundingClientRect();
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             };
-            const buttons = Array.from(document.querySelectorAll("button"))
+            const buttons = Array.from(document.querySelectorAll(__BUTTON_SELECTOR__))
                 .filter((button) => visible(button) && button.querySelector(".icon-search"))
                 .map((button) => {
                     const rect = button.getBoundingClientRect();
@@ -465,20 +464,23 @@ class EnvironmentPage(BasePage):
                 .sort((left, right) => left.rect.x - right.rect.x);
             return buttons[0]?.button || null;
         }
-        """
+        """.replace("__SEARCH_INPUT_SELECTOR__", repr(self.locator("search_input"))).replace(
+            "__BUTTON_SELECTOR__",
+            repr(self.locator("button")),
+        )
 
     def _more_filter_button_script(self) -> str:
         # 更多筛选入口位于搜索按钮右侧、清除筛选按钮左侧；同一行按钮按 x 坐标排序后取第二个。
         return """
         () => {
-            const input = document.querySelector("input[placeholder='序号/名称/备注']");
+            const input = document.querySelector(__SEARCH_INPUT_SELECTOR__);
             if (!input) return null;
             const inputRect = input.getBoundingClientRect();
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             };
-            const buttons = Array.from(document.querySelectorAll("button"))
+            const buttons = Array.from(document.querySelectorAll(__BUTTON_SELECTOR__))
                 .filter((button) => visible(button))
                 .map((button) => {
                     const rect = button.getBoundingClientRect();
@@ -489,7 +491,10 @@ class EnvironmentPage(BasePage):
                 .sort((left, right) => left.rect.x - right.rect.x);
             return buttons[1]?.button || null;
         }
-        """
+        """.replace("__SEARCH_INPUT_SELECTOR__", repr(self.locator("search_input"))).replace(
+            "__BUTTON_SELECTOR__",
+            repr(self.locator("button")),
+        )
 
     def _filter_drawer_tag_input_script(self) -> str:
         return """
@@ -499,21 +504,24 @@ class EnvironmentPage(BasePage):
                 return rect.width > 0 && rect.height > 0;
             };
             const clean = (value) => String(value || "").trim();
-            const drawers = Array.from(document.querySelectorAll(".el-drawer"))
+            const drawers = Array.from(document.querySelectorAll(__DRAWER_SELECTOR__))
                 .filter((drawer) => visible(drawer) && (drawer.innerText || "").includes("立即筛选"));
             for (const drawer of drawers.reverse()) {
-                const items = Array.from(drawer.querySelectorAll(".el-form-item"));
+                const items = Array.from(drawer.querySelectorAll(__FORM_ITEM_SELECTOR__));
                 for (const item of items) {
                     const label = item.querySelector("label, .el-form-item__label");
                     if (!label || clean(label.innerText || label.textContent) !== "标签") continue;
-                    const input = Array.from(item.querySelectorAll("input"))
+                    const input = Array.from(item.querySelectorAll(__INPUT_SELECTOR__))
                         .find((el) => visible(el) && !el.disabled && !el.readOnly);
                     if (input) return input;
                 }
             }
             return null;
         }
-        """
+        """.replace("__DRAWER_SELECTOR__", repr(self.locator("drawer"))).replace(
+            "__FORM_ITEM_SELECTOR__",
+            repr(self.locator("form_item")),
+        ).replace("__INPUT_SELECTOR__", repr(self.locator("input")))
 
     def _filter_drawer_tag_option_script(self, tag_name: str) -> str:
         return f"""
@@ -543,14 +551,14 @@ class EnvironmentPage(BasePage):
     def _clear_search_button_script(self) -> str:
         return """
         () => {
-            const input = document.querySelector("input[placeholder='序号/名称/备注']");
+            const input = document.querySelector(__SEARCH_INPUT_SELECTOR__);
             if (!input) return null;
             const inputRect = input.getBoundingClientRect();
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             };
-            const buttons = Array.from(document.querySelectorAll("button"))
+            const buttons = Array.from(document.querySelectorAll(__BUTTON_SELECTOR__))
                 .filter((button) => visible(button))
                 .map((button) => {
                     const rect = button.getBoundingClientRect();
@@ -561,20 +569,23 @@ class EnvironmentPage(BasePage):
                 .sort((left, right) => left.rect.x - right.rect.x);
             return buttons[2]?.button || null;
         }
-        """
+        """.replace("__SEARCH_INPUT_SELECTOR__", repr(self.locator("search_input"))).replace(
+            "__BUTTON_SELECTOR__",
+            repr(self.locator("button")),
+        )
 
     def _tag_management_button_script(self) -> str:
         # 标签管理按钮位于清除筛选按钮右侧；同一行按钮按 x 坐标排序后取清除按钮后一个。
         return """
         () => {
-            const input = document.querySelector("input[placeholder='序号/名称/备注']");
+            const input = document.querySelector(__SEARCH_INPUT_SELECTOR__);
             if (!input) return null;
             const inputRect = input.getBoundingClientRect();
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             };
-            const buttons = Array.from(document.querySelectorAll("button"))
+            const buttons = Array.from(document.querySelectorAll(__BUTTON_SELECTOR__))
                 .filter((button) => visible(button))
                 .map((button) => {
                     const rect = button.getBoundingClientRect();
@@ -585,7 +596,10 @@ class EnvironmentPage(BasePage):
                 .sort((left, right) => left.rect.x - right.rect.x);
             return buttons[3]?.button || null;
         }
-        """
+        """.replace("__SEARCH_INPUT_SELECTOR__", repr(self.locator("search_input"))).replace(
+            "__BUTTON_SELECTOR__",
+            repr(self.locator("button")),
+        )
 
     def _wait_for_search_result(self, keyword: str, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
@@ -889,6 +903,34 @@ class EnvironmentPage(BasePage):
             f"direction={direction}, serials={last_serials}"
         )
 
+    def sortable_header_sort_buttons_visible_by_header(self) -> dict[str, bool]:
+        value = self.cdp.evaluate(self._sortable_header_sort_buttons_visible_by_header_script())
+        if not isinstance(value, dict):
+            return {}
+        return {str(key): bool(item) for key, item in value.items() if str(key).strip()}
+
+    def wait_all_header_sort_buttons_hidden(self, timeout_seconds: int | None = None) -> dict[str, bool]:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_states: dict[str, bool] = {}
+        while time.time() < deadline:
+            last_states = self.sortable_header_sort_buttons_visible_by_header()
+            if last_states and not any(last_states.values()):
+                return last_states
+            time.sleep(0.3)
+        raise TimeoutError(f"table header sort buttons were still visible: {last_states}")
+
+    def wait_header_sort_buttons_visible(self, timeout_seconds: int | None = None) -> dict[str, bool]:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_states: dict[str, bool] = {}
+        while time.time() < deadline:
+            last_states = self.sortable_header_sort_buttons_visible_by_header()
+            if last_states and any(last_states.values()) and last_states.get("环境序号"):
+                return last_states
+            time.sleep(0.3)
+        raise TimeoutError(f"table header sort buttons did not become visible: {last_states}")
+
     def wait_environment_tags_contain_in_current_list(
         self,
         tag_name: str,
@@ -921,6 +963,39 @@ class EnvironmentPage(BasePage):
             """
         )
         return value if isinstance(value, list) else []
+
+    def environment_business_header_texts(self) -> list[str]:
+        return [
+            header
+            for header in self.environment_header_texts()
+            if header and header != "操作"
+        ]
+
+    def column_settings_button_visible(self) -> bool:
+        return bool(self.cdp.evaluate(self._column_settings_button_visible_script()))
+
+    def wait_column_settings_button_visible(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.column_settings_button_visible():
+                return
+            time.sleep(0.3)
+        raise TimeoutError("column settings button did not become visible")
+
+    def wait_column_settings_button_hidden(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if not self.column_settings_button_visible():
+                return
+            time.sleep(0.3)
+        raise TimeoutError("column settings button did not become hidden")
+
+    def verify_column_settings_button_clickable(self) -> None:
+        self.open_column_settings()
+        self.dismiss_blocking_overlays()
+        self._wait_for_environment_list()
 
     def open_column_settings(self) -> None:
         self.dismiss_blocking_overlays()
@@ -1005,6 +1080,97 @@ class EnvironmentPage(BasePage):
             time.sleep(0.5)
         raise TimeoutError(f"header order did not match expected prefix: expected={expected_prefix}, actual={last_headers}")
 
+    def wait_business_headers_equal(
+        self,
+        expected_headers: list[str],
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        expected = [str(item).strip() for item in expected_headers if str(item).strip()]
+        deadline = time.time() + timeout_seconds
+        last_headers: list[str] = []
+        while time.time() < deadline:
+            last_headers = self.environment_business_header_texts()
+            if last_headers == expected:
+                return
+            time.sleep(0.5)
+        raise TimeoutError(f"business headers did not match expected: expected={expected}, actual={last_headers}")
+
+    def environment_row_count_in_current_page(self) -> int:
+        return len(self._environment_rows())
+
+    def pagination_size_selector_visible(self) -> bool:
+        return bool(self.cdp.evaluate(self._pagination_size_selector_visible_script()))
+
+    def wait_pagination_size_selector_visible(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.pagination_size_selector_visible():
+                return
+            time.sleep(0.3)
+        raise TimeoutError("pagination size selector did not become visible")
+
+    def wait_pagination_size_selector_hidden(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if not self.pagination_size_selector_visible():
+                return
+            time.sleep(0.3)
+        raise TimeoutError("pagination size selector did not become hidden")
+
+    def set_pagination_size(self, page_size_text: str) -> None:
+        normalized = str(page_size_text or "").replace(" ", "").strip()
+        if not normalized:
+            raise ValueError("pagination page size must not be empty")
+        self.wait_pagination_size_selector_visible()
+        if self.cdp.evaluate(self._pagination_size_selected_script(normalized)):
+            return
+        self.cdp.click_element_by_script(self._pagination_size_selector_script())
+        self.cdp.click_element_by_script(self._visible_dropdown_item_by_normalized_text_script(normalized))
+        self.wait_pagination_size_selected(normalized)
+
+    def wait_pagination_size_selected(self, page_size_text: str, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        normalized = str(page_size_text or "").replace(" ", "").strip()
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._pagination_size_selected_script(normalized)):
+                return
+            time.sleep(0.3)
+        raise TimeoutError(f"pagination size was not selected: expected={normalized}")
+
+    def wait_current_page_row_count_between(
+        self,
+        min_exclusive: int,
+        max_inclusive: int,
+        timeout_seconds: int | None = None,
+    ) -> int:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_count = 0
+        while time.time() < deadline:
+            last_count = self.environment_row_count_in_current_page()
+            if min_exclusive < last_count <= max_inclusive:
+                return last_count
+            time.sleep(0.5)
+        raise TimeoutError(
+            "current page environment row count did not fall within expected range: "
+            f"min_exclusive={min_exclusive}, max_inclusive={max_inclusive}, actual={last_count}"
+        )
+
+    def wait_current_page_row_count(self, expected_count: int, timeout_seconds: int | None = None) -> int:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_count = 0
+        while time.time() < deadline:
+            last_count = self.environment_row_count_in_current_page()
+            if last_count == expected_count:
+                return last_count
+            time.sleep(0.5)
+        raise TimeoutError(f"current page environment row count mismatch: expected={expected_count}, actual={last_count}")
+
     def environment_name_by_serial(self, serial: str) -> str:
         row = self._environment_row_by_serial(serial)
         return str(row.get("name", "")).strip()
@@ -1074,6 +1240,30 @@ class EnvironmentPage(BasePage):
 
     def click_environment_action(self, name: str, action_text: str) -> None:
         self.cdp.click_element_by_script(self._environment_action_element_script(name, action_text))
+
+    def forbidden_open_environment_dialog_visible(self) -> bool:
+        return bool(self.cdp.evaluate(self._forbidden_open_environment_dialog_visible_script()))
+
+    def wait_for_forbidden_open_environment_dialog(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.forbidden_open_environment_dialog_visible():
+                return
+            time.sleep(0.2)
+        raise TimeoutError("禁止打开环境 dialog did not appear")
+
+    def wait_no_forbidden_open_environment_dialog(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or 3
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.forbidden_open_environment_dialog_visible():
+                raise AssertionError("禁止打开环境 dialog appeared unexpectedly")
+            time.sleep(0.2)
+
+    def close_forbidden_open_environment_dialog(self) -> None:
+        self.cdp.click_element_by_script(self._forbidden_open_environment_dialog_close_button_script())
+        self._wait_for_overlay_closed()
 
     def select_environments(self, names: list[str]) -> None:
         self.clear_selected_environments()
@@ -1229,7 +1419,7 @@ class EnvironmentPage(BasePage):
         self.click_environment_more_by_serial(serial)
         self.click_visible_dropdown_item("编辑")
         self._wait_edit_environment_drawer_visible()
-        self.cdp.fill("input[placeholder='请填写环境名称']", new_name)
+        self.fill("environment_name_input", new_name)
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._confirm_edit_save_message_if_present()
         self._wait_for_overlay_closed()
@@ -1556,6 +1746,39 @@ class EnvironmentPage(BasePage):
         }}
         """
 
+    def _sortable_header_sort_buttons_visible_by_header_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const states = {};
+            const headers = Array.from(document.querySelectorAll(".el-table__header th, thead th"))
+                .filter(visible);
+            for (const th of headers) {
+                const text = clean(th.innerText || th.textContent);
+                const header = text
+                    .replace(/升序/g, "")
+                    .replace(/降序/g, "")
+                    .replace(/排序/g, "")
+                    .replace(/[▲▼]/g, "")
+                    .trim();
+                if (!header || header === "操作") continue;
+                const controls = Array.from(th.querySelectorAll(".caret-wrapper, .sort-caret, [class*='sort']"))
+                    .filter((item) => !item.classList.contains("cell"))
+                    .filter(visible);
+                states[header] = controls.length > 0;
+            }
+            return states;
+        }
+        """
+
     def _column_settings_button_script(self) -> str:
         return """
         () => {
@@ -1572,6 +1795,100 @@ class EnvironmentPage(BasePage):
             }
             return Array.from(document.querySelectorAll(".custom-list, .icon-custom")).find(visible) || null;
         }
+        """
+
+    def _column_settings_button_visible_script(self) -> str:
+        return """
+        () => Boolean((() => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const headers = Array.from(document.querySelectorAll(".el-table__header th, thead th"))
+                .filter(visible);
+            for (const th of headers) {
+                if (!(th.innerText || th.textContent || "").includes("操作")) continue;
+                const button = th.querySelector(".custom-list, .icon-custom");
+                if (button && visible(button)) return button;
+            }
+            return Array.from(document.querySelectorAll(".custom-list, .icon-custom")).find(visible) || null;
+        })())
+        """
+
+    def _pagination_size_selector_script(self) -> str:
+        return """
+        () => {
+            const selector = ".el-pagination__sizes .el-select__wrapper, .el-pagination__sizes .el-select";
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            return Array.from(document.querySelectorAll(selector)).find(visible) || null;
+        }
+        """
+
+    def _pagination_size_selector_visible_script(self) -> str:
+        return """
+        () => Boolean((() => {
+            const selector = ".el-pagination__sizes .el-select__wrapper, .el-pagination__sizes .el-select";
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            return Array.from(document.querySelectorAll(selector)).find(visible) || null;
+        })())
+        """
+
+    def _pagination_size_selected_script(self, page_size_text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {page_size_text!r};
+            const normalize = (value) => String(value || "").replace(/\\s+/g, "").trim();
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const size = Array.from(document.querySelectorAll(".el-pagination__sizes"))
+                .filter(visible)
+                .find((item) => normalize(item.innerText || item.textContent).includes(expectedText));
+            return Boolean(size);
+        }}
+        """
+
+    def _visible_dropdown_item_by_normalized_text_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {text!r};
+            const normalize = (value) => String(value || "").replace(/\\s+/g, "").trim();
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const items = Array.from(document.querySelectorAll(".el-select-dropdown__item, .el-dropdown-menu__item, li"))
+                .filter((el) => visible(el))
+                .filter((el) => normalize(el.innerText || el.textContent) === expectedText);
+            return items[items.length - 1] || null;
+        }}
         """
 
     def _tag_management_button_by_text_script(self, text: str) -> str:
@@ -3104,15 +3421,39 @@ class EnvironmentPage(BasePage):
         }}
         """
 
-    def _visible_text_element_script(self, text: str) -> str:
+    def _visible_locator_script(self, locator_name: str) -> str:
         return f"""
         () => {{
+            const selector = {self.locator(locator_name)!r};
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const candidates = Array.from(document.querySelectorAll(selector))
+                .filter(visible)
+                .map((el) => {{
+                    const rect = el.getBoundingClientRect();
+                    return {{ el, area: rect.width * rect.height }};
+                }})
+                .sort((left, right) => left.area - right.area);
+            return candidates[0]?.el || null;
+        }}
+        """
+
+    def _visible_text_element_script(self, text: str, locator_name: str = "visible_text_candidates") -> str:
+        return f"""
+        () => {{
+            const selector = {self.locator(locator_name)!r};
             const expectedText = {text!r};
             const visible = (el) => {{
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             }};
-            const candidates = Array.from(document.querySelectorAll("button,div,span,a"))
+            const candidates = Array.from(document.querySelectorAll(selector))
                 .filter((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText)
                 .map((el) => {{
                     const rect = el.getBoundingClientRect();
@@ -3126,12 +3467,13 @@ class EnvironmentPage(BasePage):
     def _visible_menu_item_script(self, text: str) -> str:
         return f"""
         () => {{
+            const selector = {self.locator("environment_menu_candidates")!r};
             const expectedText = {text!r};
             const visible = (el) => {{
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             }};
-            const candidates = Array.from(document.querySelectorAll(".el-menu-item, li, a, button"))
+            const candidates = Array.from(document.querySelectorAll(selector))
                 .filter((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText)
                 .map((el) => {{
                     const rect = el.getBoundingClientRect();
@@ -3145,15 +3487,17 @@ class EnvironmentPage(BasePage):
     def _active_overlay_button_script(self, text: str) -> str:
         return f"""
         () => {{
+            const overlaySelector = {self.locator("blocking_overlay")!r};
+            const buttonSelector = {self.locator("button")!r};
             const expectedText = {text!r};
             const visible = (el) => {{
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             }};
-            const overlays = Array.from(document.querySelectorAll(".el-drawer, .el-dialog, .el-message-box"))
+            const overlays = Array.from(document.querySelectorAll(overlaySelector))
                 .filter((el) => visible(el));
             for (const overlay of overlays.reverse()) {{
-                const button = Array.from(overlay.querySelectorAll("button"))
+                const button = Array.from(overlay.querySelectorAll(buttonSelector))
                     .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText);
                 if (button) return button;
             }}
@@ -3164,20 +3508,62 @@ class EnvironmentPage(BasePage):
     def _message_box_button_script(self, text: str) -> str:
         return f"""
         () => {{
+            const messageBoxSelector = {self.locator("message_box")!r};
+            const buttonSelector = {self.locator("button")!r};
             const expectedText = {text!r};
             const visible = (el) => {{
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             }};
-            const boxes = Array.from(document.querySelectorAll(".el-message-box"))
+            const boxes = Array.from(document.querySelectorAll(messageBoxSelector))
                 .filter(visible);
             for (const box of boxes.reverse()) {{
-                const button = Array.from(box.querySelectorAll("button"))
+                const button = Array.from(box.querySelectorAll(buttonSelector))
                     .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText);
                 if (button) return button;
             }}
             return null;
         }}
+        """
+
+    def _forbidden_open_environment_dialog_visible_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            return Array.from(document.querySelectorAll(".el-message-box, .el-dialog"))
+                .some((overlay) => visible(overlay) && (overlay.innerText || overlay.textContent || "").includes("禁止打开环境"));
+        }
+        """
+
+    def _forbidden_open_environment_dialog_close_button_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const overlays = Array.from(document.querySelectorAll(".el-message-box, .el-dialog"))
+                .filter((overlay) => visible(overlay) && (overlay.innerText || overlay.textContent || "").includes("禁止打开环境"));
+            for (const overlay of overlays.reverse()) {
+                const closeButton = Array.from(overlay.querySelectorAll("button"))
+                    .find((button) => visible(button) && (button.innerText || button.textContent || "").trim() === "关闭");
+                if (closeButton) return closeButton;
+                const headerClose = overlay.querySelector(".el-message-box__headerbtn, .el-dialog__headerbtn, button[aria-label='Close']");
+                if (headerClose && visible(headerClose)) return headerClose;
+            }
+            return null;
+        }
         """
 
     def _environment_action_rect(self, name: str, action_text: str) -> dict:

@@ -600,13 +600,15 @@ class GlobalSettingsPage(BasePage):
                     if (!checkbox.classList.contains("el-checkbox")) continue;
                     const text = clean(checkbox.innerText || checkbox.textContent);
                     if (!text) continue;
-                    const input = checkbox.querySelector("input[type='checkbox']");
-                    const stateEl = checkbox.querySelector(".el-checkbox__input") || checkbox;
+                    const input = checkbox.querySelector(__CHECKBOX_INPUT_SELECTOR__);
+                    const stateEl = checkbox.querySelector(__CHECKBOX_STATE_SELECTOR__) || checkbox;
                     states[text] = input ? Boolean(input.checked) : stateEl.classList.contains("is-checked");
                 }
                 return states;
             }
             """.replace("__CHECKBOX_SELECTOR__", repr(self.locator("checkbox_candidates")))
+            .replace("__CHECKBOX_INPUT_SELECTOR__", repr(self.locator("checkbox_input")))
+            .replace("__CHECKBOX_STATE_SELECTOR__", repr(self.locator("checkbox_state")))
         )
         if not isinstance(value, dict):
             return {}
@@ -767,10 +769,10 @@ class GlobalSettingsPage(BasePage):
                             && rect.width > 0
                             && rect.height > 0;
                     };
-                    return Array.from(document.querySelectorAll(".el-drawer, .el-dialog, .el-message-box"))
+                    return Array.from(document.querySelectorAll(__OVERLAY_SELECTOR__))
                         .filter(visible).length;
                 }
-                """
+                """.replace("__OVERLAY_SELECTOR__", repr(self.locator("blocking_overlay")))
             )
             if int(visible_overlay_count or 0) == 0:
                 return
@@ -1478,6 +1480,8 @@ class GlobalSettingsPage(BasePage):
         () => Boolean((() => {
             const text = __TEXT__;
             const selector = __CHECKBOX_SELECTOR__;
+            const checkboxStateSelector = __CHECKBOX_STATE_SELECTOR__;
+            const checkboxInputSelector = __CHECKBOX_INPUT_SELECTOR__;
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
@@ -1503,13 +1507,22 @@ class GlobalSettingsPage(BasePage):
             const candidates = Array.from(document.querySelectorAll(selector))
                 .filter(visible)
                 .filter((el) => (el.innerText || el.textContent || "").includes(text));
-            const checkbox = candidates.find((el) => el.classList.contains("el-checkbox")) || candidates[0] || null;
+            const checkbox = candidates.find((el) => el.matches(__CHECKBOX_SELECTOR_ONLY__)) || candidates[0] || null;
             if (!checkbox) return null;
-            return checkbox.querySelector(".el-checkbox__input, input[type='checkbox']") || checkbox;
+            return checkbox.querySelector(`${checkboxStateSelector}, ${checkboxInputSelector}`) || checkbox;
         }
         """.replace("__TEXT__", repr(label_text)).replace(
             "__CHECKBOX_SELECTOR__",
             repr(self.locator("checkbox_candidates")),
+        ).replace(
+            "__CHECKBOX_SELECTOR_ONLY__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__CHECKBOX_STATE_SELECTOR__",
+            repr(self.locator("checkbox_state")),
+        ).replace(
+            "__CHECKBOX_INPUT_SELECTOR__",
+            repr(self.locator("checkbox_input")),
         )
 
     def _checkbox_checked_script(self, label_text: str) -> str:
@@ -1524,11 +1537,11 @@ class GlobalSettingsPage(BasePage):
             const candidates = Array.from(document.querySelectorAll(selector))
                 .filter(visible)
                 .filter((el) => (el.innerText || el.textContent || "").includes(text));
-            const checkbox = candidates.find((el) => el.classList.contains("el-checkbox")) || candidates[0] || null;
+            const checkbox = candidates.find((el) => el.matches(__CHECKBOX_SELECTOR_ONLY__)) || candidates[0] || null;
             if (!checkbox) return null;
-            const input = checkbox.querySelector("input[type='checkbox']");
+            const input = checkbox.querySelector(__CHECKBOX_INPUT_SELECTOR__);
             if (input) return Boolean(input.checked);
-            const stateEl = checkbox.querySelector(".el-checkbox__input") || checkbox;
+            const stateEl = checkbox.querySelector(__CHECKBOX_STATE_SELECTOR__) || checkbox;
             const ariaChecked = stateEl.getAttribute("aria-checked");
             if (ariaChecked === "true") return true;
             if (ariaChecked === "false") return false;
@@ -1537,6 +1550,15 @@ class GlobalSettingsPage(BasePage):
         """.replace("__TEXT__", repr(label_text)).replace(
             "__CHECKBOX_SELECTOR__",
             repr(self.locator("checkbox_candidates")),
+        ).replace(
+            "__CHECKBOX_SELECTOR_ONLY__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__CHECKBOX_INPUT_SELECTOR__",
+            repr(self.locator("checkbox_input")),
+        ).replace(
+            "__CHECKBOX_STATE_SELECTOR__",
+            repr(self.locator("checkbox_state")),
         )
 
     def _website_restriction_exists_script(self) -> str:
@@ -1559,11 +1581,14 @@ class GlobalSettingsPage(BasePage):
             const switchEl = root.querySelector(switchSelector);
             if (!switchEl) return null;
             switchEl.scrollIntoView({ block: "center" });
-            return switchEl.querySelector(".el-switch__core") || switchEl;
+            return switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
         }
         """.replace("__WEBSITE_RESTRICTION_ROOT__", self._website_restriction_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _website_restriction_switch_center_script(self) -> str:
@@ -1574,7 +1599,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return null;
             const switchEl = root.querySelector(switchSelector);
             if (!switchEl) return null;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             return {
@@ -1588,6 +1613,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__WEBSITE_RESTRICTION_ROOT__", self._website_restriction_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _website_restriction_switch_dom_click_script(self) -> str:
@@ -1598,7 +1626,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return false;
             const switchEl = root.querySelector(switchSelector);
             if (!switchEl) return false;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return false;
@@ -1613,6 +1641,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__WEBSITE_RESTRICTION_ROOT__", self._website_restriction_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _website_restriction_enabled_script(self) -> str:
@@ -1640,7 +1671,7 @@ class GlobalSettingsPage(BasePage):
             const modeText = __MODE_TEXT__;
             const root = __WEBSITE_RESTRICTION_ROOT__();
             if (!root) return null;
-            const radio = Array.from(root.querySelectorAll(".el-radio"))
+            const radio = Array.from(root.querySelectorAll(__RADIO_SELECTOR__))
                 .find((el) => (el.innerText || el.textContent || "").includes(modeText));
             if (!radio) return null;
             radio.scrollIntoView({ block: "center" });
@@ -1649,6 +1680,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__MODE_TEXT__", repr(mode_text)).replace(
             "__WEBSITE_RESTRICTION_ROOT__",
             self._website_restriction_root_function(),
+        ).replace(
+            "__RADIO_SELECTOR__",
+            repr(self.locator("radio")),
         )
 
     def _website_restriction_radio_checked_script(self, mode_text: str) -> str:
@@ -1657,14 +1691,20 @@ class GlobalSettingsPage(BasePage):
             const modeText = __MODE_TEXT__;
             const root = __WEBSITE_RESTRICTION_ROOT__();
             if (!root) return false;
-            const radio = Array.from(root.querySelectorAll(".el-radio"))
+            const radio = Array.from(root.querySelectorAll(__RADIO_SELECTOR__))
                 .find((el) => (el.innerText || el.textContent || "").includes(modeText));
             if (!radio) return false;
-            return radio.classList.contains("is-checked") || Boolean(radio.querySelector("input")?.checked);
+            return radio.classList.contains("is-checked") || Boolean(radio.querySelector(__INPUT_SELECTOR__)?.checked);
         }
         """.replace("__MODE_TEXT__", repr(mode_text)).replace(
             "__WEBSITE_RESTRICTION_ROOT__",
             self._website_restriction_root_function(),
+        ).replace(
+            "__RADIO_SELECTOR__",
+            repr(self.locator("radio")),
+        ).replace(
+            "__INPUT_SELECTOR__",
+            repr(self.locator("input")),
         )
 
     def _website_restriction_shortcut_script(self, shortcut_name: str) -> str:
@@ -1673,7 +1713,7 @@ class GlobalSettingsPage(BasePage):
             const shortcutName = __SHORTCUT_NAME__;
             const root = __WEBSITE_RESTRICTION_ROOT__();
             if (!root) return null;
-            const checkbox = Array.from(root.querySelectorAll(".el-checkbox"))
+            const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
                 .find((el) => (el.innerText || el.textContent || "").includes(shortcutName));
             if (!checkbox) return null;
             checkbox.scrollIntoView({ block: "center" });
@@ -1682,6 +1722,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__SHORTCUT_NAME__", repr(shortcut_name)).replace(
             "__WEBSITE_RESTRICTION_ROOT__",
             self._website_restriction_root_function(),
+        ).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
         )
 
     def _website_restriction_shortcut_checked_script(self, shortcut_name: str) -> str:
@@ -1690,14 +1733,20 @@ class GlobalSettingsPage(BasePage):
             const shortcutName = __SHORTCUT_NAME__;
             const root = __WEBSITE_RESTRICTION_ROOT__();
             if (!root) return false;
-            const checkbox = Array.from(root.querySelectorAll(".el-checkbox"))
+            const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
                 .find((el) => (el.innerText || el.textContent || "").includes(shortcutName));
             if (!checkbox) return false;
-            return checkbox.classList.contains("is-checked") || Boolean(checkbox.querySelector("input")?.checked);
+            return checkbox.classList.contains("is-checked") || Boolean(checkbox.querySelector(__INPUT_SELECTOR__)?.checked);
         }
         """.replace("__SHORTCUT_NAME__", repr(shortcut_name)).replace(
             "__WEBSITE_RESTRICTION_ROOT__",
             self._website_restriction_root_function(),
+        ).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__INPUT_SELECTOR__",
+            repr(self.locator("input")),
         )
 
     def _website_restriction_url_textarea_script(self) -> str:
@@ -1705,7 +1754,7 @@ class GlobalSettingsPage(BasePage):
         () => {
             const root = __WEBSITE_RESTRICTION_ROOT__();
             if (!root) return null;
-            const textarea = Array.from(root.querySelectorAll("textarea"))
+            const textarea = Array.from(root.querySelectorAll(__TEXTAREA_SELECTOR__))
                 .find((el) => {
                     const rect = el.getBoundingClientRect();
                     return rect.width > 0 && rect.height > 0;
@@ -1714,21 +1763,27 @@ class GlobalSettingsPage(BasePage):
             textarea.scrollIntoView({ block: "center" });
             return textarea;
         }
-        """.replace("__WEBSITE_RESTRICTION_ROOT__", self._website_restriction_root_function())
+        """.replace("__WEBSITE_RESTRICTION_ROOT__", self._website_restriction_root_function()).replace(
+            "__TEXTAREA_SELECTOR__",
+            repr(self.locator("textarea")),
+        )
 
     def _website_restriction_url_value_script(self) -> str:
         return """
         () => {
             const root = __WEBSITE_RESTRICTION_ROOT__();
             if (!root) return null;
-            const textarea = Array.from(root.querySelectorAll("textarea"))
+            const textarea = Array.from(root.querySelectorAll(__TEXTAREA_SELECTOR__))
                 .find((el) => {
                     const rect = el.getBoundingClientRect();
                     return rect.width > 0 && rect.height > 0;
                 });
             return textarea ? String(textarea.value || "") : null;
         }
-        """.replace("__WEBSITE_RESTRICTION_ROOT__", self._website_restriction_root_function())
+        """.replace("__WEBSITE_RESTRICTION_ROOT__", self._website_restriction_root_function()).replace(
+            "__TEXTAREA_SELECTOR__",
+            repr(self.locator("textarea")),
+        )
 
     def _website_restriction_root_function(self) -> str:
         return """
@@ -1774,6 +1829,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__BOOKMARK_SETTING_ROOT__", self._bookmark_setting_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _bookmark_setting_switch_center_script(self) -> str:
@@ -1783,7 +1841,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return null;
             const switchEl = root.querySelector(__SWITCH_SELECTOR__);
             if (!switchEl) return null;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             return {
@@ -1797,6 +1855,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__BOOKMARK_SETTING_ROOT__", self._bookmark_setting_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _bookmark_setting_switch_dom_click_script(self) -> str:
@@ -1806,7 +1867,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return false;
             const switchEl = root.querySelector(__SWITCH_SELECTOR__);
             if (!switchEl) return false;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return false;
@@ -1821,6 +1882,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__BOOKMARK_SETTING_ROOT__", self._bookmark_setting_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _bookmark_setting_enabled_script(self) -> str:
@@ -1846,13 +1910,16 @@ class GlobalSettingsPage(BasePage):
         () => {
             const root = __BOOKMARK_SETTING_ROOT__();
             if (!root) return null;
-            const button = Array.from(root.querySelectorAll("button"))
+            const button = Array.from(root.querySelectorAll(__BUTTON_SELECTOR__))
                 .find((el) => (el.innerText || el.textContent || "").includes("点击上传"));
             if (!button) return null;
             button.scrollIntoView({ block: "center", inline: "center" });
             return button;
         }
-        """.replace("__BOOKMARK_SETTING_ROOT__", self._bookmark_setting_root_function())
+        """.replace("__BOOKMARK_SETTING_ROOT__", self._bookmark_setting_root_function()).replace(
+            "__BUTTON_SELECTOR__",
+            repr(self.locator("button")),
+        )
 
     def _bookmark_effect_mode_script(self, mode_text: str) -> str:
         return """
@@ -1860,7 +1927,7 @@ class GlobalSettingsPage(BasePage):
             const modeText = __MODE_TEXT__;
             const root = __BOOKMARK_SETTING_ROOT__();
             if (!root) return null;
-            const radio = Array.from(root.querySelectorAll(".el-radio"))
+            const radio = Array.from(root.querySelectorAll(__RADIO_SELECTOR__))
                 .find((el) => (el.innerText || el.textContent || "").includes(modeText));
             if (!radio) return null;
             radio.scrollIntoView({ block: "center", inline: "center" });
@@ -1869,6 +1936,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__MODE_TEXT__", repr(mode_text)).replace(
             "__BOOKMARK_SETTING_ROOT__",
             self._bookmark_setting_root_function(),
+        ).replace(
+            "__RADIO_SELECTOR__",
+            repr(self.locator("radio")),
         )
 
     def _bookmark_effect_mode_checked_script(self, mode_text: str) -> str:
@@ -1877,14 +1947,20 @@ class GlobalSettingsPage(BasePage):
             const modeText = __MODE_TEXT__;
             const root = __BOOKMARK_SETTING_ROOT__();
             if (!root) return false;
-            const radio = Array.from(root.querySelectorAll(".el-radio"))
+            const radio = Array.from(root.querySelectorAll(__RADIO_SELECTOR__))
                 .find((el) => (el.innerText || el.textContent || "").includes(modeText));
             if (!radio) return false;
-            return radio.classList.contains("is-checked") || Boolean(radio.querySelector("input")?.checked);
+            return radio.classList.contains("is-checked") || Boolean(radio.querySelector(__INPUT_SELECTOR__)?.checked);
         }
         """.replace("__MODE_TEXT__", repr(mode_text)).replace(
             "__BOOKMARK_SETTING_ROOT__",
             self._bookmark_setting_root_function(),
+        ).replace(
+            "__RADIO_SELECTOR__",
+            repr(self.locator("radio")),
+        ).replace(
+            "__INPUT_SELECTOR__",
+            repr(self.locator("input")),
         )
 
     def _bookmark_overwrite_rule_select_script(self) -> str:
@@ -1892,16 +1968,22 @@ class GlobalSettingsPage(BasePage):
         () => {
             const root = __BOOKMARK_SETTING_ROOT__();
             if (!root) return null;
-            const items = Array.from(root.querySelectorAll(".el-form-item"))
+            const items = Array.from(root.querySelectorAll(__FORM_ITEM_SELECTOR__))
                 .filter((el) => (el.innerText || el.textContent || "").includes("覆盖规则"));
             const item = items[items.length - 1];
             if (!item) return null;
-            const select = item.querySelector(".el-select__wrapper, .el-select");
+            const select = item.querySelector(__SELECT_CONTROL_SELECTOR__);
             if (!select) return null;
             select.scrollIntoView({ block: "center", inline: "center" });
             return select;
         }
-        """.replace("__BOOKMARK_SETTING_ROOT__", self._bookmark_setting_root_function())
+        """.replace("__BOOKMARK_SETTING_ROOT__", self._bookmark_setting_root_function()).replace(
+            "__FORM_ITEM_SELECTOR__",
+            repr(self.locator("form_item")),
+        ).replace(
+            "__SELECT_CONTROL_SELECTOR__",
+            repr(self.locator("select_control")),
+        )
 
     def _bookmark_setting_text_script(self) -> str:
         return """
@@ -1923,6 +2005,9 @@ class GlobalSettingsPage(BasePage):
         ).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _environment_list_pagination_setting_switch_center_script(self) -> str:
@@ -1932,7 +2017,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return null;
             const switchEl = root.querySelector(__SWITCH_SELECTOR__);
             if (!switchEl) return null;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             return {
@@ -1949,6 +2034,9 @@ class GlobalSettingsPage(BasePage):
         ).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _environment_list_pagination_setting_switch_dom_click_script(self) -> str:
@@ -1958,7 +2046,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return false;
             const switchEl = root.querySelector(__SWITCH_SELECTOR__);
             if (!switchEl) return false;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return false;
@@ -1976,6 +2064,9 @@ class GlobalSettingsPage(BasePage):
         ).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _environment_list_pagination_setting_enabled_script(self) -> str:
@@ -2006,7 +2097,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return null;
             const field = __ENVIRONMENT_LIST_PAGINATION_PAGE_SIZE_FIELD__(root);
             if (!field) return null;
-            const select = field.querySelector(".el-select__wrapper, .el-select, input");
+            const select = field.querySelector(__SELECT_CONTROL_SELECTOR__);
             if (!select) return null;
             select.scrollIntoView({ block: "center", inline: "center" });
             return select;
@@ -2017,6 +2108,9 @@ class GlobalSettingsPage(BasePage):
         ).replace(
             "__ENVIRONMENT_LIST_PAGINATION_PAGE_SIZE_FIELD__",
             self._environment_list_pagination_page_size_field_function(),
+        ).replace(
+            "__SELECT_CONTROL_SELECTOR__",
+            repr(self.locator("select_control_with_input")),
         )
 
     def _environment_list_pagination_page_size_text_script(self) -> str:
@@ -2080,10 +2174,13 @@ class GlobalSettingsPage(BasePage):
                 .filter(({ rect }) => rect.y >= rootRect.y - 5 && rect.y <= rootRect.y + 220)
                 .sort((left, right) => left.rect.y - right.rect.y);
             return scopedFields.find(({ text }) => text.includes("分页条数"))?.item
-                || scopedFields.find(({ item }) => item.querySelector(".el-select__wrapper, .el-select"))?.item
+                || scopedFields.find(({ item }) => item.querySelector(__SELECT_CONTROL_SELECTOR__))?.item
                 || null;
         })
-        """.replace("__FORM_ITEM_SELECTOR__", repr(self.locator("form_item")))
+        """.replace("__FORM_ITEM_SELECTOR__", repr(self.locator("form_item"))).replace(
+            "__SELECT_CONTROL_SELECTOR__",
+            repr(self.locator("select_control")),
+        )
 
     def _environment_list_sort_exists_script(self) -> str:
         return """
@@ -2103,7 +2200,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return null;
             const switchEl = root.querySelector(__SWITCH_SELECTOR__);
             if (!switchEl) return null;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             return {
@@ -2117,6 +2214,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__ENVIRONMENT_LIST_SORT_ROOT__", self._environment_list_sort_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _environment_list_sort_switch_dom_click_script(self) -> str:
@@ -2126,7 +2226,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return false;
             const switchEl = root.querySelector(__SWITCH_SELECTOR__);
             if (!switchEl) return false;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return false;
@@ -2141,6 +2241,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__ENVIRONMENT_LIST_SORT_ROOT__", self._environment_list_sort_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _environment_list_sort_enabled_script(self) -> str:
@@ -2168,7 +2271,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return null;
             const field = __ENVIRONMENT_LIST_SORT_FIELD__(root, {label_text!r});
             if (!field) return null;
-            const select = field.querySelector(".el-select__wrapper, .el-select, input");
+            const select = field.querySelector(__SELECT_CONTROL_SELECTOR__);
             if (!select) return null;
             select.scrollIntoView({{ block: "center", inline: "center" }});
             return select;
@@ -2176,6 +2279,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__ENVIRONMENT_LIST_SORT_ROOT__", self._environment_list_sort_root_function()).replace(
             "__ENVIRONMENT_LIST_SORT_FIELD__",
             self._environment_list_sort_field_function(),
+        ).replace(
+            "__SELECT_CONTROL_SELECTOR__",
+            repr(self.locator("select_control_with_input")),
         )
 
     def _environment_list_sort_radio_script(self, label_text: str, option_text: str) -> str:
@@ -2193,7 +2299,7 @@ class GlobalSettingsPage(BasePage):
                     && rect.width > 0
                     && rect.height > 0;
             }};
-            const radio = Array.from(field.querySelectorAll(".el-radio"))
+            const radio = Array.from(field.querySelectorAll(__RADIO_SELECTOR__))
                 .filter(visible)
                 .find((item) => (item.innerText || item.textContent || "").includes({option_text!r}));
             if (!radio) return null;
@@ -2203,6 +2309,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__ENVIRONMENT_LIST_SORT_ROOT__", self._environment_list_sort_root_function()).replace(
             "__ENVIRONMENT_LIST_SORT_FIELD__",
             self._environment_list_sort_field_function(),
+        ).replace(
+            "__RADIO_SELECTOR__",
+            repr(self.locator("radio")),
         )
 
     def _environment_list_sort_radio_exists_script(self, label_text: str, option_text: str) -> str:
@@ -2220,13 +2329,16 @@ class GlobalSettingsPage(BasePage):
                     && rect.width > 0
                     && rect.height > 0;
             }};
-            return Array.from(field.querySelectorAll(".el-radio"))
+            return Array.from(field.querySelectorAll(__RADIO_SELECTOR__))
                 .filter(visible)
                 .find((item) => (item.innerText || item.textContent || "").includes({option_text!r})) || null;
         }})())
         """.replace("__ENVIRONMENT_LIST_SORT_ROOT__", self._environment_list_sort_root_function()).replace(
             "__ENVIRONMENT_LIST_SORT_FIELD__",
             self._environment_list_sort_field_function(),
+        ).replace(
+            "__RADIO_SELECTOR__",
+            repr(self.locator("radio")),
         )
 
     def _environment_list_sort_option_selected_script(self, label_text: str, option_text: str) -> str:
@@ -2245,17 +2357,23 @@ class GlobalSettingsPage(BasePage):
                     && rect.height > 0;
             }};
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-            const radio = Array.from(field.querySelectorAll(".el-radio"))
+            const radio = Array.from(field.querySelectorAll(__RADIO_SELECTOR__))
                 .filter(visible)
                 .find((item) => clean(item.innerText || item.textContent).includes({option_text!r}));
             if (radio) {{
-                return radio.classList.contains("is-checked") || Boolean(radio.querySelector("input")?.checked);
+                return radio.classList.contains("is-checked") || Boolean(radio.querySelector(__INPUT_SELECTOR__)?.checked);
             }}
             return clean(field.innerText || field.textContent).includes({option_text!r});
         }}
         """.replace("__ENVIRONMENT_LIST_SORT_ROOT__", self._environment_list_sort_root_function()).replace(
             "__ENVIRONMENT_LIST_SORT_FIELD__",
             self._environment_list_sort_field_function(),
+        ).replace(
+            "__RADIO_SELECTOR__",
+            repr(self.locator("radio")),
+        ).replace(
+            "__INPUT_SELECTOR__",
+            repr(self.locator("input")),
         )
 
     def _environment_list_sort_option_text_script(self, label_text: str) -> str:
@@ -2318,7 +2436,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return null;
             const switchEl = root.querySelector(__SWITCH_SELECTOR__);
             if (!switchEl) return null;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             return {
@@ -2332,6 +2450,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__ENVIRONMENT_FIELD_DISPLAY_LIMIT_ROOT__", self._environment_field_display_limit_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _environment_field_display_limit_switch_dom_click_script(self) -> str:
@@ -2341,7 +2462,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return false;
             const switchEl = root.querySelector(__SWITCH_SELECTOR__);
             if (!switchEl) return false;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return false;
@@ -2356,6 +2477,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__ENVIRONMENT_FIELD_DISPLAY_LIMIT_ROOT__", self._environment_field_display_limit_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _environment_field_display_limit_enabled_script(self) -> str:
@@ -2390,7 +2514,7 @@ class GlobalSettingsPage(BasePage):
                     && rect.height > 0;
             };
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-            const candidates = Array.from(root.querySelectorAll("button, span, div, a"))
+            const candidates = Array.from(root.querySelectorAll(__CLICKABLE_TEXT_SELECTOR__))
                 .filter(visible)
                 .filter((el) => clean(el.innerText || el.textContent) === "编辑");
             const button = candidates[candidates.length - 1] || null;
@@ -2398,7 +2522,10 @@ class GlobalSettingsPage(BasePage):
             button.scrollIntoView({ block: "center", inline: "center" });
             return button;
         }
-        """.replace("__ENVIRONMENT_FIELD_DISPLAY_LIMIT_ROOT__", self._environment_field_display_limit_root_function())
+        """.replace("__ENVIRONMENT_FIELD_DISPLAY_LIMIT_ROOT__", self._environment_field_display_limit_root_function()).replace(
+            "__CLICKABLE_TEXT_SELECTOR__",
+            repr(self.locator("clickable_text_candidates")),
+        )
 
     def _environment_field_display_limit_text_script(self) -> str:
         return """
@@ -2419,10 +2546,10 @@ class GlobalSettingsPage(BasePage):
                     && rect.width > 0
                     && rect.height > 0;
             };
-            return Array.from(document.querySelectorAll(".el-dialog"))
+            return Array.from(document.querySelectorAll(__DIALOG_SELECTOR__))
                 .some((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
         }
-        """
+        """.replace("__DIALOG_SELECTOR__", repr(self.locator("dialog")))
 
     def _environment_field_display_limit_dialog_checkbox_script(self, text: str) -> str:
         return f"""
@@ -2439,7 +2566,7 @@ class GlobalSettingsPage(BasePage):
                     && rect.height > 0;
             }};
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-            const checkbox = Array.from(dialog.querySelectorAll(".el-checkbox"))
+            const checkbox = Array.from(dialog.querySelectorAll(__CHECKBOX_SELECTOR__))
                 .filter(visible)
                 .find((item) => clean(item.innerText || item.textContent) === expectedText);
             if (!checkbox) return null;
@@ -2449,6 +2576,9 @@ class GlobalSettingsPage(BasePage):
         """.replace(
             "__ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG__",
             self._environment_field_display_limit_dialog_function(),
+        ).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
         )
 
     def _environment_field_display_limit_dialog_checkbox_checked_script(self, text: str) -> str:
@@ -2466,15 +2596,21 @@ class GlobalSettingsPage(BasePage):
                     && rect.height > 0;
             }};
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-            const checkbox = Array.from(dialog.querySelectorAll(".el-checkbox"))
+            const checkbox = Array.from(dialog.querySelectorAll(__CHECKBOX_SELECTOR__))
                 .filter(visible)
                 .find((item) => clean(item.innerText || item.textContent) === expectedText);
             if (!checkbox) return null;
-            return checkbox.classList.contains("is-checked") || Boolean(checkbox.querySelector("input")?.checked);
+            return checkbox.classList.contains("is-checked") || Boolean(checkbox.querySelector(__INPUT_SELECTOR__)?.checked);
         }}
         """.replace(
             "__ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG__",
             self._environment_field_display_limit_dialog_function(),
+        ).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__INPUT_SELECTOR__",
+            repr(self.locator("input")),
         )
 
     def _environment_field_display_limit_dialog_checkbox_states_script(self) -> str:
@@ -2492,16 +2628,22 @@ class GlobalSettingsPage(BasePage):
             };
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             const states = {};
-            for (const checkbox of Array.from(dialog.querySelectorAll(".el-checkbox")).filter(visible)) {
+            for (const checkbox of Array.from(dialog.querySelectorAll(__CHECKBOX_SELECTOR__)).filter(visible)) {
                 const text = clean(checkbox.innerText || checkbox.textContent);
                 if (!text) continue;
-                states[text] = checkbox.classList.contains("is-checked") || Boolean(checkbox.querySelector("input")?.checked);
+                states[text] = checkbox.classList.contains("is-checked") || Boolean(checkbox.querySelector(__INPUT_SELECTOR__)?.checked);
             }
             return states;
         }
         """.replace(
             "__ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG__",
             self._environment_field_display_limit_dialog_function(),
+        ).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__INPUT_SELECTOR__",
+            repr(self.locator("input")),
         )
 
     def _environment_field_display_limit_dialog_function(self) -> str:
@@ -2515,11 +2657,11 @@ class GlobalSettingsPage(BasePage):
                     && rect.width > 0
                     && rect.height > 0;
             };
-            const dialogs = Array.from(document.querySelectorAll(".el-dialog"))
+            const dialogs = Array.from(document.querySelectorAll(__DIALOG_SELECTOR__))
                 .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
             return dialogs[dialogs.length - 1] || null;
         })
-        """
+        """.replace("__DIALOG_SELECTOR__", repr(self.locator("dialog")))
 
     def _environment_field_display_limit_root_function(self) -> str:
         return """
@@ -2629,7 +2771,7 @@ class GlobalSettingsPage(BasePage):
     def _bookmark_setting_root_function(self) -> str:
         return """
         (() => {
-            const rootById = document.querySelector("#BookMark");
+            const rootById = document.querySelector(__BOOKMARK_ROOT_SELECTOR__);
             if (rootById) return rootById;
             const formItemSelector = __FORM_ITEM_SELECTOR__;
             const switchSelector = __SWITCH_SELECTOR__;
@@ -2658,7 +2800,10 @@ class GlobalSettingsPage(BasePage):
             });
             return candidates[0] || null;
         })
-        """.replace("__FORM_ITEM_SELECTOR__", repr(self.locator("form_item"))).replace(
+        """.replace("__BOOKMARK_ROOT_SELECTOR__", repr(self.locator("bookmark_setting_root"))).replace(
+            "__FORM_ITEM_SELECTOR__",
+            repr(self.locator("form_item")),
+        ).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
         )
@@ -2675,12 +2820,12 @@ class GlobalSettingsPage(BasePage):
                     && rect.width > 0
                     && rect.height > 0;
             }};
-            const items = Array.from(document.querySelectorAll(".el-select-dropdown__item, .el-dropdown-menu__item, li"))
+            const items = Array.from(document.querySelectorAll(__DROPDOWN_ITEM_SELECTOR__))
                 .filter((el) => visible(el))
                 .filter((el) => (el.innerText || el.textContent || "").trim() === expectedText);
             return items[items.length - 1] || null;
         }}
-        """
+        """.replace("__DROPDOWN_ITEM_SELECTOR__", repr(self.locator("dropdown_item_candidates")))
 
     def _visible_dropdown_item_by_normalized_text_script(self, text: str) -> str:
         return f"""
@@ -2695,12 +2840,12 @@ class GlobalSettingsPage(BasePage):
                     && rect.width > 0
                     && rect.height > 0;
             }};
-            const items = Array.from(document.querySelectorAll(".el-select-dropdown__item, .el-dropdown-menu__item, li"))
+            const items = Array.from(document.querySelectorAll(__DROPDOWN_ITEM_SELECTOR__))
                 .filter((el) => visible(el))
                 .filter((el) => normalize(el.innerText || el.textContent) === expectedText);
             return items[items.length - 1] || null;
         }}
-        """
+        """.replace("__DROPDOWN_ITEM_SELECTOR__", repr(self.locator("dropdown_item_candidates")))
 
     def _packet_capture_blocking_exists_script(self) -> str:
         return """
@@ -2721,7 +2866,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return null;
             const switchEl = root.querySelector(switchSelector);
             if (!switchEl) return null;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             return {
@@ -2735,6 +2880,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__PACKET_CAPTURE_ROOT__", self._packet_capture_blocking_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _packet_capture_blocking_switch_dom_click_script(self) -> str:
@@ -2745,7 +2893,7 @@ class GlobalSettingsPage(BasePage):
             if (!root) return false;
             const switchEl = root.querySelector(switchSelector);
             if (!switchEl) return false;
-            const core = switchEl.querySelector(".el-switch__core") || switchEl;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
             core.scrollIntoView({ block: "center", inline: "center" });
             const rect = core.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return false;
@@ -2760,6 +2908,9 @@ class GlobalSettingsPage(BasePage):
         """.replace("__PACKET_CAPTURE_ROOT__", self._packet_capture_blocking_root_function()).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
         )
 
     def _packet_capture_blocking_enabled_script(self) -> str:
@@ -2964,7 +3115,7 @@ class GlobalSettingsPage(BasePage):
                     && rect.width > 0
                     && rect.height > 0;
             }};
-            const overlays = Array.from(document.querySelectorAll(".el-dialog, .el-message-box"))
+            const overlays = Array.from(document.querySelectorAll(__DIALOG_OR_MESSAGE_BOX_SELECTOR__))
                 .filter(visible);
             for (const overlay of overlays.reverse()) {{
                 const button = Array.from(overlay.querySelectorAll("button"))
@@ -2974,4 +3125,4 @@ class GlobalSettingsPage(BasePage):
             }}
             return null;
         }}
-        """
+        """.replace("__DIALOG_OR_MESSAGE_BOX_SELECTOR__", repr(self.locator("dialog_or_message_box")))

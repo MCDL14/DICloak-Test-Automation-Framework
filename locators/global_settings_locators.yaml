@@ -22,18 +22,78 @@ overlay_close_button:
 button:
   selector: "button"
 
+# 页面或弹层内的可点击文本候选。用于“编辑”等非标准按钮结构。
+clickable_text_candidates:
+  selector: "button, span, div, a"
+
 # Element Plus checkbox 候选。具体业务项仍按 label 文案动态定位。
 checkbox_candidates:
   selector: ".el-checkbox, label, .el-form-item"
+
+# Element Plus checkbox 组件本体。
+checkbox:
+  selector: ".el-checkbox"
+
+# Element Plus checkbox 状态节点。
+checkbox_state:
+  selector: ".el-checkbox__input"
+
+# 原生 checkbox input。
+checkbox_input:
+  selector: "input[type='checkbox']"
 
 # Element Plus switch 候选。具体业务功能块仍按业务文案动态限定范围。
 switch:
   selector: ".el-switch"
 
+# Element Plus switch 可点击核心节点。
+switch_core:
+  selector: ".el-switch__core"
+
 # Element Plus 表单项候选。用于访问网站限制、禁用抓包软件等功能块的区域定位。
 form_item:
   selector: ".el-form-item"
 
+# Element Plus radio 候选。
+radio:
+  selector: ".el-radio"
+
+# Element Plus select 触发区域。
+select_control:
+  selector: ".el-select__wrapper, .el-select"
+
+# Element Plus select 触发区域，兼容内部 input 点击。
+select_control_with_input:
+  selector: ".el-select__wrapper, .el-select, input"
+
+# Element Plus 下拉选项候选。
+dropdown_item_candidates:
+  selector: ".el-select-dropdown__item, .el-dropdown-menu__item, li"
+
 # 访问网站限制、禁用抓包软件等区域内的可编辑输入控件候选。
 editable_field_candidates:
   selector: "textarea, input"
+
+# 原生 input 候选。
+input:
+  selector: "input"
+
+# 原生 textarea 候选。
+textarea:
+  selector: "textarea"
+
+# Element Plus dialog 候选。
+dialog:
+  selector: ".el-dialog"
+
+# Element Plus message box 候选。
+message_box:
+  selector: ".el-message-box"
+
+# 对话框与消息确认框候选。
+dialog_or_message_box:
+  selector: ".el-dialog, .el-message-box"
+
+# “书签设置”当前版本有稳定根节点，找不到时页面对象会退回文案定位。
+bookmark_setting_root:
+  selector: "#BookMark"

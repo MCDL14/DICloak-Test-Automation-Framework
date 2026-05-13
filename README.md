@@ -1,6 +1,6 @@
 # Dicloak 自动化框架
 
-本项目用于 Dicloak Electron APP 的自动化测试。当前框架已具备配置读取、环境预检、APP 生命周期管理、CDP 连接、飞书通知、用例运行编排和 P0 环境管理用例执行能力。
+本项目用于 Dicloak Electron APP 的自动化测试。当前框架已具备配置读取、环境预检、APP 生命周期管理、CDP 连接、飞书通知、用例运行编排，以及 P0 环境管理、全局设置、环境分组管理用例执行能力。
 
 ## 环境准备
 
@@ -18,6 +18,8 @@ python run.py --config config/config.yaml --precheck
 python run.py --config config/config.yaml --level P0
 python run.py --config config/config.yaml --level P0 --business-module 环境管理
 python run.py --config config/config.yaml --module environment_management
+python run.py --config config/config.yaml --module environment_group_management
+python run.py --config config/config.yaml --module test_02_group_containing_environment.py --attach-existing-app
 python run.py --config config/config.yaml --module test_01_kernel_integrity.py
 python run.py --config config/config.yaml --module p0/environment_management/test_01_kernel_integrity.py
 python run.py --config config/config.yaml --module tests/p0/environment_management/test_01_kernel_integrity.py
@@ -49,7 +51,7 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 恢复分三层：
 
 - 全局 APP 稳定态恢复：`pages/app_page.py` 只负责选择正确的 Dicloak 主页面、关闭阻塞弹窗/抽屉/下拉浮层、等待加载遮罩消失，并确认 APP 外壳可操作；这一层不进入任何业务模块。
-- 模块级恢复：当前环境管理模块通过 `EnvironmentPage.recover_to_module_home()` 进入环境管理列表，清除环境管理模块自己的筛选和选中状态。后续代理管理、扩展管理、成员管理等模块需要各自实现自己的模块首页恢复入口。
+- 模块级恢复：当前环境管理模块通过 `EnvironmentPage.recover_to_module_home()` 进入环境管理列表并清理筛选和选中状态；环境分组管理模块通过 `EnvironmentGroupPage.recover_to_module_home()` 进入环境分组列表并关闭阻塞浮层。后续代理管理、扩展管理、成员管理等模块需要各自实现自己的模块首页恢复入口。
 - 用例级清理：具体用例创建的数据仍由用例自己的 `finally` 或后置逻辑清理，因为只有用例知道哪些数据是本次运行创建的。
 
 全局恢复不会强制跳回“环境管理”，所以后续新增其他模块用例时，不会被环境管理页面状态绑死。
@@ -145,4 +147,14 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 - `test_06_allow_specific_website_bilibili.py`：允许访问指定网址-b 站。
 - `test_07_disable_packet_capture_software.py`：禁用抓包软件，校验抓包进程存在时禁止打开环境，关闭抓包软件后环境可正常打开。
 
-已预留代理管理、扩展管理、环境分组管理、成员管理等模块目录，后续新增用例时按业务模块放入对应目录。
+当前已开始编写并验证环境分组管理模块 P0 用例，文件位于 `tests/p0/environment_group_management/`：
+
+- `test_01_create_environment_group.py`：创建环境分组，校验创建成功后删除并校验删除成功。
+- `test_02_group_containing_environment.py`：包含环境的分组，创建分组和归属该分组的环境，删除分组时勾选删除分组下环境，并校验分组和环境都被删除。
+
+最近验证记录：
+
+- `python run.py --config config/config.yaml --module test_02_group_containing_environment.py --attach-existing-app`：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module environment_group_management --attach-existing-app`：`total=2 passed=2 failed=0 errors=0 skipped=0 flaky=0`。
+
+已预留代理管理、扩展管理、成员管理等模块目录，后续新增用例时按业务模块放入对应目录。

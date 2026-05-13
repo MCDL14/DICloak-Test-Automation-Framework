@@ -1,0 +1,27 @@
+# Left menu and common clickable candidates for Environment Group Management.
+environment_group_menu_candidates:
+  selector: ".el-menu-item, li, a, button"
+
+visible_text_candidates:
+  selector: "button, div, span, a"
+
+button:
+  selector: "button"
+
+blocking_overlay:
+  selector: ".el-drawer, .el-dialog, .el-message-box"
+
+overlay_close_button:
+  selector: ".el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn, .el-overlay button[aria-label='Close']"
+
+dialog:
+  selector: ".el-dialog"
+
+message_box:
+  selector: ".el-message-box"
+
+table_row:
+  selector: ".el-table__row, tbody tr"
+
+input:
+  selector: "input"

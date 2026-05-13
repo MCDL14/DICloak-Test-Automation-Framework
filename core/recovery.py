@@ -6,6 +6,7 @@ from typing import Any
 
 from core.case_module import get_test_case_module
 from pages.app_page import AppPage
+from pages.environment_group_page import EnvironmentGroupPage
 from pages.environment_page import EnvironmentPage
 
 
@@ -46,6 +47,8 @@ class TestRecoveryManager:
         module_name = get_test_case_module(test)
         if module_name == "环境管理":
             EnvironmentPage(cdp_driver=cdp, config=config).recover_to_module_home()
+        elif module_name == "环境分组管理":
+            EnvironmentGroupPage(cdp_driver=cdp, config=config).recover_to_module_home()
 
     def _recovery_enabled(self, config: dict[str, Any]) -> bool:
         return bool(config.get("run", {}).get("recovery_enabled", True))

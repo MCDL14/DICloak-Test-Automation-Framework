@@ -21,10 +21,29 @@ class EnvironmentPage(BasePage):
         self.dismiss_blocking_overlays()
 
     def open_list(self) -> None:
-        self.dismiss_blocking_overlays()
-        self.cdp.click_element_by_script(self._visible_menu_item_script("环境管理"))
-        self._wait_for_environment_list()
-        self.clear_selected_environments()
+        last_error: Exception | None = None
+        for _ in range(5):
+            self.dismiss_blocking_overlays()
+            try:
+                self.cdp.click_element_by_script(self._environment_management_menu_item_script(), timeout=3000)
+            except Exception as exc:
+                last_error = exc
+                try:
+                    self._click_menu_item_by_text("环境管理")
+                except Exception:
+                    pass
+                try:
+                    self._click_known_left_menu_position("环境管理")
+                except Exception:
+                    pass
+            try:
+                self._wait_for_environment_list(timeout_seconds=5)
+                self.clear_selected_environments()
+                return
+            except Exception as exc:
+                last_error = exc
+                time.sleep(0.5)
+        raise TimeoutError(f"environment list did not appear after menu retry: {last_error}")
 
     def create_environment(self, name: str) -> None:
         self.dismiss_blocking_overlays()
@@ -53,6 +72,28 @@ class EnvironmentPage(BasePage):
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
         return initial_groups, expected_groups
+
+    def create_environment_with_exact_groups_from_default_name(self, group_names: list[str]) -> tuple[str, list[str]]:
+        self.dismiss_blocking_overlays()
+        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+        environment_name = self._active_environment_name_input_value()
+        if not environment_name:
+            raise RuntimeError("create environment drawer default environment name is empty")
+        expected_groups = self._unique_non_empty(group_names)
+        self._clear_create_environment_groups()
+        self._select_create_environment_groups(expected_groups)
+        extra_groups = [group for group in self.create_environment_selected_groups() if group not in expected_groups]
+        self._deselect_create_environment_groups(extra_groups)
+        self._close_select_dropdowns()
+        final_groups = self.create_environment_selected_groups()
+        if set(final_groups) != set(expected_groups):
+            raise AssertionError(
+                "create environment groups were not exact after clearing defaults: "
+                f"expected={expected_groups}, actual={final_groups}"
+            )
+        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
+        self._wait_for_overlay_closed()
+        return environment_name, final_groups
 
     def create_environment_with_tags(self, name: str, tag_names: list[str]) -> list[str]:
         self.dismiss_blocking_overlays()
@@ -2118,6 +2159,9 @@ class EnvironmentPage(BasePage):
             return []
         return self._unique_non_empty([str(item).strip() for item in value])
 
+    def _active_environment_name_input_value(self) -> str:
+        return str(self.cdp.evaluate(self._active_environment_name_input_value_script()) or "").strip()
+
     def create_environment_selected_tags(self) -> list[str]:
         value = self.cdp.evaluate(self._create_environment_tag_selected_values_script())
         if not isinstance(value, list):
@@ -2162,6 +2206,57 @@ class EnvironmentPage(BasePage):
                     time.sleep(0.3)
             if not deselected:
                 raise TimeoutError(f"create environment group was not deselected: {group_name}")
+
+    def _clear_create_environment_groups(self) -> None:
+        self._close_select_dropdowns()
+        for _ in range(12):
+            selected_groups = self._create_environment_group_chip_values()
+            if not selected_groups:
+                return
+            clicked = bool(self.cdp.evaluate(self._click_first_create_environment_group_close_script()))
+            if not clicked:
+                raise TimeoutError(f"create environment group close button was not found: selected={selected_groups}")
+            time.sleep(0.3)
+            self._close_select_dropdowns()
+        remaining_groups = self._create_environment_group_chip_values()
+        if remaining_groups:
+            raise TimeoutError(f"create environment groups were not cleared: actual={remaining_groups}")
+        selected_groups = self.create_environment_selected_groups()
+        if selected_groups:
+            self._deselect_create_environment_groups(selected_groups)
+            self._close_select_dropdowns()
+        selected_groups = self.create_environment_selected_groups()
+        if selected_groups:
+            raise TimeoutError(f"create environment selected groups were not cleared: actual={selected_groups}")
+
+    def _create_environment_group_chip_values(self) -> list[str]:
+        value = self.cdp.evaluate(self._create_environment_group_chip_values_script())
+        if not isinstance(value, list):
+            return []
+        return self._unique_non_empty([str(item).strip() for item in value])
+
+    def _close_select_dropdowns(self) -> None:
+        for _ in range(5):
+            visible_count = int(
+                self.cdp.evaluate(
+                    """
+                    () => {
+                        const visible = (el) => {
+                            const rect = el.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0;
+                        };
+                        return Array.from(document.querySelectorAll(".el-select__popper, .el-popper"))
+                            .filter((popper) => visible(popper) && popper.querySelector(".el-select-dropdown__item"))
+                            .length;
+                    }
+                    """
+                )
+                or 0
+            )
+            if visible_count == 0:
+                return
+            self.cdp.press("Escape")
+            time.sleep(0.2)
 
     def _wait_create_environment_groups_selected(self, expected_groups: list[str]) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
@@ -3242,6 +3337,115 @@ class EnvironmentPage(BasePage):
         }
         """
 
+    def _active_environment_name_input_value_script(self) -> str:
+        return f"""
+        () => {{
+            const selector = {self.locator("environment_name_input")!r};
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            const overlays = Array.from(document.querySelectorAll(".el-drawer, .el-dialog"))
+                .filter(visible);
+            for (const overlay of overlays.reverse()) {{
+                const input = Array.from(overlay.querySelectorAll(selector)).find(visible);
+                if (input) return input.value || "";
+            }}
+            return "";
+        }}
+        """
+
+    def _create_environment_group_chip_values_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const clean = (value) => String(value || "").replace(/×/g, "").trim();
+            const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
+            for (const drawer of drawers.reverse()) {
+                const labels = Array.from(drawer.querySelectorAll("label, .el-form-item__label"))
+                    .filter((el) => visible(el) && clean(el.innerText || el.textContent) === "环境分组");
+                for (const label of labels) {
+                    const formItem = label.closest(".el-form-item");
+                    const select = formItem?.querySelector(".el-select");
+                    if (!select || !visible(select)) continue;
+                    const values = [];
+                    const chips = Array.from(select.querySelectorAll(".el-tag, .el-select__selected-item"))
+                        .filter((chip) => visible(chip) && !chip.closest(".el-select-dropdown__item"));
+                    for (const chip of chips) {
+                        const text = clean(chip.innerText || chip.textContent);
+                        if (
+                            text
+                            && !["请选择", "请选择环境分组"].includes(text)
+                            && !/^\\+\\s*\\d+$/.test(text)
+                            && !values.includes(text)
+                        ) values.push(text);
+                    }
+                    return values;
+                }
+            }
+            return [];
+        }
+        """
+
+    def _click_first_create_environment_group_close_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const clean = (value) => String(value || "").trim();
+            const fireClick = (el) => {
+                for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+                    el.dispatchEvent(new MouseEvent(type, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                    }));
+                }
+            };
+            const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
+            for (const drawer of drawers.reverse()) {
+                const labels = Array.from(drawer.querySelectorAll("label, .el-form-item__label"))
+                    .filter((el) => visible(el) && clean(el.innerText || el.textContent) === "环境分组");
+                for (const label of labels) {
+                    const formItem = label.closest(".el-form-item");
+                    const select = formItem?.querySelector(".el-select");
+                    if (!select || !visible(select)) continue;
+                    const chips = Array.from(select.querySelectorAll(".el-tag, .el-select__selected-item"))
+                        .filter((chip) => visible(chip) && !chip.closest(".el-select-dropdown__item"))
+                        .filter((chip) => !/^\\+\\s*\\d+$/.test(clean(chip.innerText || chip.textContent)));
+                    for (const chip of chips) {
+                        const close = Array.from(chip.querySelectorAll(".el-tag__close, .el-icon-close, i, svg"))
+                            .find(visible);
+                        if (close) {
+                            fireClick(close);
+                            return true;
+                        }
+                    }
+                    const allCloseButtons = Array.from(select.querySelectorAll(".el-tag__close, .el-icon-close, i, svg"))
+                        .filter((el) => visible(el) && !el.closest(".el-select-dropdown__item"));
+                    if (allCloseButtons.length) {
+                        fireClick(allCloseButtons[0]);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        """
+
     def _create_environment_tag_selected_values_script(self) -> str:
         return """
         () => {
@@ -3481,6 +3685,38 @@ class EnvironmentPage(BasePage):
                 }})
                 .sort((left, right) => right.visibleArea - left.visibleArea);
             return candidates[0]?.el || null;
+        }}
+        """
+
+    def _dispatch_visible_menu_item_click_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {text!r};
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const candidates = Array.from(document.querySelectorAll(".el-menu-item, li, a, button, div"))
+                .filter((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText)
+                .map((el) => {{
+                    const rect = el.getBoundingClientRect();
+                    return {{ el, x: rect.x, y: rect.y, area: rect.width * rect.height }};
+                }})
+                .sort((left, right) => left.x - right.x || left.y - right.y || left.area - right.area);
+            const target = candidates[0]?.el;
+            if (!target) return false;
+            for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {{
+                target.dispatchEvent(new MouseEvent(type, {{
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                }}));
+            }}
+            return true;
         }}
         """
 
@@ -3837,12 +4073,36 @@ class EnvironmentPage(BasePage):
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             try:
-                if self._environment_rows():
+                if self._environment_list_shell_visible() or self._environment_rows():
                     return
             except Exception:
                 pass
             time.sleep(0.5)
         raise TimeoutError("environment list did not appear")
+
+    def _environment_list_shell_visible(self) -> bool:
+        return bool(
+            self.cdp.evaluate(
+                """
+                () => {
+                    const visible = (el) => {
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== "none"
+                            && style.visibility !== "hidden"
+                            && rect.width > 0
+                            && rect.height > 0;
+                    };
+                    const titleVisible = Array.from(document.querySelectorAll(".title, .tool-bar-lf"))
+                        .some((el) => visible(el) && (el.innerText || el.textContent || "").includes("环境管理"));
+                    const createVisible = Array.from(document.querySelectorAll("button, div, span, a"))
+                        .some((el) => visible(el) && (el.innerText || el.textContent || "").trim() === "创建环境");
+                    const tableVisible = Array.from(document.querySelectorAll(".el-table, table")).some(visible);
+                    return titleVisible && createVisible && tableVisible;
+                }
+                """
+            )
+        )
 
     def _wait_for_overlay_closed(self) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
@@ -4361,3 +4621,69 @@ class EnvironmentPage(BasePage):
         if not rect:
             raise RuntimeError(f"visible text was not found: {text}")
         self.cdp.click_at(float(rect["x"]) + float(rect["width"]) / 2, float(rect["y"]) + float(rect["height"]) / 2)
+
+    def _click_menu_item_by_text(self, text: str) -> None:
+        rect = self.cdp.evaluate(self._menu_item_rect_script(text))
+        if not rect:
+            raise RuntimeError(f"menu item was not found: {text}")
+        self.cdp.click_at(float(rect["x"]) + float(rect["width"]) / 2, float(rect["y"]) + float(rect["height"]) / 2)
+
+    def _click_known_left_menu_position(self, text: str) -> None:
+        if text == "环境管理":
+            self.cdp.click_at(130, 135)
+
+    def _environment_management_menu_item_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const icon = Array.from(document.querySelectorAll(".icon-env-management"))
+                .find(visible);
+            const iconMenu = icon?.closest(".el-menu-item, li");
+            if (iconMenu && visible(iconMenu)) return iconMenu;
+            return Array.from(document.querySelectorAll(".el-menu-item, li"))
+                .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === "环境管理")
+                || null;
+        }
+        """
+
+    def _menu_item_rect_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {text!r};
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const candidates = Array.from(document.querySelectorAll(".el-menu-item, li, a, button, div"))
+                .filter((el) => visible(el))
+                .filter((el) => {{
+                    const text = (el.innerText || el.textContent || "").trim();
+                    return text === expectedText;
+                }})
+                .map((el) => {{
+                    const clickable = el.closest(".el-menu-item, li, a, button") || el;
+                    const rect = clickable.getBoundingClientRect();
+                    return {{
+                        x: rect.x,
+                        y: rect.y,
+                        width: rect.width,
+                        height: rect.height,
+                        area: rect.width * rect.height,
+                    }};
+                }})
+                .filter((rect) => rect.x < 260 && rect.width > 20 && rect.height > 20)
+                .sort((left, right) => left.x - right.x || left.y - right.y || right.area - left.area);
+            return candidates[0] || null;
+        }}
+        """

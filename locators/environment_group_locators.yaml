@@ -1,27 +1,107 @@
-# Left menu and common clickable candidates for Environment Group Management.
+# 左侧菜单“环境分组管理”候选集合。页面对象会在这些候选元素中按精确文案点击。
 environment_group_menu_candidates:
   selector: ".el-menu-item, li, a, button"
 
+# 页面上按可见文本点击的候选集合，例如“创建环境分组”“删除”。
 visible_text_candidates:
   selector: "button, div, span, a"
 
+# 页面或弹层内的普通按钮候选。具体操作会继续按按钮文案筛选。
 button:
   selector: "button"
 
+# 可能遮挡环境分组列表的弹层。
 blocking_overlay:
   selector: ".el-drawer, .el-dialog, .el-message-box"
 
+# 创建、编辑等表单弹层候选。用于在抽屉或对话框内查找输入框。
+dialog_or_drawer:
+  selector: ".el-drawer, .el-dialog"
+
+# 弹层关闭按钮候选。恢复流程会用它关闭阻塞弹窗、抽屉或确认框。
 overlay_close_button:
   selector: ".el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn, .el-overlay button[aria-label='Close']"
 
+# Element Plus 对话框候选。创建、删除等弹窗内操作会限定在可见对话框中。
 dialog:
   selector: ".el-dialog"
 
+# Element Plus 消息确认框候选。删除环境分组的二次确认会使用。
 message_box:
   selector: ".el-message-box"
 
+# Element Plus 表单项候选。用于定位“包含环境”等筛选控件所在区域。
+form_item:
+  selector: ".el-form-item"
+
+# 删除环境分组弹窗内复选框候选。用于勾选“删除该分组下的环境”。
+checkbox_or_label:
+  selector: ".el-checkbox, label"
+
+# Element Plus 复选框根节点。通过 label 命中时会回溯到根节点读取或切换勾选状态。
+checkbox_root:
+  selector: ".el-checkbox"
+
+# “包含环境”筛选框内部可点击/可输入控件候选。该控件是可搜索下拉选择框。
+filter_select_control:
+  selector: ".el-select, .el-select__wrapper, input"
+
+# “分组名称/备注”筛选模式切换按钮图标。
+group_text_filter_mode_icon:
+  selector: ".icon-screen"
+
+# 筛选行搜索按钮图标。
+search_filter_icon:
+  selector: ".icon-search"
+
+# Element Plus 下拉选项。选择“包含环境”筛选项时必须点击真实 option 节点。
+select_dropdown_item:
+  selector: ".el-select-dropdown__item"
+
+# Element Plus 菜单下拉项。用于选择“分组名称/备注”等筛选模式。
+dropdown_menu_item:
+  selector: ".el-dropdown-menu__item"
+
+# 环境分组筛选行右侧“清除筛选”按钮图标。
+clear_filter_icon:
+  selector: ".icon-ClearCache"
+
+# 筛选框内已选标签/已选文本候选。用于判断“包含环境”“授权成员”等选择型筛选是否已清空。
+filter_selected_text_candidates:
+  selector: ".el-tag, .el-select__selected-item, .el-select__tags-text"
+
+# 环境分组表格容器候选。用于判断列表是否已加载。
+table_container:
+  selector: ".el-table, table"
+
+# 环境分组列表表格行候选。按分组名称动态定位仍在页面对象里完成。
 table_row:
   selector: ".el-table__row, tbody tr"
 
+# 环境分组列表表格单元格候选。用于按列读取分组名称、ID、备注等信息。
+table_cell:
+  selector: ".el-table__cell, td"
+
+# 表格行内编辑按钮图标。用于定位可编辑分组及进入“编辑环境分组”弹窗。
+edit_icon:
+  selector: ".icon-edit"
+
+# 表格行内可点击文本/按钮候选。用于查找“查看”“删除”等行内动作。
+row_action_candidates:
+  selector: "button, a, span, div"
+
+# 表格行内图标动作候选。用于删除等仅有图标的操作入口兜底定位。
+row_icon_action_candidates:
+  selector: "button, [role='button'], svg, i, span, div"
+
+# 表格行内名称匹配候选。用于在一行中按精确分组名称判断是否命中目标行。
+row_name_cell_candidates:
+  selector: ".cell, td, div, span"
+
+# 授权成员“查看”悬浮窗候选。
+authorized_member_popover:
+  selector: ".el-popover, .el-popper"
+
+# 页面或弹层内的原生输入框候选。创建环境分组时按当前可见输入框写入分组名。
 input:
   selector: "input"

@@ -18,6 +18,7 @@ python run.py --config config/config.yaml --precheck
 python run.py --config config/config.yaml --level P0
 python run.py --config config/config.yaml --level P0 --business-module 环境管理
 python run.py --config config/config.yaml --module environment_management
+python run.py --config config/config.yaml --module global_settings
 python run.py --config config/config.yaml --module environment_group_management
 python run.py --config config/config.yaml --module test_02_group_containing_environment.py --attach-existing-app
 python run.py --config config/config.yaml --module test_01_kernel_integrity.py
@@ -107,7 +108,7 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 43 条 P0 用例：环境管理 25 条、全局设置 12 条、环境分组管理 6 条。
 
 当前已完成并验证环境管理模块 25 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
@@ -137,7 +138,7 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 - `test_24_edit_environment_tags.py`
 - `test_25_filter_environment_tag.py`
 
-当前已开始编写并验证全局设置模块 P0 用例，文件位于 `tests/p0/global_settings/`：
+当前全局设置模块已完成并验证 12 条 P0 用例，文件位于 `tests/p0/global_settings/`：
 
 - `test_01_disable_view_password.py`：校验禁止查看网站密码。
 - `test_02_disable_browser_devtools.py`：禁止打开浏览器开发者工具。
@@ -146,15 +147,30 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 - `test_05_block_specific_websites_google_and_baidu.py`：禁止访问指定网址-快捷勾选谷歌应用商店、百度，并校验 b 站可正常访问。
 - `test_06_allow_specific_website_bilibili.py`：允许访问指定网址-b 站。
 - `test_07_disable_packet_capture_software.py`：禁用抓包软件，校验抓包进程存在时禁止打开环境，关闭抓包软件后环境可正常打开。
+- `test_08_bookmark_setting_overwrite.py`：书签设置-覆盖，校验上传书签文件覆盖内核现有书签。
+- `test_09_bookmark_setting_append.py`：书签设置-追加，校验上传书签文件追加到内核现有书签，并覆盖清空书签。
+- `test_10_environment_field_display_limit.py`：环境字段显示限制，校验环境列表只展示指定字段并恢复字段设置能力。
+- `test_11_environment_list_pagination_setting.py`：环境列表分页设置，校验固定分页条数后隐藏分页选择器，并可恢复默认分页。
+- `test_12_environment_list_sort_limit.py`：环境列表排序设置，校验全局固定排序后隐藏列表排序按钮，并可恢复手动排序。
 
-当前已开始编写并验证环境分组管理模块 P0 用例，文件位于 `tests/p0/environment_group_management/`：
+当前已开始编写并验证环境分组管理模块 6 条 P0 用例，文件位于 `tests/p0/environment_group_management/`：
 
 - `test_01_create_environment_group.py`：创建环境分组，校验创建成功后删除并校验删除成功。
-- `test_02_group_containing_environment.py`：包含环境的分组，创建分组和归属该分组的环境，删除分组时勾选删除分组下环境，并校验分组和环境都被删除。
+- `test_02_group_containing_environment.py`：包含环境的分组，创建分组和归属该分组的环境，通过“包含环境”筛选框校验筛选结果并清除筛选，删除分组时勾选删除分组下环境，并校验分组和环境都被删除。
+- `test_03_group_authorized_member.py`：授权成员的分组，创建环境分组后给 `自动化成员1` 追加授权，校验授权成员弹窗和“授权成员”筛选结果，删除分组后校验成员授权环境分组恢复为原始分组。
+- `test_04_filter_group_name.py`：环境分组名称筛选，切换筛选模式到“备注”并搜索 `勿动！！！`，校验列表结果均匹配备注后切回“分组名称”并清除筛选。
+- `test_05_edit_group_name.py`：修改环境分组名称，记录首个可编辑分组的名称和 ID，修改为 `自动化-修改环境分组名称` 后按 ID 校验，再还原原名称并按 ID 校验。
+- `test_06_edit_group_remark.py`：修改环境分组备注，记录首个可编辑分组的备注和 ID，修改为 `自动化-修改环境分组备注` 后按 ID 校验，再还原原备注并按 ID 校验。
+
+环境分组模块的通用元素已统一维护在 `locators/environment_group_locators.yaml`，包括菜单候选、弹层、表单项、筛选模式切换图标、搜索/清除按钮、下拉项、表格行/单元格、行内编辑入口、行内操作候选和授权成员悬浮窗等；页面对象只保留按业务文本、分组 ID、列内容判断的动态逻辑。
 
 最近验证记录：
 
-- `python run.py --config config/config.yaml --module test_02_group_containing_environment.py --attach-existing-app`：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
-- `python run.py --config config/config.yaml --module environment_group_management --attach-existing-app`：`total=2 passed=2 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_02_group_containing_environment.py --attach-existing-app`：新增“包含环境”筛选校验后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_03_group_authorized_member.py --attach-existing-app`：新增“授权成员的分组”用例后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_04_filter_group_name.py --attach-existing-app`：新增“环境分组名称筛选”用例后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_05_edit_group_name.py --attach-existing-app`：新增“修改环境分组名称”用例后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_06_edit_group_remark.py --attach-existing-app`：新增“修改环境分组备注”用例后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module environment_group_management --attach-existing-app`：整理环境分组统一元素定位后通过，`total=6 passed=6 failed=0 errors=0 skipped=0 flaky=0`。
 
 已预留代理管理、扩展管理、成员管理等模块目录，后续新增用例时按业务模块放入对应目录。

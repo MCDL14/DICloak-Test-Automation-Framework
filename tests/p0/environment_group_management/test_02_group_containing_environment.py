@@ -66,6 +66,25 @@ class TestGroupContainingEnvironment(unittest.TestCase):
             )
 
             group_page.open_list()
+            group_page.filter_by_containing_environment(environment_name)
+            filtered_rows = group_page.group_rows_in_current_list()
+            assert_true(
+                filtered_rows,
+                f"containing-environment filter returned no rows: environment={environment_name}",
+            )
+            assert_true(
+                all(environment_name in row["text"] for row in filtered_rows),
+                "containing-environment filter returned rows not containing target environment: "
+                f"environment={environment_name}, rows={filtered_rows}",
+            )
+            assert_true(
+                any(group_name in row["text"] for row in filtered_rows),
+                "containing-environment filter did not return target group: "
+                f"group={group_name}, environment={environment_name}, rows={filtered_rows}",
+            )
+            group_page.clear_filters()
+            assert_true(group_page.group_visible(group_name), f"environment group was not visible after clearing filter: {group_name}")
+
             group_page.delete_group(group_name, delete_environments=True)
             group_created = False
             environment_created = False

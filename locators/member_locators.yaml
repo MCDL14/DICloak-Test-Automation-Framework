@@ -1,0 +1,39 @@
+# 左侧菜单“成员列表”候选集合。页面对象会在团队管理展开区域中按精确文案点击。
+member_menu_candidates:
+  selector: ".el-menu-item, li, a, button"
+
+# 页面或弹层内的普通按钮候选。编辑弹窗里的“确定”“取消”会按文案筛选。
+button:
+  selector: "button"
+
+# 可能遮挡成员列表或编辑弹窗的弹层。
+blocking_overlay:
+  selector: ".el-drawer, .el-dialog, .el-message-box"
+
+# 弹层关闭按钮候选。恢复和清理流程会用它关闭未处理的弹窗。
+overlay_close_button:
+  selector: ".el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn, .el-overlay button[aria-label='Close']"
+
+# 成员列表表格行候选。按成员名称动态定位仍在页面对象里完成。
+table_row:
+  selector: ".el-table__row, tbody tr"
+
+# Element Plus 对话框候选。编辑内部成员弹窗会限定在可见对话框中。
+dialog:
+  selector: ".el-dialog"
+
+# Element Plus 表单项候选。用于定位“环境分组”等编辑字段所在区域。
+form_item:
+  selector: ".el-form-item"
+
+# 编辑成员弹窗里的多选控件候选。
+select_control:
+  selector: ".el-select, .el-select__wrapper, input"
+
+# Element Plus 下拉选项。成员环境分组选项必须点击真实 option 节点。
+select_dropdown_item:
+  selector: ".el-select-dropdown__item"
+
+# 成员行编辑按钮图标。
+edit_icon:
+  selector: ".icon-edit"

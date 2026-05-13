@@ -1,14 +1,27 @@
+# 内核管理入口预留。当前内核管理通常从个人设置/基础设置等流程动态进入。
 kernel_menu:
   selector: ""
+
+# 内核列表表格预留。后续如果内核列表 DOM 稳定，可在这里补充具体表格选择器。
 kernel_table:
   selector: ""
+
+# 内核列表搜索输入框预留。当前内核相关用例主要按页面对象动态查找输入框。
 kernel_search_input:
   selector: ""
+
+# 删除内核按钮预留。实际删除会先按内核版本定位目标行，再在行内查找删除入口。
 delete_kernel_button:
   selector: ""
+
+# 下载内核按钮预留。实际下载会按目标内核版本动态定位下载操作。
 download_kernel_button:
   selector: ""
+
+# 环境编辑页或详情中的内核版本字段预留。用于人工维护内核版本读取定位。
 environment_kernel_version:
   selector: ""
+
+# 内核管理相关确认按钮预留。删除、下载确认弹窗稳定后可在这里补充选择器。
 confirm_button:
   selector: ""

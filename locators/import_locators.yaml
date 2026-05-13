@@ -1,14 +1,27 @@
+# 批量导入入口预留。当前导入入口主要从环境管理“批量创建”下拉菜单动态进入。
 batch_import_menu:
   selector: ""
+
+# 批量导入面板预留。当前页面对象会通过弹窗文案和上传控件动态确认面板。
 import_panel:
   selector: ""
+
+# 批量导入文件上传 input 预留。实际上传优先通过 DOM 中的 input[type=file] 动态查找。
 file_input:
   selector: ""
+
+# “选择文件”按钮预留。隐藏上传 input 不可用时可作为人工维护的兜底定位。
 choose_file_button:
   selector: ""
+
+# “提交/确定导入”按钮预留。当前导入流程会按可见按钮文案动态点击。
 submit_import_button:
   selector: ""
+
+# 导入结果弹窗或结果区域预留。当前结果读取按弹窗文本和表格结构动态解析。
 import_result:
   selector: ""
+
+# 导入失败环境列表预留。后续如果失败列表结构稳定，可在这里补充具体选择器。
 failed_environment_list:
   selector: ""

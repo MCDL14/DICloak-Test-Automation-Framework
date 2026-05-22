@@ -1480,8 +1480,6 @@ class GlobalSettingsPage(BasePage):
         () => Boolean((() => {
             const text = __TEXT__;
             const selector = __CHECKBOX_SELECTOR__;
-            const checkboxStateSelector = __CHECKBOX_STATE_SELECTOR__;
-            const checkboxInputSelector = __CHECKBOX_INPUT_SELECTOR__;
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
@@ -1500,6 +1498,8 @@ class GlobalSettingsPage(BasePage):
         () => {
             const text = __TEXT__;
             const selector = __CHECKBOX_SELECTOR__;
+            const checkboxStateSelector = __CHECKBOX_STATE_SELECTOR__;
+            const checkboxInputSelector = __CHECKBOX_INPUT_SELECTOR__;
             const visible = (el) => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;

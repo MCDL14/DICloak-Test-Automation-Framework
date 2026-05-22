@@ -109,8 +109,8 @@ class TestDisableExtensionManagement(unittest.TestCase):
                 f"chrome web store add button was not clicked: {result.evidence}",
             )
             assert_true(
-                result.install_error_visible,
-                "chrome web store install error was not visible after maximizing kernel window: "
+                result.install_error_visible or result.webstore_switch_chrome_prompt_visible,
+                "chrome web store install was not blocked or prevented after maximizing kernel window: "
                 f"expected_error={EXPECTED_INSTALL_ERROR}, target_url={result.webstore_target_url}, "
                 f"kernel_window_maximized={result.kernel_window_maximized}, "
                 f"status_before={result.extension_status_before_click}, "

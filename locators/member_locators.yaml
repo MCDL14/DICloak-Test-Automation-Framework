@@ -6,9 +6,21 @@ member_menu_candidates:
 button:
   selector: "button"
 
+# 页面上按可见文本点击的候选集合，例如“创建成员”。
+visible_text_candidates:
+  selector: "button, div, span, a"
+
 # 可能遮挡成员列表或编辑弹窗的弹层。
 blocking_overlay:
   selector: ".el-drawer, .el-dialog, .el-message-box"
+
+# Element Plus 抽屉候选。成员列表“更多筛选”会以右侧抽屉展示。
+drawer:
+  selector: ".el-drawer"
+
+# 创建成员类型选择浮层。点击“创建成员”后用于选择内部/外部成员卡片。
+create_member_type_popover:
+  selector: ".el-popover, .el-popper"
 
 # 弹层关闭按钮候选。恢复和清理流程会用它关闭未处理的弹窗。
 overlay_close_button:
@@ -17,6 +29,46 @@ overlay_close_button:
 # 成员列表表格行候选。按成员名称动态定位仍在页面对象里完成。
 table_row:
   selector: ".el-table__row, tbody tr"
+
+# 成员列表表格容器候选。用于判断列表是否已加载。
+table_container:
+  selector: ".el-table, table"
+
+# 成员列表表头候选。用于按表头名称读取对应列。
+table_header:
+  selector: ".el-table__header-wrapper th, thead th"
+
+# 成员列表表格单元格候选。用于解析成员名称、分组、身份、状态等列。
+table_cell:
+  selector: ".el-table__cell, td"
+
+# 成员列表筛选区容器候选。用于限定成员分组筛选框和筛选操作按钮的查找范围。
+filter_container:
+  selector: ".filters, .filter-form-wrapper"
+
+# 成员列表筛选区选择框候选。当前用于点击“成员分组”筛选下拉框。
+filter_select_control:
+  selector: ".filters .el-select, .filter-form-wrapper .el-select"
+
+# 成员列表筛选区输入框候选。当前用于定位“成员名称/ID”筛选输入框。
+filter_input:
+  selector: ".filters input, .filter-form-wrapper input"
+
+# 成员列表筛选区搜索按钮图标。对应“成员名称/ID”输入框右侧第一个按钮。
+search_filter_icon:
+  selector: ".icon-search"
+
+# 成员列表筛选区清空按钮图标。对应筛选栏最右侧的“清空筛选”按钮。
+clear_filter_icon:
+  selector: ".icon-ClearCache"
+
+# 成员列表筛选框内已选文本候选。用于判断成员分组筛选是否选中或已清空。
+filter_selected_text_candidates:
+  selector: ".el-tag, .el-select__tags-text, .el-select__selected-item"
+
+# 成员列表行内操作图标候选。用于删除等仅有图标的操作入口兜底定位。
+row_icon_action_candidates:
+  selector: "button, [role='button'], svg, i, span, div"
 
 # Element Plus 对话框候选。编辑内部成员弹窗会限定在可见对话框中。
 dialog:
@@ -30,6 +82,18 @@ form_item:
 select_control:
   selector: ".el-select, .el-select__wrapper, input"
 
+# 成员身份 radio 候选。用于在创建成员弹窗选择经理/员工。
+radio:
+  selector: ".el-radio, label"
+
+# Element Plus 开关候选。用于关闭“到期停用”。
+switch:
+  selector: ".el-switch"
+
+# 筛选框/多选框内已选标签候选。用于判断成员分组、环境分组是否已选中。
+selected_text_candidates:
+  selector: ".el-tag, .el-select__tags-text, .el-select__selected-item"
+
 # Element Plus 下拉选项。成员环境分组选项必须点击真实 option 节点。
 select_dropdown_item:
   selector: ".el-select-dropdown__item"
@@ -37,3 +101,7 @@ select_dropdown_item:
 # 成员行编辑按钮图标。
 edit_icon:
   selector: ".icon-edit"
+
+# 成员行删除按钮图标。
+delete_icon:
+  selector: ".icon-delete"

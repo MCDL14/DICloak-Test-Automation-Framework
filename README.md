@@ -45,6 +45,16 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 这个模式只适合本地调试。正式自动化运行仍建议让框架按配置统一管理 APP 生命周期。
 
+## 可视化 UI
+
+项目新增 Streamlit 可视化执行入口，CLI 运行方式保持不变。安装依赖后可在项目根目录启动：
+
+```bash
+streamlit run ui/app.py
+```
+
+UI 支持用例发现、按模块筛选、批量选择、实时日志、运行结果统计和历史日志查看。详细说明见 `UI使用文档.md`。
+
 ## 失败恢复机制
 
 框架已在 `core/result.py` 的 unittest 执行结果层接入用例前后恢复机制，避免某条用例失败后残留弹窗、抽屉、下拉框、遮罩或筛选状态影响下一条用例。
@@ -108,7 +118,7 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 53 条 P0 用例：环境管理 25 条、全局设置 12 条、环境分组管理 6 条、成员管理 10 条。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 54 条 P0 用例：环境管理 25 条、全局设置 12 条、环境分组管理 6 条、成员管理 11 条。
 
 当前已完成并验证环境管理模块 25 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
@@ -168,7 +178,7 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 环境分组模块的通用元素已统一维护在 `locators/environment_group_locators.yaml`，包括菜单候选、弹层、表单项、筛选模式切换图标、搜索/清除按钮、下拉项、表格行/单元格、行内编辑入口、行内操作候选和授权成员悬浮窗等；页面对象只保留按业务文本、分组 ID、列内容判断的动态逻辑。
 
-当前已开始编写并验证成员管理模块 10 条 P0 用例，文件位于 `tests/p0/member_management/`：
+当前已开始编写并验证成员管理模块 11 条 P0 用例，文件位于 `tests/p0/member_management/`：
 
 - `test_01_create_external_member.py`：创建外部成员，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段和编辑弹窗邮箱后删除并校验删除成功。
 - `test_02_edit_external_member_name.py`：编辑外部成员名称，将 `外部成员1` 修改为 `自动化-编辑外部成员名称` 后校验列表，再还原并校验。
@@ -180,6 +190,7 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 - `test_08_filter_member_login_account_email.py`：登录账号/邮箱筛选，通过“更多筛选”抽屉分别输入 `mcdl003` 和 `oytrhsjwe@tempmail.cn`，筛选后逐行打开编辑弹窗读取登录账号或成员邮箱并校验包含关键字，最后清空筛选。
 - `test_09_batch_edit_member_remark.py`：批量编辑成员备注，按原备注定位预置成员，依次校验覆盖备注、追加备注和还原备注，并在失败清理中兜底还原原备注。
 - `test_10_export_member.py`：导出成员，按成员名称精确筛选获取 `自动化成员1` 和 `外部成员1` 的 ID 后勾选导出所选成员，校验导出文件名规则、xlsx 表头、导出范围仅包含所选成员、目标成员行和预置文件内容一致，并清理临时导出文件。
+- `test_11_no_edit_permission_member.py`：无编辑权限成员环境操作校验，使用 MCDL007 登录后校验环境列表所有编辑入口（快捷编辑五列、下拉编辑、批量编辑备注、批量更多三项）均不可见，最后切回自动化账号并兜底还原。
 
 最近验证记录：
 
@@ -199,6 +210,8 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 - `python run.py --config config/config.yaml --module test_07_filter_member_remark.py --attach-existing-app`：新增“成员备注筛选”用例后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_08_filter_member_login_account_email.py --attach-existing-app`：新增“登录账号、邮箱筛选”用例后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_01_create_external_member.py --attach-existing-app`：修复成员列表入口会因“团队管理”折叠而找不到“成员列表”后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
-- `python run.py --config config/config.yaml --module member_management --attach-existing-app`：成员管理 10 条用例通过，`total=10 passed=10 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module member_management --attach-existing-app`：成员管理 11 条用例通过，`total=11 passed=11 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_11_no_edit_permission_member.py --attach-existing-app`：新增"无编辑权限成员环境操作校验"用例通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --attach-existing-app`：全量 P0 运行通过，`total=54 passed=54 failed=0 errors=0 skipped=0 flaky=0`（2026-05-29 两次验证）。
 
 已预留代理管理、扩展管理等模块目录，后续新增用例时按业务模块放入对应目录。

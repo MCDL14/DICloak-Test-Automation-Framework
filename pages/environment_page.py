@@ -850,6 +850,43 @@ class EnvironmentPage(BasePage):
     def first_environment_serial(self) -> str:
         return self.environment_serial_at_position(1)
 
+    def click_environment_serial_cell(self, serial: str) -> None:
+        self.cdp.click_element_by_script(self._environment_serial_cell_by_serial_script(serial))
+
+    def hover_environment_row_by_serial(self, serial: str) -> None:
+        # 部分快捷编辑入口只在真实鼠标 hover 后出现；横扫整行可覆盖 IP 代理等列的 CSS hover 态。
+        rect = self.cdp.evaluate(self._environment_row_rect_by_serial_script(serial))
+        if not isinstance(rect, dict) or rect.get("width", 0) <= 0:
+            raise TimeoutError(f"environment row was not visible before hover: serial={serial}")
+        x0 = rect["left"] + 10
+        y = rect["top"] + rect["height"] // 2
+        x1 = rect["right"] - 10
+        page = self.cdp._page()
+        page.mouse.move(x0, y)
+        time.sleep(0.2)
+        for step_x in range(int(x0), int(x1), 60):
+            page.mouse.move(step_x, y)
+            time.sleep(0.02)
+        page.mouse.move(x1, y)
+
+    def quick_edit_entries_in_row_by_serial(self, serial: str) -> dict:
+        result = self.cdp.evaluate(self._quick_edit_entries_in_row_by_serial_script(serial))
+        if isinstance(result, dict):
+            return result
+        return {"found": bool(result), "columns": []}
+
+    def dropdown_item_visible(self, text: str) -> bool:
+        return bool(self.cdp.evaluate(self._visible_dropdown_item_exists_script(text)))
+
+    def batch_action_visible(self, action_text: str) -> bool:
+        return bool(self.cdp.evaluate(self._batch_action_visible_script(action_text)))
+
+    def hover_batch_more_operation(self) -> None:
+        self.cdp.hover_element_by_script(self._batch_more_operation_script())
+
+    def batch_more_menu_item_visible(self, text: str) -> bool:
+        return bool(self.cdp.evaluate(self._batch_more_menu_item_exists_script(text)))
+
     def environment_serials_at_positions(self, count: int) -> list[str]:
         rows = self._environment_rows()
         if count <= 0:
@@ -1669,6 +1706,99 @@ class EnvironmentPage(BasePage):
                 if (button) return button;
             }}
             return null;
+        }}
+        """
+
+    def _environment_serial_cell_by_serial_script(self, serial: str) -> str:
+        return f"""
+        () => {{
+            const expectedSerial = {serial!r};
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            const rows = Array.from(document.querySelectorAll(".el-table__row, tbody tr"))
+                .filter(visible);
+            for (const row of rows) {{
+                const rawCells = Array.from(row.querySelectorAll("td"));
+                const cells = rawCells
+                    .map((cell) => (cell.innerText || cell.textContent || "").trim())
+                    .filter(Boolean);
+                if (cells[0] !== expectedSerial) continue;
+                return rawCells[0] || null;
+            }}
+            return null;
+        }}
+        """
+
+    def _environment_row_rect_by_serial_script(self, serial: str) -> str:
+        return f"""
+        () => {{
+            const expectedSerial = {serial!r};
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            const rows = Array.from(document.querySelectorAll(".el-table__row, tbody tr"))
+                .filter(visible);
+            for (const row of rows) {{
+                const cells = Array.from(row.querySelectorAll("td"))
+                    .map((cell) => (cell.innerText || cell.textContent || "").trim())
+                    .filter(Boolean);
+                if (cells[0] !== expectedSerial) continue;
+                const rect = row.getBoundingClientRect();
+                return {{
+                    top: rect.top,
+                    left: rect.left,
+                    right: rect.right,
+                    bottom: rect.bottom,
+                    width: rect.width,
+                    height: rect.height,
+                }};
+            }}
+            return {{ width: 0 }};
+        }}
+        """
+
+    def _quick_edit_entries_in_row_by_serial_script(self, serial: str) -> str:
+        return f"""
+        () => {{
+            const expectedSerial = {serial!r};
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            const rows = Array.from(document.querySelectorAll(".el-table__row, tbody tr"))
+                .filter(visible);
+            for (const row of rows) {{
+                const cells = Array.from(row.querySelectorAll("td"))
+                    .map((cell) => (cell.innerText || cell.textContent || "").trim())
+                    .filter(Boolean);
+                if (cells[0] !== expectedSerial) continue;
+                const rawCells = Array.from(row.querySelectorAll("td"));
+                const foundColumns = [];
+                rawCells.forEach((td, index) => {{
+                    const icons = Array.from(td.querySelectorAll(".icon-edit")).filter(visible);
+                    if (!icons.length) return;
+                    for (const icon of icons) {{
+                        let parent = icon.parentElement;
+                        while (parent && parent !== td) {{
+                            if (parent.tagName === "BUTTON" && visible(parent)) {{
+                                const headers = Array.from(document.querySelectorAll(".el-table__header th, thead th"));
+                                const headerCell = headers[index];
+                                const headerText = headerCell
+                                    ? (headerCell.innerText || headerCell.textContent || "").trim()
+                                    : ("column-" + index);
+                                if (!foundColumns.includes(headerText)) foundColumns.push(headerText);
+                                break;
+                            }}
+                            parent = parent.parentElement;
+                        }}
+                    }}
+                }});
+                return {{ found: foundColumns.length > 0, columns: foundColumns }};
+            }}
+            return {{ found: false, columns: [] }};
         }}
         """
 
@@ -3606,6 +3736,15 @@ class EnvironmentPage(BasePage):
         }}
         """
 
+    def _batch_more_menu_item_exists_script(self, text: str) -> str:
+        finder = self._batch_more_menu_item_script(text)
+        return f"""
+        () => {{
+            const findItem = {finder};
+            return Boolean(findItem());
+        }}
+        """
+
     def _visible_dropdown_item_script(self, text: str) -> str:
         return f"""
         () => {{
@@ -3622,6 +3761,24 @@ class EnvironmentPage(BasePage):
                 if (item) return item;
             }}
             return null;
+        }}
+        """
+
+    def _visible_dropdown_item_exists_script(self, text: str) -> str:
+        finder = self._visible_dropdown_item_script(text)
+        return f"""
+        () => {{
+            const findItem = {finder};
+            return Boolean(findItem());
+        }}
+        """
+
+    def _batch_action_visible_script(self, action_text: str) -> str:
+        finder = self._batch_action_element_script(action_text)
+        return f"""
+        () => {{
+            const findAction = {finder};
+            return Boolean(findAction());
         }}
         """
 

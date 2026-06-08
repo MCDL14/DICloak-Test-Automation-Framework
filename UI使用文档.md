@@ -1,7 +1,7 @@
 # Dicloak 自动化测试 UI 界面 — 使用与接手文档
 
-> 版本：1.3  
-> 最后更新：2026-06-03  
+> 版本：1.9
+> 最后更新：2026-06-08
 > 适用对象：接手本 UI 模块的开发者 / 日常使用 UI 的测试人员
 
 ---
@@ -14,8 +14,11 @@
 - 一键运行选中的用例，**实时流式**查看执行日志
 - 执行完成后自动解析结果统计（总计/通过/失败/错误/跳过/通过率）
 - 浏览历史运行记录（从 `logs/` 目录解析）
+- UI 执行复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路
 
-**核心原则**：UI 模块**不修改任何现有代码**（`core/`、`run.py`、`tests/` 均保持不变）。原有命令行执行方式（`python run.py`）完全不受影响。
+**核心原则**：UI 模块不复制自动化执行链路，优先复用 `core/` 的既有能力；如需扩展 `core/`，只做向后兼容的通用增强。原有命令行执行方式（`python run.py`）和 `run.py` 入口语义保持不变。
+
+当前 UI 用例发现应能读取到 58 条 P0 用例：环境管理 25 条、全局设置 12 条、环境分组管理 6 条、成员管理 15 条。
 
 ---
 
@@ -31,9 +34,9 @@ DICloak自动化框架/
 │       └── 02_运行历史.py    #   运行历史页面
 ├── UI使用文档.md              # ★ 本文档
 │
-│  以下为项目原有文件，UI 未做任何改动：
-├── run.py                     # 原有 CLI 入口
-├── core/                      # 核心框架（runner.py, result.py, feishu.py 等）
+│  以下为 UI 复用或做过向后兼容扩展的项目文件：
+├── run.py                     # CLI 入口，显式 reset 本次运行日志
+├── core/                      # 核心框架（runner.py, result.py, logger.py 等）
 ├── tests/                     # 测试用例
 ├── pages/                     # Page Object 类（不被 Streamlit 识别）
 ├── config/                    # 配置文件
@@ -41,14 +44,23 @@ DICloak自动化框架/
 └── ...
 ```
 
-**新增文件清单**（共 4 个）：
+**UI 相关文件：**
 
 | 文件 | 用途 | 是否依赖现有模块 |
 |---|---|---|
-| `streamlit_runner.py` | 用例发现、执行、飞书通知 | 复用 `core/` 全部能力 |
+| `streamlit_runner.py` | 用例发现、执行、飞书通知 | 复用 `core/` 的发现、排序、执行、重试、恢复、截图和通知能力 |
 | `ui/app.py` | 仪表盘入口 + 多页面注册 | 只读 `core/config.py` |
 | `ui/pages/01_执行用例.py` | 用例选择 + 执行页 | 调用 `streamlit_runner.py` |
 | `ui/pages/02_运行历史.py` | 历史记录浏览页 | 只读 `logs/` 目录 |
+
+**核心兼容扩展点：**
+
+| 文件 | 扩展点 | 兼容性说明 |
+|---|---|---|
+| `core/runner.py` | `_run_suite(stream=None)` 支持注入输出流 | CLI 不传 `stream` 时仍输出到 `sys.stdout` |
+| `core/logger.py` | `setup_logger(reset=False)` 默认复用当前 handler | 运行入口显式 `reset=True` 新建本次日志，用例内重复调用不会拆散日志 |
+| `core/result.py` | `AutomationTestResult` 统一写入用例级日志 | 所有 CLI/UI 执行都会记录 `CASE START/PASS/FAIL/ERROR/SKIP` 和耗时 |
+| `run.py` | CLI 启动时调用 `setup_logger(config, reset=True)` | 保持原 CLI 使用方式不变 |
 
 ---
 
@@ -74,15 +86,24 @@ streamlit run ui/app.py
 
 ### 3.3 停止 UI
 
-在终端按 `Ctrl+C` 即可。
+如果是在当前终端前台启动，按 `Ctrl+C` 即可。
+
+如果是通过后台进程启动，先找到监听 8501 端口的进程，再停止：
+
+```powershell
+Get-NetTCPConnection -LocalPort 8501 -ErrorAction SilentlyContinue |
+    Select-Object LocalAddress,LocalPort,State,OwningProcess
+
+Stop-Process -Id <OwningProcess> -Force
+```
+
+停止后再次确认 8501 没有 `Listen` 状态即可。
 
 ---
 
 ## 四、页面功能说明
 
 ### 4.1 仪表盘（ui/app.py）
-
-![仪表盘]
 
 - **左侧栏**：显示当前配置状态（账号名）
 - **主区域**：动态统计各模块用例数量 + 快速入口链接
@@ -94,6 +115,7 @@ streamlit run ui/app.py
 
 #### 步骤 1：筛选模块
 - 左侧栏 "筛选模块" 多选框：取消勾选不需要的模块
+- "搜索用例" 输入框：按模块、测试类、测试方法或完整 test_id 缩小当前展示范围
 - "全选"/"取消全选" 按钮：批量操作所有用例
 
 #### 步骤 2：选择用例
@@ -108,7 +130,7 @@ streamlit run ui/app.py
 
 #### 步骤 4：执行
 - 点击 "▶ 运行选中（N 条）" 按钮
-- 后台线程执行，前台**实时流式**显示日志（最多保留 200 行）
+- 后台线程执行，前台**实时流式**显示日志（固定高度展示，最多保留 200 行）
 - 执行完成后自动展示：
   - **6 个指标卡片**：总计、通过、失败、错误、跳过、通过率
   - **失败/错误详情**：展开面板列出 FAIL/ERROR 行
@@ -123,9 +145,10 @@ streamlit run ui/app.py
 - 支持两种日志格式：
   - **CLI 格式**：`Final test summary: total=... passed=... failed=...`
   - **UI 格式**：`运行完成 → 总计=... 通过=...`
-- 默认显示最近 50 条，点击 "加载更多" 翻页
-- 左侧栏可勾选 "只显示失败的运行" 进行筛选
+- 默认按日志文件修改时间倒序显示最近 50 条，点击 "加载更多" 翻页
+- 左侧栏支持按失败状态、关键词、来源和日期范围筛选
 - 每条记录展开后显示 6 个指标卡片 + "查看完整日志" 按钮
+- 自动化日志包含用例级 `CASE START`、`CASE PASS`、`CASE FAIL`、`CASE ERROR`、`CASE SKIP` 和耗时，便于从历史页定位具体用例过程
 
 ---
 
@@ -138,9 +161,11 @@ Streamlit 多页面采用**文件即页面**机制，步骤：
 3. 编写页面内容（纯 Python + `st.*` API）
 4. 在 `ui/app.py` 添加导航入口：
    ```python
-   st.page_link("ui/pages/03_data_report.py", label="📊 数据报表", icon="📊")
+   st.page_link("pages/03_data_report.py", label="📊 数据报表", icon="📊")
    ```
 5. 重启 `streamlit run ui/app.py`
+
+注意：`st.page_link()` 的路径相对 Streamlit 入口 `ui/app.py`，所以应写 `pages/xxx.py`，不要写 `ui/pages/xxx.py`。
 
 **不需要**写任何 HTML/CSS/JS，不需要注册路由。
 
@@ -194,20 +219,20 @@ expanded=True
 
 ## 七、关键设计决策说明
 
-### 7.1 为什么不修改 core/ 或 run.py？
+### 7.1 为什么 UI 只做兼容扩展？
 
-这是**第 1 条需求**。所有 UI 代码都是新增文件，通过 `import` 复用核心模块的**公开 API**（`AutomationRunner`、`AutomationTextRunner`、`FeishuNotifier` 等）。`run.py` 的 CLI 流程完全不受影响。
+UI 的价值是选择用例、实时展示日志和浏览历史，不应该重新实现一套自动化执行器。1.4 版本对 `AutomationRunner._run_suite()` 增加了可选 `stream` 参数，这是向后兼容扩展：CLI 未传入时仍输出到 `sys.stdout`，UI 传入队列流后可以实时展示日志。`run.py` 的 CLI 流程完全不受影响。
 
 ### 7.2 为什么需要一个共享执行器（streamlit_runner.py）？
 
-这是**第 2 条需求**（飞书通知不能丢）。如果直接在 Streamlit 页面里调用 `unittest.TextTestRunner`，会丢失：
+设计目标是让 UI 执行不绕开核心自动化链路。如果直接在 Streamlit 页面里调用 `unittest.TextTestRunner`，会丢失：
 
 - 恢复钩子（`TestRecoveryManager`）
 - 失败截图（`capture_failure_screenshot`）
 - 飞书通知（`FeishuNotifier.send_summary()`）
 - APP/CDP 生命周期管理
 
-`streamlit_runner.py` 完整复现了 `AutomationRunner.run()` 的执行流水线，确保 UI 执行和 CLI 执行的行为一致。
+`streamlit_runner.py` 复用 `AutomationRunner` 的用例发现、优先级排序、APP/CDP 生命周期和 `_run_suite()` 执行入口，确保 UI 执行和 CLI 执行在恢复钩子、失败截图、重试、flaky 统计和飞书通知上保持一致。
 
 ### 7.3 为什么 UI 代码放在 ui/ 子目录？
 
@@ -225,8 +250,10 @@ expanded=True
 
 1. `streamlit_runner.py` 在后台线程中执行用例
 2. 自定义 `_QueueStream`（IO 流）和 `_QueueLogHandler`（日志 Handler）将输出推送到 `queue.Queue`
-3. `pages/01_run_tests.py` 在前台轮询 queue，每收到一条消息就刷新日志显示
+3. `ui/pages/01_执行用例.py` 在前台轮询 queue，每收到一条消息就刷新日志显示
 4. 后台线程放入 `None` 作为哨兵，前台收到后停止轮询
+5. 如果后台线程仍存活但长时间没有新日志，页面会提示可能存在 APP/CDP 或系统弹窗卡住，方便人工排查
+6. `streamlit_runner.py` 使用进程级执行锁，避免多个 UI 会话同时抢占同一个 APP/CDP 和全局 logger
 
 ### 7.5 为什么选择 Streamlit？
 
@@ -236,7 +263,7 @@ expanded=True
 |---|---|---|---|---|
 | Flask + HTML | 需手写路由 | 需前后端联动 | ❌ | 一般 |
 | FastAPI + Vue | 过于重量级 | 前后端分离 | ❌ | 太重 |
-| **Streamlit** | **文件即页面** | **纯 Python** | **✅** | **最优** |
+| **Streamlit** | **文件即页面** | **纯 Python** | **✅** | **适合当前本地控制台阶段** |
 
 ---
 
@@ -263,6 +290,11 @@ ui/app.py                          # 仪表盘入口
 ### Q1: UI 启动后报 "配置加载失败"
 
 确认 `config/config.yaml` 存在且格式正确。
+如果首页用例统计或执行页用例发现失败，先运行：
+
+```bash
+python run.py --config config/config.yaml --precheck
+```
 
 ### Q2: 执行用例时卡住没有日志
 
@@ -277,13 +309,18 @@ ui/app.py                          # 仪表盘入口
 
 ### Q4: 如何同时保留 CLI 和 UI 两种执行方式？
 
-两者互不干扰：
+两种入口互相独立：
 - CLI：`python run.py`（和以前完全一样）
 - UI：`streamlit run ui/app.py`
 
+注意：CLI 和 UI 不建议同时对同一个 APP、CDP 端口、测试账号或业务数据执行自动化。UI 的 `_RUN_LOCK` 只保证同一 Streamlit 进程内串行执行，不能阻止另一个终端同时运行 CLI。
+
 ### Q5: 如何修改日志流式显示的保留行数？
 
-在 `ui/pages/01_执行用例.py` 中修改 `log_lines[-200:]` 的数字。
+在 `ui/pages/01_执行用例.py` 中修改：
+
+- `_LOG_DISPLAY_LINES`：实时日志最多保留行数。
+- `_LOG_DISPLAY_HEIGHT`：实时日志展示区域固定高度，单位为像素。
 
 ### Q6: Streamlit 端口被占用？
 
@@ -297,10 +334,35 @@ streamlit run ui/app.py --server.port 8502
 
 ---
 
-## 十、版本历史
+## 十、边界与后续计划
+
+### 10.1 当前定位
+
+- 当前 UI 是本地自动化执行控制台，用于日常调试、选择用例、查看实时日志和浏览历史记录。
+- 当前 UI 不是多人测试平台，没有用户认证、权限隔离、远程任务队列或运行记录数据库。
+- 当前执行模型是单 Streamlit 进程内串行执行；跨进程的 CLI/UI 并发需要人工避免。
+- 当前历史页只读取 `logs/run_*.log`，不维护独立任务状态表。
+
+### 10.2 后续优先级
+
+1. 运行历史页增加模块筛选和失败详情搜索。
+2. 执行用例页增加按测试 ID 精确粘贴选择。
+3. 增加执行中取消任务能力，但必须同步设计 APP/CDP 清理和业务数据清理策略。
+4. 如果需要多人或远程使用，引入任务队列、跨进程执行锁、用户权限和持久化运行记录。
+5. 将 UI 冒烟验证纳入固定检查项：启动服务、确认首页/执行页/历史页 HTTP 200、确认用例发现数量、关闭服务并确认端口释放。
+
+---
+
+## 十一、版本历史
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| 1.9 | 2026-06-08 | 同步当前 P0 用例发现数量为 58 条；成员管理已包含 15 条用例，四条成员 open API 用例具备接口非 200 重试和异常兜底恢复能力 |
+| 1.8 | 2026-06-08 | 执行页实时日志区域改为固定高度展示，避免运行时随日志长度不断撑高页面 |
+| 1.7 | 2026-06-04 | 补充 Windows 后台进程停止 UI 的方式；记录 UI 冒烟验证应覆盖启动、页面访问、用例发现和服务关闭 |
+| 1.6 | 2026-06-04 | 执行页增加用例搜索；执行异常时按预检失败、APP/CDP 失败、执行器异常等场景展示更明确状态；运行历史页增加关键词、来源和日期范围筛选，并改为按日志文件修改时间倒序 |
+| 1.5 | 2026-06-04 | 优化自动化日志：`setup_logger()` 默认复用当前运行 handler，避免用例 `setUpClass()` 拆散主日志；运行入口显式 reset 新建日志；用例结果层统一写入 CASE START/PASS/FAIL/ERROR/SKIP 和耗时；历史页日志按钮根据文件大小显示完整日志或末尾预览 |
+| 1.4 | 2026-06-04 | UI 执行复用 CLI `_run_suite()`，保持重试/flaky 行为一致；用例发现使用独立 logger，避免刷新页面清空运行日志 handler；UI 执行增加进程级串行锁；首页和执行页增加配置/发现失败兜底；历史页增强 unittest fallback 解析；修正 `page_link` 路径说明 |
 | 1.3 | 2026-06-03 | 首页用例数量改为动态统计；执行页模块级全选改为显式按钮，避免覆盖单条选择；`streamlit` 纳入 `requirements.txt` |
 | 1.2 | 2026-06-02 | 页面文件改为中文名，菜单直接显示中文 |
 | 1.0 | 2026-05-22 | 初始版本：仪表盘 + 执行用例 + 运行历史 |

@@ -4,6 +4,7 @@ import sys
 import traceback
 import unittest
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Any
 
 from core.recovery import TestRecoveryManager
@@ -54,6 +55,7 @@ class AutomationTestResult(unittest.TextTestResult):
         super().__init__(*args, **kwargs)
         self.run_result = RunResult()
         self.recovery = TestRecoveryManager()
+        self._test_start_times: dict[str, float] = {}
 
     def startTestRun(self) -> None:
         super().startTestRun()
@@ -62,6 +64,9 @@ class AutomationTestResult(unittest.TextTestResult):
     def startTest(self, test: unittest.case.TestCase) -> None:
         super().startTest(test)
         self.run_result.total += 1
+        test_id = test.id()
+        self._test_start_times[test_id] = perf_counter()
+        self._logger(test).info("CASE START #%s %s", self.run_result.total, test_id)
         self.recovery.recover_before_test(test)
 
     def stopTest(self, test: unittest.case.TestCase) -> None:
@@ -71,20 +76,34 @@ class AutomationTestResult(unittest.TextTestResult):
     def addSuccess(self, test: unittest.case.TestCase) -> None:
         super().addSuccess(test)
         self.run_result.passed += 1
+        self._logger(test).info("CASE PASS %s elapsed=%.2fs", test.id(), self._elapsed_seconds(test))
 
     def addFailure(self, test: unittest.case.TestCase, err) -> None:
         super().addFailure(test, err)
         self.run_result.failed += 1
         self._record_case_failure(test, "failed", err)
+        self._logger(test).error(
+            "CASE FAIL %s elapsed=%.2fs\n%s",
+            test.id(),
+            self._elapsed_seconds(test),
+            _format_error(err),
+        )
 
     def addError(self, test: unittest.case.TestCase, err) -> None:
         super().addError(test, err)
         self.run_result.errors += 1
         self._record_case_failure(test, "error", err)
+        self._logger(test).error(
+            "CASE ERROR %s elapsed=%.2fs\n%s",
+            test.id(),
+            self._elapsed_seconds(test),
+            _format_error(err),
+        )
 
     def addSkip(self, test: unittest.case.TestCase, reason: str) -> None:
         super().addSkip(test, reason)
         self.run_result.skipped += 1
+        self._logger(test).info("CASE SKIP %s reason=%s", test.id(), reason)
 
     def _record_case_failure(self, test: unittest.case.TestCase, status: str, err) -> None:
         screenshot_path = self._capture_screenshot(test)
@@ -109,6 +128,23 @@ class AutomationTestResult(unittest.TextTestResult):
         if logger and screenshot_path:
             logger.info("Failure screenshot path recorded for %s: %s", test.id(), screenshot_path)
         return screenshot_path
+
+    def _logger(self, test: unittest.case.TestCase):
+        logger = _test_attr(test, "logger", None)
+        if logger is None:
+            logger = _test_attr(test.__class__, "logger", None)
+        if logger is None:
+            import logging
+
+            logger = logging.getLogger("dicloak_automation")
+        return logger
+
+    def _elapsed_seconds(self, test: unittest.case.TestCase) -> float:
+        start_time = self._test_start_times.pop(test.id(), None)
+        if start_time is None:
+            return 0.0
+        return max(0.0, perf_counter() - start_time)
+
 
 
 def _format_error(err) -> str:

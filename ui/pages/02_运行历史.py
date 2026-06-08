@@ -8,11 +8,12 @@
 设计说明：
   - 纯 Python 实现，无 HTML/CSS/JS 依赖
   - 分页加载避免 700+ 日志文件一次性渲染导致卡顿
-  - 未来如需添加筛选（日期范围/模块/结果），在 sidebar 中加 st.date_input 等即可
+  - 侧边栏支持按失败状态、关键词、来源和日期范围筛选
 """
 
 from __future__ import annotations
 
+from datetime import date, datetime
 import re
 import sys
 from pathlib import Path
@@ -31,6 +32,7 @@ st.title("📋 运行历史")
 
 LOGS_DIR = _PROJECT_ROOT / "logs"
 _PAGE_SIZE = 50  # 每页显示条数
+_LOG_PREVIEW_CHARS = 5000
 
 # ── 日志解析 ──
 
@@ -98,7 +100,7 @@ def _parse_log_summary(log_path: Path) -> dict | None:
         return info
 
     # ── 兜底：单条用例或无摘要 ──
-    m_fallback = re.search(r"Ran (\d+) test.*\n(OK|FAILED)", text, re.MULTILINE)
+    m_fallback = re.search(r"Ran (\d+) test.*?\n\s*(OK|FAILED)", text, re.DOTALL)
     if m_fallback:
         info["total"] = int(m_fallback.group(1))
         info["success"] = m_fallback.group(2) == "OK"
@@ -123,7 +125,7 @@ def _list_logs() -> list[dict]:
     if not LOGS_DIR.exists():
         return logs
 
-    for f in sorted(LOGS_DIR.glob("run_*.log"), reverse=True):
+    for f in sorted(LOGS_DIR.glob("run_*.log"), key=lambda item: item.stat().st_mtime, reverse=True):
         info = _parse_log_summary(f)
         if info is None:
             continue
@@ -134,6 +136,36 @@ def _list_logs() -> list[dict]:
             **info,
         })
     return logs
+
+
+def _entry_matches_keyword(entry: dict, keyword: str) -> bool:
+    if not keyword:
+        return True
+    haystack = " ".join(
+        str(entry.get(field, ""))
+        for field in ("name", "time", "source", "path")
+    ).lower()
+    return keyword.lower() in haystack
+
+
+def _entry_matches_date_range(entry: dict, selected_range) -> bool:
+    if not selected_range:
+        return True
+    if isinstance(selected_range, date):
+        start_date = end_date = selected_range
+    elif len(selected_range) == 1:
+        start_date = end_date = selected_range[0]
+    else:
+        start_date, end_date = selected_range[0], selected_range[1]
+
+    entry_time = entry.get("time")
+    if not entry_time:
+        return True
+    try:
+        entry_date = datetime.strptime(entry_time, "%Y-%m-%d %H:%M:%S").date()
+    except ValueError:
+        return True
+    return start_date <= entry_date <= end_date
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -147,8 +179,24 @@ with st.sidebar:
         value=False,
         help="勾选后仅列出存在失败或错误用例的运行记录",
     )
+    keyword = st.text_input(
+        "关键词",
+        placeholder="日志文件名 / 时间 / 来源",
+        help="按日志文件名、运行时间或来源标签筛选。",
+    ).strip()
+    source_filter = st.multiselect(
+        "来源",
+        options=["CLI", "UI", "兜底"],
+        default=["CLI", "UI", "兜底"],
+        help="按历史记录解析来源筛选。",
+    )
+    selected_dates = st.date_input(
+        "日期范围",
+        value=(),
+        help="可选择单日或起止日期；不选则不过滤日期。",
+    )
     st.divider()
-    st.caption("💡 未来可在此添加：日期范围筛选、模块筛选、关键词搜索")
+    st.caption("💡 历史记录来自 `logs/run_*.log`，只展示能解析出摘要的日志。")
 
 # ═══════════════════════════════════════════════════════════════════
 # 主体：日志列表
@@ -161,22 +209,33 @@ if not all_logs:
     st.stop()
 
 # 筛选
-if show_only_failures:
-    filtered_logs = [
-        log for log in all_logs
-        if not log.get("success", True)
-    ]
-else:
-    filtered_logs = all_logs
+filtered_logs = [
+    log
+    for log in all_logs
+    if (not show_only_failures or not log.get("success", True))
+    and log.get("source") in source_filter
+    and _entry_matches_keyword(log, keyword)
+    and _entry_matches_date_range(log, selected_dates)
+]
 
 # ── 分页状态 ──
 if "history_page" not in st.session_state:
     st.session_state.history_page = _PAGE_SIZE
+if "history_filter_failures" not in st.session_state:
+    st.session_state.history_filter_failures = None
+current_filter_state = (show_only_failures, keyword, tuple(source_filter), str(selected_dates))
+if st.session_state.history_filter_failures != current_filter_state:
+    st.session_state.history_page = _PAGE_SIZE
+    st.session_state.history_filter_failures = current_filter_state
 
 visible_logs = filtered_logs[: st.session_state.history_page]
 
 total_str = f"共 {len(filtered_logs)} 条" if not show_only_failures else f"共 {len(filtered_logs)} 条（仅失败）"
 st.caption(f"{total_str}（按时间倒序，显示前 {len(visible_logs)} 条）")
+
+if not filtered_logs:
+    st.info("当前筛选条件下没有匹配的运行历史。")
+    st.stop()
 
 # ── 每条记录一个 expander ──
 for i, entry in enumerate(visible_logs):
@@ -217,10 +276,19 @@ for i, entry in enumerate(visible_logs):
             st.caption(f"文件: `{entry['name']}` ({entry['size_kb']} KB)  |  来源: {source}")
 
         # 查看完整日志按钮（使用唯一 key 避免 Streamlit 冲突）
-        if st.button("📄 查看完整日志（末尾 5000 字符）", key=f"view_log_{i}"):
+        preview_label = (
+            "📄 查看完整日志"
+            if entry.get("size_kb", 0) * 1024 <= _LOG_PREVIEW_CHARS
+            else f"📄 查看日志末尾 {_LOG_PREVIEW_CHARS} 字符"
+        )
+        if st.button(preview_label, key=f"view_log_{i}"):
             try:
                 content = Path(entry["path"]).read_text(encoding="utf-8", errors="replace")
-                st.code(content[-5000:], language="text")
+                if len(content) > _LOG_PREVIEW_CHARS:
+                    st.caption(
+                        f"日志共 {len(content)} 个字符，当前展示末尾 {_LOG_PREVIEW_CHARS} 个字符。"
+                    )
+                st.code(content[-_LOG_PREVIEW_CHARS:], language="text")
             except Exception as exc:
                 st.error(f"读取失败: {exc}")
 

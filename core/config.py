@@ -142,6 +142,25 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "export_file_name": "",
             "export_file_regex": r"^导出成员列表 - \d{12}\.xlsx$",
         },
+        "api_member_edit": {
+            "base_url": "https://app.dicloak.com/gin/v1/api/member/open/edit?",
+            "token": "",
+            "external_member_id": "1917463861065080834",
+            "internal_member": {
+                "member_id": "1947196562844110850",
+                "username": "MCDL007",
+                "password": "M12345678",
+            },
+            "disuse": {
+                "time": "2026-1-31 12:00:00",
+                "time_zone": "Etc/GMT-8",
+            },
+            "disabled_login_message": "该账号已被停用。您可以联系原团队的管理员处理，或自行注册新账号",
+            "status_retry": {
+                "times": 3,
+                "interval_seconds": 1,
+            },
+        },
         "batch_import": {"file_dir": "", "file_name": ""},
         "batch_export": {"export_dir": "", "export_file_name": ""},
         "packet_capture": {

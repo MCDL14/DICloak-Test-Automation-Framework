@@ -9,6 +9,15 @@ from pages.base_page import BasePage
 
 class GlobalSettingsPage(BasePage):
     locator_file = "global_settings_locators.yaml"
+    _ENVIRONMENT_FIELD_ALIASES = {
+        "环境序号": ("环境序号", "序号"),
+        "环境名称": ("环境名称", "名称"),
+        "环境分组": ("环境分组", "分组"),
+        "备注": ("备注",),
+        "标签": ("标签",),
+        "升序": ("升序",),
+        "降序": ("降序",),
+    }
 
     def open(self) -> None:
         self._dismiss_blocking_overlays()
@@ -1116,7 +1125,7 @@ class GlobalSettingsPage(BasePage):
             self.cdp.click_element_by_script(self._environment_list_sort_radio_script(label_text, option_text))
         else:
             self.cdp.click_element_by_script(self._environment_list_sort_select_script(label_text))
-            self.cdp.click_element_by_script(self._visible_dropdown_item_script(option_text))
+            self.cdp.click_element_by_script(self._environment_list_sort_dropdown_item_script(option_text))
         self._wait_environment_list_sort_option(label_text, option_text)
 
     def _wait_environment_list_sort_option(
@@ -1196,11 +1205,12 @@ class GlobalSettingsPage(BasePage):
         timeout_seconds: int | None = None,
     ) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
-        expected = " > ".join([str(item).strip() for item in field_names if str(item).strip()])
+        expected = [self._canonical_environment_field(item) for item in field_names if str(item).strip()]
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             text = str(self.cdp.evaluate(self._environment_field_display_limit_text_script()) or "")
-            if expected in text:
+            actual = [self._canonical_environment_field(item) for item in text.split(">") if str(item).strip()]
+            if actual == expected:
                 return
             time.sleep(0.2)
         raise TimeoutError(f"环境字段显示限制当前设置未回显预期字段: expected={expected}")
@@ -2291,6 +2301,23 @@ class GlobalSettingsPage(BasePage):
             if (!root) return null;
             const field = __ENVIRONMENT_LIST_SORT_FIELD__(root, {label_text!r});
             if (!field) return null;
+            const normalizeOption = (value) => {{
+                const text = String(value || "").replace(/\\s+/g, "").trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                    "升序": ["升序"],
+                    "降序": ["降序"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item || text.includes(item))) return canonical;
+                }}
+                return text;
+            }};
+            const expectedOption = normalizeOption({option_text!r});
             const visible = (el) => {{
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -2301,7 +2328,7 @@ class GlobalSettingsPage(BasePage):
             }};
             const radio = Array.from(field.querySelectorAll(__RADIO_SELECTOR__))
                 .filter(visible)
-                .find((item) => (item.innerText || item.textContent || "").includes({option_text!r}));
+                .find((item) => normalizeOption(item.innerText || item.textContent) === expectedOption);
             if (!radio) return null;
             radio.scrollIntoView({{ block: "center", inline: "center" }});
             return radio;
@@ -2321,6 +2348,23 @@ class GlobalSettingsPage(BasePage):
             if (!root) return null;
             const field = __ENVIRONMENT_LIST_SORT_FIELD__(root, {label_text!r});
             if (!field) return null;
+            const normalizeOption = (value) => {{
+                const text = String(value || "").replace(/\\s+/g, "").trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                    "升序": ["升序"],
+                    "降序": ["降序"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item || text.includes(item))) return canonical;
+                }}
+                return text;
+            }};
+            const expectedOption = normalizeOption({option_text!r});
             const visible = (el) => {{
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -2331,7 +2375,7 @@ class GlobalSettingsPage(BasePage):
             }};
             return Array.from(field.querySelectorAll(__RADIO_SELECTOR__))
                 .filter(visible)
-                .find((item) => (item.innerText || item.textContent || "").includes({option_text!r})) || null;
+                .find((item) => normalizeOption(item.innerText || item.textContent) === expectedOption) || null;
         }})())
         """.replace("__ENVIRONMENT_LIST_SORT_ROOT__", self._environment_list_sort_root_function()).replace(
             "__ENVIRONMENT_LIST_SORT_FIELD__",
@@ -2348,6 +2392,23 @@ class GlobalSettingsPage(BasePage):
             if (!root) return false;
             const field = __ENVIRONMENT_LIST_SORT_FIELD__(root, {label_text!r});
             if (!field) return false;
+            const normalizeOption = (value) => {{
+                const text = String(value || "").replace(/\\s+/g, "").trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                    "升序": ["升序"],
+                    "降序": ["降序"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item || text.includes(item))) return canonical;
+                }}
+                return text;
+            }};
+            const expectedOption = normalizeOption({option_text!r});
             const visible = (el) => {{
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -2359,11 +2420,11 @@ class GlobalSettingsPage(BasePage):
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             const radio = Array.from(field.querySelectorAll(__RADIO_SELECTOR__))
                 .filter(visible)
-                .find((item) => clean(item.innerText || item.textContent).includes({option_text!r}));
+                .find((item) => normalizeOption(item.innerText || item.textContent) === expectedOption);
             if (radio) {{
                 return radio.classList.contains("is-checked") || Boolean(radio.querySelector(__INPUT_SELECTOR__)?.checked);
             }}
-            return clean(field.innerText || field.textContent).includes({option_text!r});
+            return normalizeOption(clean(field.innerText || field.textContent)) === expectedOption;
         }}
         """.replace("__ENVIRONMENT_LIST_SORT_ROOT__", self._environment_list_sort_root_function()).replace(
             "__ENVIRONMENT_LIST_SORT_FIELD__",
@@ -2557,6 +2618,22 @@ class GlobalSettingsPage(BasePage):
             const expectedText = {text!r};
             const dialog = __ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG__();
             if (!dialog) return null;
+            const normalizeField = (value) => {{
+                const text = String(value || "").replace(/\\s+/g, "").trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                    "全选": ["全选"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item || text.includes(item))) return canonical;
+                }}
+                return text;
+            }};
+            const expectedField = normalizeField(expectedText);
             const visible = (el) => {{
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -2568,7 +2645,7 @@ class GlobalSettingsPage(BasePage):
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             const checkbox = Array.from(dialog.querySelectorAll(__CHECKBOX_SELECTOR__))
                 .filter(visible)
-                .find((item) => clean(item.innerText || item.textContent) === expectedText);
+                .find((item) => normalizeField(clean(item.innerText || item.textContent)) === expectedField);
             if (!checkbox) return null;
             checkbox.scrollIntoView({{ block: "center", inline: "center" }});
             return checkbox;
@@ -2587,6 +2664,22 @@ class GlobalSettingsPage(BasePage):
             const expectedText = {text!r};
             const dialog = __ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG__();
             if (!dialog) return null;
+            const normalizeField = (value) => {{
+                const text = String(value || "").replace(/\\s+/g, "").trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                    "全选": ["全选"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item || text.includes(item))) return canonical;
+                }}
+                return text;
+            }};
+            const expectedField = normalizeField(expectedText);
             const visible = (el) => {{
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -2598,7 +2691,7 @@ class GlobalSettingsPage(BasePage):
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             const checkbox = Array.from(dialog.querySelectorAll(__CHECKBOX_SELECTOR__))
                 .filter(visible)
-                .find((item) => clean(item.innerText || item.textContent) === expectedText);
+                .find((item) => normalizeField(clean(item.innerText || item.textContent)) === expectedField);
             if (!checkbox) return null;
             return checkbox.classList.contains("is-checked") || Boolean(checkbox.querySelector(__INPUT_SELECTOR__)?.checked);
         }}
@@ -2843,6 +2936,42 @@ class GlobalSettingsPage(BasePage):
             const items = Array.from(document.querySelectorAll(__DROPDOWN_ITEM_SELECTOR__))
                 .filter((el) => visible(el))
                 .filter((el) => normalize(el.innerText || el.textContent) === expectedText);
+            return items[items.length - 1] || null;
+        }}
+        """.replace("__DROPDOWN_ITEM_SELECTOR__", repr(self.locator("dropdown_item_candidates")))
+
+    def _environment_list_sort_dropdown_item_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {text!r};
+            const normalizeOption = (value) => {{
+                const text = String(value || "").replace(/\\s+/g, "").trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                    "升序": ["升序"],
+                    "降序": ["降序"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item || text.includes(item))) return canonical;
+                }}
+                return text;
+            }};
+            const expectedOption = normalizeOption(expectedText);
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const items = Array.from(document.querySelectorAll(__DROPDOWN_ITEM_SELECTOR__))
+                .filter((el) => visible(el))
+                .filter((el) => normalizeOption(el.innerText || el.textContent) === expectedOption);
             return items[items.length - 1] || null;
         }}
         """.replace("__DROPDOWN_ITEM_SELECTOR__", repr(self.locator("dropdown_item_candidates")))
@@ -3126,3 +3255,20 @@ class GlobalSettingsPage(BasePage):
             return null;
         }}
         """.replace("__DIALOG_OR_MESSAGE_BOX_SELECTOR__", repr(self.locator("dialog_or_message_box")))
+
+    @classmethod
+    def _canonical_environment_field(cls, text: str) -> str:
+        clean = (
+            str(text or "")
+            .replace("升序", "")
+            .replace("降序", "")
+            .replace("排序", "")
+            .replace("▲", "")
+            .replace("▼", "")
+            .strip()
+        )
+        compact = "".join(clean.split())
+        for canonical, aliases in cls._ENVIRONMENT_FIELD_ALIASES.items():
+            if any(compact == alias or compact.find(alias) >= 0 for alias in aliases):
+                return canonical
+        return clean

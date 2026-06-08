@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Config error: {exc}")
         return ExitCode.CONFIG_OR_PRECHECK_ERROR
 
-    logger = setup_logger(config)
+    logger = setup_logger(config, reset=True)
     runner = AutomationRunner(config=config, logger=logger)
 
     try:

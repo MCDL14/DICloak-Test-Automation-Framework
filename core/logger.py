@@ -6,23 +6,31 @@ from pathlib import Path
 from typing import Any
 
 
-def setup_logger(config: dict[str, Any]) -> logging.Logger:
+def setup_logger(config: dict[str, Any], *, reset: bool = False) -> logging.Logger:
     log_config = config.get("log", {})
     log_dir = Path(log_config.get("dir", "logs"))
     log_dir.mkdir(parents=True, exist_ok=True)
     cleanup_old_logs(log_dir, int(log_config.get("keep_days", 14)))
 
     logger = logging.getLogger("dicloak_automation")
-    logger.handlers.clear()
     logger.setLevel(_to_level(log_config.get("level", "INFO")))
     logger.propagate = False
+
+    if logger.handlers and not reset:
+        for handler in logger.handlers:
+            handler.setLevel(logger.level)
+        return logger
+
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
 
     formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     file_handler = logging.FileHandler(log_dir / f"run_{timestamp}.log", encoding="utf-8")
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logger.level)

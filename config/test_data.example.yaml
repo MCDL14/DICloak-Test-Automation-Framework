@@ -126,6 +126,22 @@ test_data:
     # 成员导出文件名正则；示例：导出成员列表 - 202604281947.xlsx
     export_file_regex: "^导出成员列表 - \\d{12}\\.xlsx$"
 
+  # 成员 open API 用例数据；token 建议用 DICLOAK_API_MEMBER_EDIT_TOKEN 环境变量维护
+  api_member_edit:
+    base_url: "https://app.dicloak.com/gin/v1/api/member/open/edit?"
+    token: ""
+    external_member_id: "1917463861065080834"
+    internal_member:
+      member_id: "1947196562844110850"
+      username: "MCDL007"
+      password: ""
+    disuse:
+      time: "2026-1-31 12:00:00"
+      time_zone: "Etc/GMT-8"
+    status_retry:
+      times: 3
+      interval_seconds: 1
+
   # 批量导入数据
   batch_import:
     # 批量导入文件所在目录

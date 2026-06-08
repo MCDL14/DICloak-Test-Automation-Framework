@@ -1,11 +1,11 @@
 """Streamlit UI 专用执行器。
 
 ==== 设计原则 ====
-- 只新增，不改动 core/、run.py 等现有模块。
-- 复用 AutomationRunner 的用例发现、APP 生命周期、CDP 校验能力。
-- 复用 AutomationTextRunner 的恢复钩子、失败截图、RunResult 统计。
+- 尽量复用 AutomationRunner 的用例发现、优先级排序、APP 生命周期、CDP 校验能力。
+- 通过 AutomationRunner._run_suite() 复用 CLI 的恢复钩子、失败截图、重试、flaky 统计。
 - 通过自定义 IO 流 + logging Handler 将输出实时推送到 UI。
 - 执行结束后调用 FeishuNotifier.send_summary() 保持飞书通知不变。
+- UI 执行在进程内串行化，避免多个 Streamlit 会话同时抢占同一个 APP/CDP 和全局 logger。
 
 ==== 使用方式 ====
     from streamlit_runner import discover_cases, run_selected_tests
@@ -20,6 +20,8 @@ from __future__ import annotations
 import io
 import logging
 import queue
+import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -28,11 +30,12 @@ from core.case_module import get_test_case_module
 from core.cdp_driver import CDPConnectionError, CDPDriver
 from core.config import ConfigError, load_config
 from core.logger import setup_logger
-from core.result import AutomationTextRunner, RunResult
+from core.result import RunResult
 from core.runner import AutomationRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = PROJECT_ROOT / "config" / "config.yaml"
+_RUN_LOCK = threading.Lock()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -94,7 +97,7 @@ def discover_cases() -> list[dict[str, str]]:
         method_name: 测试方法名
     """
     config = _build_config()
-    logger = setup_logger(config)
+    logger = _discovery_logger()
     runner = AutomationRunner(config=config, logger=logger)
     suite = runner._build_suite(level=None, module=None, case=None)
 
@@ -111,6 +114,18 @@ def discover_cases() -> list[dict[str, str]]:
     return cases
 
 
+def _discovery_logger() -> logging.Logger:
+    """用例发现使用独立 logger，避免刷新 UI 时清空正在执行的运行日志 handler。"""
+    logger = logging.getLogger("dicloak_automation.ui.discovery")
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    return logger
+
+
 def run_selected_tests(
     test_ids: list[str],
     log_queue: queue.Queue,
@@ -124,7 +139,7 @@ def run_selected_tests(
     2. APP 生命周期（启动 or 连接已有）
     3. CDP 连通性校验 → 释放
     4. 构建 suite → 过滤选中用例 → 优先级排序
-    5. 通过 AutomationTextRunner 执行（含恢复/截图/重试）
+    5. 通过 AutomationRunner._run_suite() 执行（含恢复/截图/重试/flaky 统计）
     6. FeishuNotifier.send_summary() 飞书通知
     7. 关闭 APP / 释放 CDP
 
@@ -133,15 +148,23 @@ def run_selected_tests(
         log_queue: 实时日志推送队列，结束时放入 None 作为哨兵。
         attach_existing_app: True=连接已打开 APP，False=自动启动新 APP。
     """
-    config = _build_config()
-    logger = setup_logger(config)
+    if not _RUN_LOCK.acquire(blocking=False):
+        log_queue.put("已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。")
+        log_queue.put(None)
+        return
 
-    # ── 挂载 UI 日志 Handler ──
-    ui_handler = _QueueLogHandler(log_queue)
-    ui_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    logger.addHandler(ui_handler)
+    logger: logging.Logger | None = None
+    ui_handler: _QueueLogHandler | None = None
 
     try:
+        config = _build_config()
+        logger = setup_logger(config, reset=True)
+
+        # ── 挂载 UI 日志 Handler ──
+        ui_handler = _QueueLogHandler(log_queue)
+        ui_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logger.addHandler(ui_handler)
+
         # ── 1. 环境预检 ──
         from core.precheck import EnvironmentPrechecker
 
@@ -198,10 +221,7 @@ def run_selected_tests(
         # ── 4. 执行 suite ──
         try:
             stream = _QueueStream(log_queue)
-            test_runner = AutomationTextRunner(stream=stream, verbosity=2)
-            result = test_runner.run(filtered)
-
-            run_result: RunResult = result.run_result
+            run_result: RunResult = runner._run_suite(filtered, stream=stream)
 
             # ── 5. 飞书通知 ──
             runner.notifier.send_summary(run_result)
@@ -224,7 +244,12 @@ def run_selected_tests(
             if not attach_existing_app:
                 app_manager.close()
     except Exception as exc:
-        logger.error("执行器内部异常: %s", exc, exc_info=True)
+        if logger:
+            logger.error("执行器内部异常: %s", exc, exc_info=True)
+        else:
+            log_queue.put(f"执行器启动失败: {exc}")
     finally:
-        logger.removeHandler(ui_handler)
+        if logger and ui_handler:
+            logger.removeHandler(ui_handler)
+        _RUN_LOCK.release()
         log_queue.put(None)  # 哨兵：通知 UI 执行结束

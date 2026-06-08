@@ -85,12 +85,17 @@ def _case_counts() -> dict[str, int]:
     return counts
 
 
-case_counts = _case_counts()
-summary_modules = ["环境管理", "全局设置", "环境分组管理", "成员管理"]
-cols = st.columns(len(summary_modules) + 1)
-for index, module_name in enumerate(summary_modules):
-    cols[index].metric(module_name, str(case_counts.get(module_name, 0)))
-cols[-1].metric("总用例", str(sum(case_counts.values())))
+try:
+    case_counts = _case_counts()
+except Exception as exc:
+    st.warning(f"用例统计暂不可用：{exc}")
+    st.caption("请先确认 `config/config.yaml` 存在且格式正确；也可以运行 `python run.py --config config/config.yaml --precheck` 排查。")
+else:
+    summary_modules = ["环境管理", "全局设置", "环境分组管理", "成员管理"]
+    cols = st.columns(len(summary_modules) + 1)
+    for index, module_name in enumerate(summary_modules):
+        cols[index].metric(module_name, str(case_counts.get(module_name, 0)))
+    cols[-1].metric("总用例", str(sum(case_counts.values())))
 
 st.divider()
 
@@ -98,10 +103,10 @@ st.divider()
 st.subheader("📌 快速入口")
 c1, c2, c3 = st.columns(3)
 with c1:
-    st.page_link("ui/pages/01_执行用例.py", label="▶ 执行用例", icon="🧪")
+    st.page_link("pages/01_执行用例.py", label="▶ 执行用例", icon="🧪")
     st.caption("选择模块/用例 → 运行 → 实时查看日志和结果")
 with c2:
-    st.page_link("ui/pages/02_运行历史.py", label="📋 运行历史", icon="📂")
+    st.page_link("pages/02_运行历史.py", label="📋 运行历史", icon="📂")
     st.caption("浏览历史 log 文件，回顾每次运行统计")
 with c3:
     st.info("💡 更多页面：在 `ui/pages/` 目录新增 `.py` 文件即可自动注册")

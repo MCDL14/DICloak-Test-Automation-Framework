@@ -11,6 +11,14 @@ from pages.base_page import BasePage
 
 class EnvironmentPage(BasePage):
     locator_file = "environment_locators.yaml"
+    _ENVIRONMENT_HEADER_ALIASES = {
+        "环境序号": ("环境序号", "序号"),
+        "环境名称": ("环境名称", "名称"),
+        "环境分组": ("环境分组", "分组"),
+        "备注": ("备注",),
+        "标签": ("标签",),
+        "操作": ("操作",),
+    }
 
     def recover_to_module_home(self) -> None:
         # Module recovery owns only Environment Management state. The global
@@ -912,6 +920,23 @@ class EnvironmentPage(BasePage):
         value = self.cdp.evaluate(
             """
             () => {
+                const normalizeHeader = (value) => {
+                    const text = String(value || "")
+                        .replace(/\\s+/g, "")
+                        .replace(/升序/g, "")
+                        .replace(/降序/g, "")
+                        .replace(/排序/g, "")
+                        .replace(/[▲▼]/g, "")
+                        .trim();
+                    const aliases = {
+                        "环境序号": ["环境序号", "序号"],
+                        "环境名称": ["环境名称", "名称"],
+                    };
+                    for (const [canonical, values] of Object.entries(aliases)) {
+                        if (values.some((item) => text === item || text.includes(item))) return canonical;
+                    }
+                    return text;
+                };
                 const th = (() => {
                     const visible = (el) => {
                         const rect = el.getBoundingClientRect();
@@ -919,7 +944,7 @@ class EnvironmentPage(BasePage):
                     };
                     return Array.from(document.querySelectorAll(".el-table__header th, thead th"))
                         .filter(visible)
-                        .find((item) => (item.innerText || item.textContent || "").trim().includes("环境序号"));
+                        .find((item) => normalizeHeader(item.innerText || item.textContent) === "环境序号");
                 })();
                 if (!th) return "unknown";
                 if (th.classList.contains("ascending")) return "ascending";
@@ -1040,7 +1065,9 @@ class EnvironmentPage(BasePage):
             }
             """
         )
-        return value if isinstance(value, list) else []
+        if not isinstance(value, list):
+            return []
+        return [self._canonical_environment_header(str(item)) for item in value if str(item).strip()]
 
     def environment_business_header_texts(self) -> list[str]:
         return [
@@ -1150,13 +1177,14 @@ class EnvironmentPage(BasePage):
     def wait_header_order(self, expected_prefix: list[str], timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
         deadline = time.time() + timeout_seconds
+        expected = [self._canonical_environment_header(item) for item in expected_prefix if str(item).strip()]
         last_headers: list[str] = []
         while time.time() < deadline:
             last_headers = self.environment_header_texts()
-            if last_headers[: len(expected_prefix)] == expected_prefix:
+            if last_headers[: len(expected)] == expected:
                 return
             time.sleep(0.5)
-        raise TimeoutError(f"header order did not match expected prefix: expected={expected_prefix}, actual={last_headers}")
+        raise TimeoutError(f"header order did not match expected prefix: expected={expected}, actual={last_headers}")
 
     def wait_business_headers_equal(
         self,
@@ -1164,7 +1192,7 @@ class EnvironmentPage(BasePage):
         timeout_seconds: int | None = None,
     ) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
-        expected = [str(item).strip() for item in expected_headers if str(item).strip()]
+        expected = [self._canonical_environment_header(item) for item in expected_headers if str(item).strip()]
         deadline = time.time() + timeout_seconds
         last_headers: list[str] = []
         while time.time() < deadline:
@@ -1905,13 +1933,30 @@ class EnvironmentPage(BasePage):
         return f"""
         () => {{
             const expectedDirection = {direction!r};
+            const normalizeHeader = (value) => {{
+                const text = String(value || "")
+                    .replace(/\\s+/g, "")
+                    .replace(/升序/g, "")
+                    .replace(/降序/g, "")
+                    .replace(/排序/g, "")
+                    .replace(/[▲▼]/g, "")
+                    .trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item || text.includes(item))) return canonical;
+                }}
+                return text;
+            }};
             const visible = (el) => {{
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             }};
             const th = Array.from(document.querySelectorAll(".el-table__header th, thead th"))
                 .filter(visible)
-                .find((item) => (item.innerText || item.textContent || "").trim().includes("环境序号"));
+                .find((item) => normalizeHeader(item.innerText || item.textContent) === "环境序号");
             if (!th) return null;
             return th.querySelector(`.sort-caret.${{expectedDirection}}`) || null;
         }}
@@ -1929,17 +1974,32 @@ class EnvironmentPage(BasePage):
                     && rect.height > 0;
             };
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-            const states = {};
-            const headers = Array.from(document.querySelectorAll(".el-table__header th, thead th"))
-                .filter(visible);
-            for (const th of headers) {
-                const text = clean(th.innerText || th.textContent);
-                const header = text
+            const normalizeHeader = (value) => {
+                const text = clean(value)
                     .replace(/升序/g, "")
                     .replace(/降序/g, "")
                     .replace(/排序/g, "")
                     .replace(/[▲▼]/g, "")
+                    .replace(/\\s+/g, "")
                     .trim();
+                const aliases = {
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                    "操作": ["操作"],
+                };
+                for (const [canonical, values] of Object.entries(aliases)) {
+                    if (values.some((item) => text === item || text.includes(item))) return canonical;
+                }
+                return text;
+            };
+            const states = {};
+            const headers = Array.from(document.querySelectorAll(".el-table__header th, thead th"))
+                .filter(visible);
+            for (const th of headers) {
+                const header = normalizeHeader(th.innerText || th.textContent);
                 if (!header || header === "操作") continue;
                 const controls = Array.from(th.querySelectorAll(".caret-wrapper, .sort-caret, [class*='sort']"))
                     .filter((item) => !item.classList.contains("cell"))
@@ -2151,6 +2211,21 @@ class EnvironmentPage(BasePage):
         return f"""
         () => {{
             const expectedText = {field_text!r};
+            const normalizeField = (value) => {{
+                const text = String(value || "").replace(/\\s+/g, "").trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item)) return canonical;
+                }}
+                return text;
+            }};
+            const expectedCanonical = normalizeField(expectedText);
             const visible = (el) => {{
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
@@ -2159,7 +2234,7 @@ class EnvironmentPage(BasePage):
                 .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
             for (const dialog of dialogs.reverse()) {{
                 const item = Array.from(dialog.querySelectorAll(".sortable"))
-                    .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText);
+                    .find((el) => visible(el) && normalizeField(el.innerText || el.textContent) === expectedCanonical);
                 if (item) return item;
             }}
             return null;
@@ -2170,6 +2245,21 @@ class EnvironmentPage(BasePage):
         return f"""
         () => {{
             const expectedText = {field_text!r};
+            const normalizeField = (value) => {{
+                const text = String(value || "").replace(/\\s+/g, "").trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item)) return canonical;
+                }}
+                return text;
+            }};
+            const expectedCanonical = normalizeField(expectedText);
             const visible = (el) => {{
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
@@ -2178,7 +2268,7 @@ class EnvironmentPage(BasePage):
                 .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
             for (const dialog of dialogs.reverse()) {{
                 const item = Array.from(dialog.querySelectorAll(".sortable"))
-                    .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText);
+                    .find((el) => visible(el) && normalizeField(el.innerText || el.textContent) === expectedCanonical);
                 if (!item) continue;
                 return item.querySelector(".sortable-icon, .icon-sort") || item;
             }}
@@ -4050,6 +4140,27 @@ class EnvironmentPage(BasePage):
         () => {{
             const expectedSerial = {str(serial).strip()!r};
             const expectedHeader = {header_text!r};
+            const normalizeHeader = (value) => {{
+                const text = String(value || "")
+                    .replace(/\\s+/g, "")
+                    .replace(/升序/g, "")
+                    .replace(/降序/g, "")
+                    .replace(/排序/g, "")
+                    .replace(/[▲▼]/g, "")
+                    .trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                    "操作": ["操作"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item || text.includes(item))) return canonical;
+                }}
+                return text;
+            }};
             const visible = (el) => {{
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
@@ -4057,9 +4168,9 @@ class EnvironmentPage(BasePage):
             const clean = (value) => String(value || "").trim();
             const headers = Array.from(document.querySelectorAll(".el-table__header th, thead th"))
                 .filter(visible)
-                .map((th) => clean(th.innerText || th.textContent));
-            const serialIndex = headers.findIndex((text) => text.includes("环境序号"));
-            const targetIndex = headers.findIndex((text) => text.includes(expectedHeader));
+                .map((th) => normalizeHeader(th.innerText || th.textContent));
+            const serialIndex = headers.findIndex((text) => text === "环境序号");
+            const targetIndex = headers.findIndex((text) => text === normalizeHeader(expectedHeader));
             if (targetIndex < 0) return "";
             const rows = Array.from(document.querySelectorAll(".el-table__row, tbody tr"))
                 .filter(visible);
@@ -4080,6 +4191,27 @@ class EnvironmentPage(BasePage):
         return f"""
         () => {{
             const expectedSerial = {str(serial).strip()!r};
+            const normalizeHeader = (value) => {{
+                const text = String(value || "")
+                    .replace(/\\s+/g, "")
+                    .replace(/升序/g, "")
+                    .replace(/降序/g, "")
+                    .replace(/排序/g, "")
+                    .replace(/[▲▼]/g, "")
+                    .trim();
+                const aliases = {{
+                    "环境序号": ["环境序号", "序号"],
+                    "环境名称": ["环境名称", "名称"],
+                    "环境分组": ["环境分组", "分组"],
+                    "备注": ["备注"],
+                    "标签": ["标签"],
+                    "操作": ["操作"],
+                }};
+                for (const [canonical, values] of Object.entries(aliases)) {{
+                    if (values.some((item) => text === item || text.includes(item))) return canonical;
+                }}
+                return text;
+            }};
             const visible = (el) => {{
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
@@ -4087,9 +4219,9 @@ class EnvironmentPage(BasePage):
             const clean = (value) => String(value || "").trim();
             const headers = Array.from(document.querySelectorAll(".el-table__header th, thead th"))
                 .filter(visible)
-                .map((th) => clean(th.innerText || th.textContent));
-            const serialIndex = headers.findIndex((text) => text.includes("环境序号"));
-            const tagIndex = headers.findIndex((text) => text.includes("标签"));
+                .map((th) => normalizeHeader(th.innerText || th.textContent));
+            const serialIndex = headers.findIndex((text) => text === "环境序号");
+            const tagIndex = headers.findIndex((text) => text === "标签");
             if (tagIndex < 0) return [];
 
             const rows = Array.from(document.querySelectorAll(".el-table__row, tbody tr"))
@@ -4590,11 +4722,13 @@ class EnvironmentPage(BasePage):
 
     def _wait_column_settings_field_relative(self, source_text: str, target_text: str, before: bool) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        source = self._canonical_environment_header(source_text)
+        target = self._canonical_environment_header(target_text)
         while time.time() < deadline:
             order = self._column_settings_field_order()
             try:
-                source_index = order.index(source_text)
-                target_index = order.index(target_text)
+                source_index = order.index(source)
+                target_index = order.index(target)
             except ValueError:
                 source_index = -1
                 target_index = -1
@@ -4626,7 +4760,26 @@ class EnvironmentPage(BasePage):
             }
             """
         )
-        return value if isinstance(value, list) else []
+        if not isinstance(value, list):
+            return []
+        return [self._canonical_environment_header(str(item)) for item in value if str(item).strip()]
+
+    @classmethod
+    def _canonical_environment_header(cls, text: str) -> str:
+        clean = (
+            str(text or "")
+            .replace("升序", "")
+            .replace("降序", "")
+            .replace("排序", "")
+            .replace("▲", "")
+            .replace("▼", "")
+            .strip()
+        )
+        compact = "".join(clean.split())
+        for canonical, aliases in cls._ENVIRONMENT_HEADER_ALIASES.items():
+            if any(compact == alias or compact.find(alias) >= 0 for alias in aliases):
+                return canonical
+        return clean
 
     def _quick_edit_environment_name_input_script(self) -> str:
         return """

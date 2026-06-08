@@ -266,7 +266,7 @@ class AutomationRunner:
             return False
         return True
 
-    def _run_suite(self, suite: unittest.TestSuite) -> RunResult:
+    def _run_suite(self, suite: unittest.TestSuite, stream=None) -> RunResult:
         retry_times = self._retry_times()
         retry_interval_seconds = self._retry_interval_seconds()
         if retry_times > 0:
@@ -274,9 +274,10 @@ class AutomationRunner:
                 suite=suite,
                 retry_times=retry_times,
                 retry_interval_seconds=retry_interval_seconds,
+                stream=stream,
             )
 
-        runner = AutomationTextRunner(stream=sys.stdout, verbosity=2)
+        runner = AutomationTextRunner(stream=stream or sys.stdout, verbosity=2)
         unittest_result = runner.run(suite)
         return unittest_result.run_result
 
@@ -285,6 +286,7 @@ class AutomationRunner:
         suite: unittest.TestSuite,
         retry_times: int,
         retry_interval_seconds: float,
+        stream=None,
     ) -> RunResult:
         tests = list(self._iter_tests(suite))
         aggregate = RunResult(total=len(tests))
@@ -299,7 +301,7 @@ class AutomationRunner:
                 final_result = attempt_result
 
                 if attempt_result.success:
-                    self._write_attempt_output(attempt_output)
+                    self._write_attempt_output(attempt_output, stream=stream)
                     if attempt > 1 and attempt_result.passed > 0:
                         aggregate.flaky += 1
                         self.logger.info(
@@ -327,7 +329,7 @@ class AutomationRunner:
                         )
                         time.sleep(retry_interval_seconds)
                 else:
-                    self._write_attempt_output(attempt_output)
+                    self._write_attempt_output(attempt_output, stream=stream)
             else:
                 if final_result is not None:
                     self._merge_final_test_result(aggregate, final_result)
@@ -349,10 +351,11 @@ class AutomationRunner:
         unittest_result = runner.run(unittest.TestSuite([test]))
         return unittest_result.run_result, output.getvalue()
 
-    def _write_attempt_output(self, output: str) -> None:
+    def _write_attempt_output(self, output: str, stream=None) -> None:
         if output:
-            sys.stdout.write(output)
-            sys.stdout.flush()
+            target = stream or sys.stdout
+            target.write(output)
+            target.flush()
 
     def _reload_test(self, test_id: str) -> unittest.TestCase:
         suite = unittest.defaultTestLoader.loadTestsFromName(test_id)

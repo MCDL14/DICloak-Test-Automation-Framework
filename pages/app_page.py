@@ -20,6 +20,15 @@ class AppPage(BasePage):
         self._wait_until_not_loading(timeout_seconds)
         self._wait_for_app_shell(timeout_seconds)
 
+    def click_app_refresh_button(self) -> None:
+        self._select_active_app_page()
+        self.cdp.click_element_by_script(self._app_refresh_button_script())
+        time.sleep(0.5)
+
+    def reload_app_page(self) -> None:
+        self._select_active_app_page()
+        self.cdp.reload()
+
     def _select_active_app_page(self) -> None:
         page = getattr(self.cdp, "page", None)
         if not page:
@@ -155,6 +164,30 @@ class AppPage(BasePage):
                 return true;
             }
             return false;
+        }
+        """
+
+    def _app_refresh_button_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const icons = Array.from(document.querySelectorAll("i.icon-refresh, .icon-refresh"))
+                .filter(visible)
+                .map((el) => {
+                    const clickable = el.closest("button, [role='button'], a, div") || el;
+                    const rect = clickable.getBoundingClientRect();
+                    return { el: clickable, x: rect.x, y: rect.y, area: rect.width * rect.height };
+                })
+                .filter((item) => item.y < 120 && item.area > 0)
+                .sort((left, right) => left.x - right.x);
+            return icons[0]?.el || null;
         }
         """
 

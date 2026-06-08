@@ -22,6 +22,7 @@ import queue
 import re
 import sys
 import threading
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -33,6 +34,13 @@ if str(_PROJECT_ROOT) not in sys.path:
 import streamlit as st
 
 from streamlit_runner import discover_cases, run_selected_tests
+
+_LOG_IDLE_WARNING_SECONDS = 300
+_LOG_DISPLAY_LINES = 200
+_LOG_DISPLAY_HEIGHT = 420
+_RESULT_SUMMARY_RE = re.compile(
+    r"运行完成 → 总计=(\d+) 通过=(\d+) 失败=(\d+) 错误=(\d+) 跳过=(\d+) flaky=(\d+) 通过率=([\d.]+)%"
+)
 
 # ═══════════════════════════════════════════════════════════════════
 # 页面配置
@@ -49,7 +57,12 @@ st.title("🧪 执行用例")
 def _load_cases() -> list[dict]:
     return discover_cases()
 
-cases = _load_cases()
+try:
+    cases = _load_cases()
+except Exception as exc:
+    st.error(f"用例发现失败：{exc}")
+    st.caption("请确认 `config/config.yaml` 存在且格式正确；必要时先运行 `python run.py --config config/config.yaml --precheck`。")
+    st.stop()
 
 # 按模块分组
 by_module: dict[str, list[dict]] = defaultdict(list)
@@ -71,6 +84,30 @@ def _set_all_cases_selected(selected: bool) -> None:
     _set_case_selected(cases, selected)
 
 
+def _case_matches_keyword(case: dict, keyword: str) -> bool:
+    if not keyword:
+        return True
+    haystack = " ".join(
+        str(case.get(field, ""))
+        for field in ("id", "module", "class_name", "method_name")
+    ).lower()
+    return keyword.lower() in haystack
+
+
+def _summary_missing_message(log_text: str) -> tuple[str, str]:
+    if "已有 UI 执行任务正在运行" in log_text:
+        return "warning", "已有 UI 执行任务正在运行，本次没有启动新的用例执行。"
+    if "环境预检失败" in log_text:
+        return "error", "环境预检失败，未进入用例执行阶段。请查看上方日志中的失败项。"
+    if "APP 启动或 CDP 连接失败" in log_text:
+        return "error", "APP 启动或 CDP 连接失败，未进入用例执行阶段。请检查 APP 状态和 CDP 端口。"
+    if "没有匹配到任何用例" in log_text:
+        return "warning", "没有匹配到任何用例，本次未执行。"
+    if "执行器内部异常" in log_text or "执行器启动失败" in log_text:
+        return "error", "执行器内部异常，未能生成结果统计。请查看上方异常日志。"
+    return "warning", "执行完成，但未能解析结果统计。请查看上方日志。"
+
+
 for c in cases:
     st.session_state.setdefault(_case_key(c["id"]), True)
 
@@ -86,6 +123,11 @@ with st.sidebar:
         default=module_names,
         help="取消勾选可隐藏对应模块的用例",
     )
+    case_keyword = st.text_input(
+        "搜索用例",
+        placeholder="输入模块、类名、方法名或 test_id",
+        help="只影响当前页面展示和本次运行范围，不会清空已勾选状态。",
+    ).strip()
 
     st.divider()
 
@@ -117,12 +159,20 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════════
 
 selected_ids: list[str] = []
+visible_case_count = 0
 
 for mod in module_names:
     if mod not in show_modules:
         continue
 
-    mod_cases = by_module[mod]
+    mod_cases = [
+        case
+        for case in by_module[mod]
+        if _case_matches_keyword(case, case_keyword)
+    ]
+    if not mod_cases:
+        continue
+    visible_case_count += len(mod_cases)
     # 模块折叠面板：用例数 ≤ 3 时默认展开
     with st.expander(
         f"📁 {mod}（{len(mod_cases)} 条）",
@@ -154,6 +204,9 @@ for mod in module_names:
             )
             if checked:
                 selected_ids.append(c["id"])
+
+if visible_case_count == 0:
+    st.info("当前筛选条件下没有可显示的用例。")
 
 # ═══════════════════════════════════════════════════════════════════
 # 运行按钮
@@ -191,6 +244,8 @@ if run_clicked:
 
     # 前台轮询 queue，实时刷新日志
     log_lines: list[str] = []
+    last_log_time = time.time()
+    idle_warning_shown = False
     status_placeholder.info("⏳ 正在执行...")
 
     while True:
@@ -199,12 +254,21 @@ if run_clicked:
             if msg is None:          # 哨兵：执行结束
                 break
             log_lines.append(msg)
-            # 只保留最近 200 行避免 UI 卡顿
-            display = "\n".join(log_lines[-200:])
-            log_placeholder.code(display, language="text")
+            last_log_time = time.time()
+            idle_warning_shown = False
+            # 只保留最近日志行避免 UI 卡顿
+            display = "\n".join(log_lines[-_LOG_DISPLAY_LINES:])
+            log_placeholder.code(display, language="text", height=_LOG_DISPLAY_HEIGHT)
         except queue.Empty:
-            # 超时无新日志，继续等待
-            pass
+            if not thread.is_alive():
+                break
+            idle_seconds = int(time.time() - last_log_time)
+            if idle_seconds >= _LOG_IDLE_WARNING_SECONDS and not idle_warning_shown:
+                status_placeholder.warning(
+                    f"⏳ 后台仍在执行，但已 {idle_seconds} 秒没有新日志。"
+                    "如果 APP/CDP 或系统弹窗卡住，请到本机窗口检查当前状态。"
+                )
+                idle_warning_shown = True
 
     # ═══════════════════════════════════════════════════════════════
     # 结果解析与展示
@@ -213,10 +277,7 @@ if run_clicked:
     full_text = "\n".join(log_lines)
 
     # 用正则从最终总结行提取统计
-    m = re.search(
-        r"运行完成 → 总计=(\d+) 通过=(\d+) 失败=(\d+) 错误=(\d+) 跳过=(\d+) flaky=(\d+) 通过率=([\d.]+)%",
-        full_text,
-    )
+    m = _RESULT_SUMMARY_RE.search(full_text)
     if m:
         total, passed, failed, errors, skipped, flaky, rate = m.groups()
         total, passed, failed, errors, skipped, flaky = (
@@ -247,4 +308,8 @@ if run_clicked:
 
         status_placeholder.success("✅ 执行完成")
     else:
-        status_placeholder.warning("⚠️ 执行完成，未能解析结果统计。请查看上方日志。")
+        level, message = _summary_missing_message(full_text)
+        if level == "error":
+            status_placeholder.error(f"❌ {message}")
+        else:
+            status_placeholder.warning(f"⚠️ {message}")

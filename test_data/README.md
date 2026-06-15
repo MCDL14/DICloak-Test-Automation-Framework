@@ -61,16 +61,19 @@ test_data:
 7. 编辑固定打开网址用例的预置环境名称和目标 URL。
 8. 成员导出用例使用的预期 xlsx 文件、导出目录和文件名正则。
 9. 成员 open API 用例使用的接口地址、目标外部成员 ID、内部成员信息、到期停用参数、状态码重试次数和重试间隔；配置集中在 `test_data.api_member_edit`，并按 `internal_member`、`disuse`、`status_retry` 小块分组，避免 YAML 过度膨胀。
+10. 代理管理创建自定义代理用例使用的代理主机、端口、账号和密码；配置集中在 `test_data.proxy_custom`。Windows 系统代理主机和端口属于运行环境配置，统一维护在 `config.yaml` 顶层 `windows_system_proxy.host/port`，默认 `127.0.0.1:7897`。
 
 成员 open API 的真实 token 属于敏感信息，优先通过运行进程环境变量 `DICLOAK_API_MEMBER_EDIT_TOKEN` 注入；如必须写入本地配置，只能写入被 `.gitignore` 排除的 `config/test_data.yaml`，不要写入 `config/test_data.example.yaml`、测试代码或文档。目标外部成员 ID 可通过 `DICLOAK_API_MEMBER_EDIT_MEMBER_ID` 临时覆盖。
 
-后续代理管理、扩展管理、环境分组管理、成员管理、全局设置等模块新增用例时，只把跨机器路径、外部文件、预置业务数据和少量流程参数写入 `config/test_data.yaml`。用例自己创建、修改、删除的临时数据，应优先使用统一命名工具自动生成。
+代理管理创建自定义代理用例的真实账号和密码属于敏感信息，优先通过运行进程环境变量 `DICLOAK_PROXY_CUSTOM_ACCOUNT`、`DICLOAK_PROXY_CUSTOM_PASSWORD` 注入；如必须写入本地配置，只能写入被 `.gitignore` 排除的 `config/test_data.yaml`，不要写入 `config/test_data.example.yaml`、测试代码或文档。
+
+后续扩展管理、环境分组管理、成员管理、全局设置等模块新增用例时，只把跨机器路径、外部文件、预置业务数据和少量流程参数写入 `config/test_data.yaml`。用例自己创建、修改、删除的临时数据，应优先使用统一命名工具自动生成。
 
 ## 提交规则
 
 不要提交以下内容：
 
-1. 真实账号、密码、飞书 webhook、成员 open API token。
+1. 真实账号、密码、飞书 webhook、成员 open API token、代理账号和代理密码。
 2. 真实导入、导出、成员、书签、扩展包、抓包工具文件。
 3. 自动化运行过程中生成的导出文件、日志、截图、报告。
 

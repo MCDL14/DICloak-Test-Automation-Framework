@@ -50,6 +50,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "timeout": 10,
     },
     "report": {"enabled": False, "html_file": "test_report.html", "port": 9091},
+    "windows_system_proxy": {
+        "host": "127.0.0.1",
+        "port": "7897",
+    },
     "timeouts": {
         "element_seconds": 10,
         "script_element_seconds": 10,
@@ -160,6 +164,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "times": 3,
                 "interval_seconds": 1,
             },
+        },
+        "proxy_custom": {
+            "host": "accel.ipflygates.com",
+            "port": "5001",
+            "account": "",
+            "password": "",
         },
         "batch_import": {"file_dir": "", "file_name": ""},
         "batch_export": {"export_dir": "", "export_file_name": ""},

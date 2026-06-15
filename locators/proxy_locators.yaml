@@ -1,0 +1,51 @@
+# 左侧菜单“代理管理”候选集合。页面对象会在这些候选元素中按精确文案点击。
+proxy_menu_candidates:
+  selector: ".el-menu-item, li, a, button, span, div"
+
+# 页面或弹层内按可见文本点击的候选集合，例如“创建代理”“确定”。
+visible_text_candidates:
+  selector: "button, div, span, a"
+
+# 页面或弹层内的普通按钮候选。具体操作会继续按按钮文案或行内位置筛选。
+button:
+  selector: "button, .el-button, [role='button']"
+
+# 可能遮挡代理列表的弹层。
+blocking_overlay:
+  selector: ".el-drawer, .el-dialog, .el-message-box"
+
+# 创建代理等表单弹层候选。用于限定输入框、按钮和检测结果范围。
+dialog_or_drawer:
+  selector: ".el-drawer, .el-dialog"
+
+# 弹层关闭按钮候选。恢复流程会用它关闭阻塞弹窗、抽屉或确认框。
+overlay_close_button:
+  selector: ".el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn, .el-overlay button[aria-label='Close']"
+
+# Element Plus 对话框候选。创建代理和二次确认弹窗会使用。
+dialog:
+  selector: ".el-dialog"
+
+# Element Plus 消息确认框候选。删除代理的二次确认会使用。
+message_box:
+  selector: ".el-message-box"
+
+# Element Plus 二次确认或气泡确认浮层候选。删除确认在不同版本可能表现为 message box、dialog 或 popconfirm。
+confirmation_overlay:
+  selector: ".el-overlay, .el-overlay-message-box, .el-message-box, .el-dialog, .el-popconfirm, .el-popper, .el-popover"
+
+# 代理列表表格容器候选。用于判断列表是否已加载。
+table_container:
+  selector: ".el-table, table"
+
+# 代理列表表格行候选。按代理 ID、主机和端口动态定位仍在页面对象里完成。
+table_row:
+  selector: ".el-table__row, tbody tr"
+
+# 代理列表表格单元格候选。用于读取行内信息和定位操作列。
+table_cell:
+  selector: ".el-table__cell, td"
+
+# 页面或弹层内的原生输入框候选。创建代理时按表单语义或顺序写入数据。
+input:
+  selector: "input, textarea"

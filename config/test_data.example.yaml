@@ -142,6 +142,13 @@ test_data:
       times: 3
       interval_seconds: 1
 
+  # 创建自定义代理用例数据；账号/密码建议放本地 config/test_data.yaml 或环境变量
+  proxy_custom:
+    host: "accel.ipflygates.com"
+    port: "5001"
+    account: ""
+    password: ""
+
   # 批量导入数据
   batch_import:
     # 批量导入文件所在目录

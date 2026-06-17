@@ -35,6 +35,7 @@ from core.remote_runner import (
     RemoteHost,
     RemoteRunError,
     RemoteRunRequest,
+    build_remote_command,
     collect_remote_artifacts,
     load_remote_hosts,
     run_remote_health_check,
@@ -133,11 +134,80 @@ def discover_remote_hosts() -> list[dict[str, str]]:
             "name": host.name,
             "platform": host.platform,
             "host": host.host,
+            "port": str(host.port),
             "username": host.username,
+            "project_dir": host.project_dir,
+            "python": host.python,
             "config": host.config,
+            "venv_activate": host.venv_activate,
+            "command_prefix": host.command_prefix,
+            "auth": _remote_auth_label(host),
         }
         for host in hosts
     ]
+
+
+def preview_remote_command(
+    host_name: str,
+    scope: str,
+    value: str,
+    *,
+    attach_existing_app: bool = False,
+) -> str:
+    """返回远程执行命令预览，供 UI 展示；不会连接 SSH 或读取密码."""
+    host = _remote_host_by_name(host_name)
+    if host is None:
+        raise RuntimeError(f"远程节点不存在或未启用：{host_name}")
+    request = RemoteRunRequest(
+        scope=scope,
+        value=value,
+        attach_existing_app=attach_existing_app,
+    )
+    return build_remote_command(host, request)
+
+
+def remote_capability_matrix() -> list[dict[str, str]]:
+    """远程执行 UI 展示用的平台能力矩阵."""
+    return [
+        {
+            "平台": "Windows",
+            "远程/本地执行": "支持",
+            "CDP 自动化": "支持",
+            "APP 托管启动": "支持",
+            "系统代理": "支持启停和恢复",
+            "原生文件选择器": "支持 Windows UIAutomation 兜底",
+            "产物拉取": "本机产物直接保留；远程节点可拉取",
+            "已验证范围": "Windows P0 主链路，代理检测受外部代理连通性影响",
+        },
+        {
+            "平台": "Linux",
+            "远程/本地执行": "支持 SSH 远程 CLI",
+            "CDP 自动化": "支持",
+            "APP 托管启动": "已验证",
+            "系统代理": "暂不支持自动启停；代理管理继续执行业务流程",
+            "原生文件选择器": "暂不支持",
+            "产物拉取": "支持 logs/screenshots/reports",
+            "已验证范围": "precheck、environment_group_management",
+        },
+        {
+            "平台": "macOS",
+            "远程/本地执行": "支持 SSH 远程 CLI",
+            "CDP 自动化": "支持",
+            "APP 托管启动": "按远端配置和图形会话分层验证",
+            "系统代理": "暂不支持自动启停；代理管理不跳过",
+            "原生文件选择器": "暂不支持",
+            "产物拉取": "支持 logs/screenshots/reports",
+            "已验证范围": "P0 全量、environment_group_management、代理管理业务流程",
+        },
+    ]
+
+
+def _remote_auth_label(host: RemoteHost) -> str:
+    if host.key_filename:
+        return "SSH key"
+    if host.password_env:
+        return f"password_env:{host.password_env}"
+    return "SSH agent/key"
 
 
 def _remote_host_by_name(host_name: str) -> RemoteHost | None:

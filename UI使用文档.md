@@ -145,6 +145,13 @@ Stop-Process -Id <OwningProcess> -Force
 
 远程节点模式暂不按左侧勾选的 test id 过滤；请使用侧边栏里的远程运行范围。
 
+远程节点模式会展示当前节点状态：
+
+- 节点名称、平台、SSH 地址。
+- 远端项目目录、运行配置、Python 命令、虚拟环境激活脚本。
+- 认证来源，只显示 `SSH key`、`SSH agent/key` 或 `password_env:<环境变量名>`，不显示真实密码。
+- 远程命令预览，用于在启动前确认实际会执行的 `cd <project_dir> && . <venv_activate> && python run.py ...`。
+
 远程节点模式还提供“检查远程节点”按钮。该按钮只做只读健康检查，不启动 APP、不执行用例。检查项包括：
 
 - 项目目录是否存在。
@@ -181,6 +188,24 @@ remote_artifacts/<node-name>/<yyyyMMdd_HHmmss>/
 ```
 
 `remote_artifacts/` 已加入 `.gitignore`，不要提交远程日志、截图或报告。
+
+远程任务结束后，如果日志中包含健康检查、退出码或产物归档信息，执行页会额外展示“远程执行摘要”：
+
+- `[PASS]` / `[FAIL]` 数量。
+- 远程退出码和耗时。
+- 健康检查失败项数量。
+- 远程产物归档目录。
+- `[FAIL]` 明细行。
+
+#### 远程节点能力矩阵
+
+执行页会展示 Windows、Linux、macOS 的远程节点能力矩阵，避免不同平台边界混淆：
+
+| 平台 | 远程/本地执行 | CDP 自动化 | APP 托管启动 | 系统代理 | 原生文件选择器 | 产物拉取 | 已验证范围 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows | 支持 | 支持 | 支持 | 支持启停和恢复 | 支持 Windows UIAutomation 兜底 | 本机产物直接保留；远程节点可拉取 | Windows P0 主链路，代理检测受外部代理连通性影响 |
+| Linux | 支持 SSH 远程 CLI | 支持 | 已验证 | 暂不支持自动启停；代理管理继续执行业务流程 | 暂不支持 | 支持 `logs/screenshots/reports` | `precheck`、`environment_group_management` |
+| macOS | 支持 SSH 远程 CLI | 支持 | 按远端配置和图形会话分层验证 | 暂不支持自动启停；代理管理不跳过 | 暂不支持 | 支持 `logs/screenshots/reports` | P0 全量、`environment_group_management`、代理管理业务流程 |
 
 #### 步骤 4：执行
 - 点击 "▶ 运行选中（N 条）" 按钮
@@ -482,6 +507,7 @@ streamlit run ui/app.py --server.port 8502
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| 2.4 | 2026-06-17 | 远程节点模式增强：侧边栏展示节点非敏感配置摘要和远程命令预览；执行结果区展示远程健康检查/退出码/产物归档摘要；新增 Windows/Linux/macOS 远程节点能力矩阵 |
 | 2.3 | 2026-06-16 | 补充 Linux 远程节点真实验证：健康检查通过，环境分组模块 `total=6 passed=6 failed=0 errors=0 skipped=0 flaky=0`，远程产物拉取到 `remote_artifacts/linux-ubuntu/20260616_191350`，并确认运行后无 `dicloak/ginsbrowser` 和 CDP 9222 残留 |
 | 2.2 | 2026-06-16 | 远程节点模式新增“远程执行后拉取产物”开关，执行后通过 SFTP 拉取本次新增/修改的 `logs`、`screenshots`、`reports` 到 `remote_artifacts/<node>/<timestamp>`；验证 Mac 环境分组模块通过并拉取 run log |
 | 2.1 | 2026-06-16 | 远程节点模式新增“检查远程节点”按钮，支持只读检查项目目录、run.py、配置、venv、Python 依赖、配置加载和 APP 路径；验证 Mac 健康检查通过，并验证项目目录缺失时会明确 `[FAIL] project_dir missing` |

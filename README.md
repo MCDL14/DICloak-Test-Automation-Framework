@@ -160,6 +160,8 @@ python run.py --config <remote-config> --module <目录模块>
 python run.py --config <remote-config> --case <单用例名>
 ```
 
+远程节点模式会在侧边栏展示当前节点的非敏感配置摘要，包括平台、SSH 地址、远端项目目录、配置文件、Python、虚拟环境和认证来源；不会展示真实密码。选择运行范围后，UI 会展示即将执行的远程命令预览，便于在正式启动前确认 `project_dir`、`venv_activate`、`config` 和 `--attach-existing-app` 是否符合预期。
+
 执行前可以先在 UI 中点击“检查远程节点”。该检查只读，不启动 APP、不跑用例，会检查：
 
 - 远端项目目录是否存在。
@@ -184,6 +186,14 @@ python run.py --config <remote-config> --case <单用例名>
 - 远端项目、虚拟环境、依赖、APP 图形会话和配置文件需提前准备好。
 - 第一版不自动同步代码、不自动安装依赖。
 - 远程日志进入 UI 前会做基础脱敏，隐藏 `apiSecret`、`BOOT_TOKEN`、`USER_PASSWD`、`password`、`token` 等字段。
+
+远程节点能力矩阵会在 UI 中展示当前平台边界：
+
+| 平台 | 远程/本地执行 | CDP 自动化 | APP 托管启动 | 系统代理 | 原生文件选择器 | 已验证范围 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Windows | 支持 | 支持 | 支持 | 支持启停和恢复 | 支持 Windows UIAutomation 兜底 | Windows P0 主链路，代理检测受外部代理连通性影响 |
+| Linux | 支持 SSH 远程 CLI | 支持 | 已验证 | 暂不支持自动启停；代理管理继续执行业务流程 | 暂不支持 | precheck、environment_group_management |
+| macOS | 支持 SSH 远程 CLI | 支持 | 按远端配置和图形会话分层验证 | 暂不支持自动启停；代理管理不跳过 | 暂不支持 | P0 全量、environment_group_management、代理管理业务流程 |
 
 远程执行后可以勾选“远程执行后拉取产物”，UI 会把本次运行开始后修改过的远端 `logs/`、`screenshots/`、`reports/` 拉取到本机：
 

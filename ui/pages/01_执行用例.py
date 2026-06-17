@@ -37,6 +37,8 @@ from streamlit_runner import (
     check_remote_host,
     discover_cases,
     discover_remote_hosts,
+    preview_remote_command,
+    remote_capability_matrix,
     run_remote_cli,
     run_selected_tests,
 )
@@ -51,6 +53,9 @@ _CLI_SUMMARY_RE = re.compile(
     r"Final test summary:\s*total=(\d+)\s+passed=(\d+)\s+failed=(\d+)"
     r"\s+errors=(\d+)\s+skipped=(\d+)\s+flaky=(\d+)"
 )
+_REMOTE_EXIT_RE = re.compile(r"远程(?:执行完成|健康检查结束) → 节点=([^\s]+) 退出码=(\d+) 耗时=([\d.]+)s")
+_REMOTE_HEALTH_DONE_RE = re.compile(r"远程健康检查完成 → 失败=(\d+)")
+_REMOTE_ARTIFACT_RE = re.compile(r"远程产物归档 → 文件数=(\d+) 本地目录=(.+)")
 
 _REMOTE_SCOPE_OPTIONS = {
     "远程预检": ("precheck", ""),
@@ -149,6 +154,70 @@ def _parse_result_summary(log_text: str) -> tuple[int, int, int, int, int, int, 
     return None
 
 
+def _remote_log_summary(log_lines: list[str]) -> dict[str, object]:
+    log_text = "\n".join(log_lines)
+    pass_lines = [line for line in log_lines if line.startswith("[PASS]")]
+    fail_lines = [line for line in log_lines if line.startswith("[FAIL]")]
+    exit_match = _REMOTE_EXIT_RE.search(log_text)
+    health_match = _REMOTE_HEALTH_DONE_RE.search(log_text)
+    artifact_match = _REMOTE_ARTIFACT_RE.search(log_text)
+    return {
+        "pass_count": len(pass_lines),
+        "fail_count": len(fail_lines),
+        "fail_lines": fail_lines,
+        "exit": exit_match.groups() if exit_match else None,
+        "health_fail_count": int(health_match.group(1)) if health_match else None,
+        "artifact": artifact_match.groups() if artifact_match else None,
+    }
+
+
+def _render_remote_result_summary(log_lines: list[str]) -> None:
+    summary = _remote_log_summary(log_lines)
+    has_remote_detail = any(summary.get(key) for key in ("pass_count", "fail_count", "exit", "artifact"))
+    if not has_remote_detail:
+        return
+
+    with st.expander("远程执行摘要", expanded=True):
+        col_pass, col_fail, col_exit = st.columns(3)
+        col_pass.metric("[PASS]", summary["pass_count"])
+        col_fail.metric("[FAIL]", summary["fail_count"])
+        exit_info = summary["exit"]
+        if exit_info:
+            _, exit_code, duration = exit_info
+            col_exit.metric("退出码", exit_code, f"{duration}s")
+        else:
+            col_exit.metric("退出码", "-")
+
+        health_fail_count = summary.get("health_fail_count")
+        if health_fail_count is not None:
+            if health_fail_count == 0:
+                st.success("远程健康检查通过。")
+            else:
+                st.error(f"远程健康检查未通过：失败项数量={health_fail_count}")
+
+        fail_lines = summary.get("fail_lines") or []
+        if fail_lines:
+            st.code("\n".join(fail_lines), language="text")
+
+        artifact = summary.get("artifact")
+        if artifact:
+            file_count, local_dir = artifact
+            st.info(f"远程产物已归档：文件数={file_count}，本地目录={local_dir}")
+
+
+def _remote_host_details(host: dict[str, str]) -> list[dict[str, str]]:
+    return [
+        {"字段": "节点", "值": host.get("name", "")},
+        {"字段": "平台", "值": host.get("platform") or "unknown"},
+        {"字段": "SSH", "值": f"{host.get('username', '')}@{host.get('host', '')}:{host.get('port', '22')}"},
+        {"字段": "项目目录", "值": host.get("project_dir", "")},
+        {"字段": "配置", "值": host.get("config", "")},
+        {"字段": "Python", "值": host.get("python", "")},
+        {"字段": "虚拟环境", "值": host.get("venv_activate") or "-"},
+        {"字段": "认证", "值": host.get("auth", "")},
+    ]
+
+
 @st.cache_data(ttl=30, show_spinner="正在读取远程节点...")
 def _load_remote_hosts() -> list[dict[str, str]]:
     return discover_remote_hosts()
@@ -215,6 +284,7 @@ with st.sidebar:
     remote_value = ""
     remote_attach_existing = False
     remote_collect_artifacts = False
+    selected_remote_host: dict[str, str] | None = None
     health_clicked = False
 
     if execution_mode == "远程节点":
@@ -228,6 +298,8 @@ with st.sidebar:
             f"{host['name']} ({host.get('platform') or 'unknown'} {host['username']}@{host['host']})"
             for host in remote_hosts
         ]
+        if not remote_hosts:
+            st.warning("未发现启用的远程节点；请根据 `config/remote_hosts.example.yaml` 创建 `config/remote_hosts.yaml`。")
         selected_host_label = st.selectbox(
             "远程节点",
             options=host_labels,
@@ -235,7 +307,13 @@ with st.sidebar:
             help="节点来自 `config/remote_hosts.yaml`，真实密码请使用环境变量或 SSH key。",
         )
         if selected_host_label and host_labels:
-            remote_host_name = remote_hosts[host_labels.index(selected_host_label)]["name"]
+            selected_remote_host = remote_hosts[host_labels.index(selected_host_label)]
+            remote_host_name = selected_remote_host["name"]
+
+        if selected_remote_host:
+            with st.expander("远程节点状态", expanded=True):
+                st.table(_remote_host_details(selected_remote_host))
+                st.caption("健康检查通过后再执行模块或全量任务，能更早发现项目目录、依赖或 APP 路径问题。")
 
         health_clicked = st.button(
             "检查远程节点",
@@ -280,6 +358,19 @@ with st.sidebar:
             help="执行结束后拉取远端本次新增或修改的 logs、screenshots、reports 到本机 remote_artifacts。",
         )
 
+        if selected_remote_host:
+            try:
+                command_preview = preview_remote_command(
+                    remote_host_name,
+                    remote_scope,
+                    remote_value,
+                    attach_existing_app=remote_attach_existing,
+                )
+                with st.expander("远程命令预览", expanded=False):
+                    st.code(command_preview, language="bash")
+            except Exception as exc:
+                st.warning(f"远程命令预览失败：{exc}")
+
         st.caption("远程模式暂不按左侧勾选用例执行；请使用上面的运行范围。")
 
     attach_existing = st.checkbox(
@@ -291,6 +382,10 @@ with st.sidebar:
 
     st.divider()
     st.caption(f"共 {len(cases)} 条用例 / {len(module_names)} 个模块")
+
+if execution_mode == "远程节点":
+    with st.expander("远程节点能力矩阵", expanded=True):
+        st.table(remote_capability_matrix())
 
 # ═══════════════════════════════════════════════════════════════════
 # 主体：用例选择列表
@@ -436,6 +531,9 @@ if run_clicked or health_clicked:
     # ═══════════════════════════════════════════════════════════════
 
     full_text = "\n".join(log_lines)
+
+    if health_clicked or execution_mode == "远程节点":
+        _render_remote_result_summary(log_lines)
 
     # 用正则从最终总结行提取统计
     summary = _parse_result_summary(full_text)

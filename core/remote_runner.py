@@ -86,6 +86,8 @@ _SENSITIVE_LOG_PATTERNS = (
     (re.compile(r'("realName"\s*:\s*")[^"]*(")'), r"\1<redacted>\2"),
     (re.compile(r'("idCard"\s*:\s*")[^"]*(")'), r"\1<redacted>\2"),
     (re.compile(r'("mobile"\s*:\s*")[^"]*(")'), r"\1<redacted>\2"),
+    (re.compile(r'("password"\s*:\s*")[^"]*(")', re.IGNORECASE), r"\1<redacted>\2"),
+    (re.compile(r'("token"\s*:\s*")[^"]*(")', re.IGNORECASE), r"\1<redacted>\2"),
     (re.compile(r"(BOOT_TOKEN\s*=\s*)\S+"), r"\1<redacted>"),
     (re.compile(r"(USER_PASSWD\s*=\s*)\S+"), r"\1<redacted>"),
     (re.compile(r"(?i)(password\s*[:=]\s*)[^,\s]+"), r"\1<redacted>"),

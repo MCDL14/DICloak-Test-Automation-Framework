@@ -374,9 +374,10 @@ class EnvironmentGroupPage(BasePage):
 
     def confirm_secondary_dialog(self, preferred_texts: tuple[str, ...] = ("确定", "确认")) -> None:
         last_error: TimeoutError | None = None
+        timeout_ms = config_timeout_seconds(self.config, "page_seconds", 10) * 1000
         for text in preferred_texts:
             try:
-                self.cdp.click_element_by_script(self._active_overlay_button_script(text), timeout=1000)
+                self.cdp.click_element_by_script(self._active_overlay_button_script(text), timeout=timeout_ms)
                 self._wait_for_overlay_closed()
                 return
             except TimeoutError as exc:
@@ -476,15 +477,24 @@ class EnvironmentGroupPage(BasePage):
             const overlaySelector = {self.locator("blocking_overlay")!r};
             const buttonSelector = {self.locator("button")!r};
             const expectedText = {text!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, "");
             const visible = (el) => {{
+                const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
-                return rect.width > 0 && rect.height > 0;
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
             }};
             const overlays = Array.from(document.querySelectorAll(overlaySelector))
                 .filter((el) => visible(el));
             for (const overlay of overlays.reverse()) {{
                 const button = Array.from(overlay.querySelectorAll(buttonSelector))
-                    .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText);
+                    .find((el) => {{
+                        if (!visible(el) || el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+                        const text = clean(el.innerText || el.textContent);
+                        return text === clean(expectedText) || text.includes(clean(expectedText));
+                    }});
                 if (button) return button;
             }}
             return null;
@@ -1171,6 +1181,7 @@ class EnvironmentGroupPage(BasePage):
         () => {{
             const expectedName = {group_name!r};
             const expectedAction = {action_text!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, "");
             const visible = (el) => {{
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -1183,10 +1194,14 @@ class EnvironmentGroupPage(BasePage):
                 .filter(visible);
             for (const row of rows) {{
                 const hasName = Array.from(row.querySelectorAll(__ROW_NAME_CELL_SELECTOR__))
-                    .some((cell) => (cell.innerText || cell.textContent || "").trim() === expectedName);
+                    .some((cell) => {{
+                        const text = clean(cell.innerText || cell.textContent);
+                        const name = clean(expectedName);
+                        return text === name || text.startsWith(name) || text.includes(name);
+                    }});
                 if (!hasName) continue;
                 const actions = Array.from(row.querySelectorAll(__ROW_ACTION_SELECTOR__))
-                    .filter((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedAction)
+                    .filter((el) => visible(el) && clean(el.innerText || el.textContent) === clean(expectedAction))
                     .map((el) => {{
                         const rect = el.getBoundingClientRect();
                         return {{ el, area: rect.width * rect.height }};
@@ -1197,6 +1212,10 @@ class EnvironmentGroupPage(BasePage):
                 if (expectedAction === "删除") {{
                     const cells = Array.from(row.children).filter(visible);
                     const operationCell = cells[cells.length - 1] || row;
+                    const deleteIcon = operationCell.querySelector(".icon-delete");
+                    const deleteButton = deleteIcon?.closest("button, [role='button']");
+                    if (deleteButton && visible(deleteButton)) return deleteButton;
+
                     const iconActions = Array.from(operationCell.querySelectorAll(__ROW_ICON_ACTION_SELECTOR__))
                         .filter(visible)
                         .map((el) => {{

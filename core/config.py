@@ -13,6 +13,9 @@ class ConfigError(Exception):
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "test_data_file": "",
+    "platform": {
+        "name": "auto",
+    },
     "app": {
         "exe_path": "",
         "work_dir": "",
@@ -26,6 +29,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "startup_timeout": 60,
         "shutdown_timeout": 20,
     },
+    "platforms": {},
     "cdp": {
         "host": "127.0.0.1",
         "port": 9222,
@@ -53,6 +57,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "windows_system_proxy": {
         "host": "127.0.0.1",
         "port": "7897",
+    },
+    "system_proxy": {
+        "host": "127.0.0.1",
+        "port": "7897",
+        "macos_network_service": "Wi-Fi",
+        "linux_backend": "gnome",
     },
     "timeouts": {
         "element_seconds": 10,

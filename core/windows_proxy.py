@@ -31,6 +31,15 @@ def disable_windows_system_proxy() -> None:
     notify_windows_system_proxy_changed()
 
 
+def restore_windows_system_proxy_settings(settings: dict[str, tuple[bool, Any, int | None]]) -> None:
+    for name, (exists, value, value_type) in settings.items():
+        if exists:
+            set_windows_system_proxy_value(name, value, value_type=value_type)
+        else:
+            delete_windows_system_proxy_value(name)
+    notify_windows_system_proxy_changed()
+
+
 def read_windows_system_proxy_settings() -> dict[str, tuple[bool, Any, int | None]]:
     import winreg
 
@@ -47,13 +56,24 @@ def read_windows_system_proxy_settings() -> dict[str, tuple[bool, Any, int | Non
     return snapshot
 
 
-def set_windows_system_proxy_value(name: str, value: Any) -> None:
+def set_windows_system_proxy_value(name: str, value: Any, value_type: int | None = None) -> None:
     import winreg
 
     path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-    value_type = winreg.REG_DWORD if isinstance(value, int) else winreg.REG_SZ
+    value_type = value_type or (winreg.REG_DWORD if isinstance(value, int) else winreg.REG_SZ)
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
         winreg.SetValueEx(key, name, 0, value_type, value)
+
+
+def delete_windows_system_proxy_value(name: str) -> None:
+    import winreg
+
+    path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
+        try:
+            winreg.DeleteValue(key, name)
+        except FileNotFoundError:
+            pass
 
 
 def notify_windows_system_proxy_changed() -> None:

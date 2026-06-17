@@ -5,6 +5,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core.app_config import resolve_app_config
+from core.platform.desktop import desktop_file_dialog_supported, unsupported_desktop_file_dialog_message
+
 
 class UIAutomationError(RuntimeError):
     pass
@@ -14,6 +17,8 @@ class UIDriver:
     def __init__(self, config: dict[str, Any], logger: logging.Logger):
         self.config = config
         self.logger = logger
+        if not desktop_file_dialog_supported():
+            raise UIAutomationError(unsupported_desktop_file_dialog_message())
         try:
             import uiautomation as auto
         except ImportError as exc:
@@ -21,7 +26,7 @@ class UIDriver:
         self.auto = auto
 
     def find_main_window(self, timeout: int = 10):
-        process_name = self.config["app"].get("process_name", "")
+        process_name = resolve_app_config(self.config).process_name
         window = self.auto.WindowControl(searchDepth=1, RegexName=".*")
         if window.Exists(maxSearchSeconds=timeout):
             self.logger.info("Main window found for APP process hint: %s", process_name)

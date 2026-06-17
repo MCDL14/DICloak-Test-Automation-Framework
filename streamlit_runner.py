@@ -30,11 +30,22 @@ from core.case_module import get_test_case_module
 from core.cdp_driver import CDPConnectionError, CDPDriver
 from core.config import ConfigError, load_config
 from core.logger import setup_logger
+from core.remote_runner import (
+    RemoteConfigError,
+    RemoteHost,
+    RemoteRunError,
+    RemoteRunRequest,
+    collect_remote_artifacts,
+    load_remote_hosts,
+    run_remote_health_check,
+    run_remote_tests,
+)
 from core.result import RunResult
 from core.runner import AutomationRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = PROJECT_ROOT / "config" / "config.yaml"
+REMOTE_HOSTS_PATH = PROJECT_ROOT / "config" / "remote_hosts.yaml"
 _RUN_LOCK = threading.Lock()
 
 
@@ -112,6 +123,26 @@ def discover_cases() -> list[dict[str, str]]:
             "method_name": parts[-1] if parts else "",
         })
     return cases
+
+
+def discover_remote_hosts() -> list[dict[str, str]]:
+    """读取可用远程节点，供 Streamlit 页面展示."""
+    hosts = load_remote_hosts(REMOTE_HOSTS_PATH)
+    return [
+        {
+            "name": host.name,
+            "platform": host.platform,
+            "host": host.host,
+            "username": host.username,
+            "config": host.config,
+        }
+        for host in hosts
+    ]
+
+
+def _remote_host_by_name(host_name: str) -> RemoteHost | None:
+    hosts = load_remote_hosts(REMOTE_HOSTS_PATH)
+    return next((item for item in hosts if item.name == host_name), None)
 
 
 def _discovery_logger() -> logging.Logger:
@@ -253,3 +284,80 @@ def run_selected_tests(
             logger.removeHandler(ui_handler)
         _RUN_LOCK.release()
         log_queue.put(None)  # 哨兵：通知 UI 执行结束
+
+
+def run_remote_cli(
+    host_name: str,
+    scope: str,
+    value: str,
+    log_queue: queue.Queue,
+    *,
+    attach_existing_app: bool = False,
+    collect_artifacts: bool = True,
+) -> None:
+    """后台通过 SSH 在远程节点执行 run.py，并把远程日志推送到 UI."""
+    if not _RUN_LOCK.acquire(blocking=False):
+        log_queue.put("已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。")
+        log_queue.put(None)
+        return
+
+    try:
+        host = _remote_host_by_name(host_name)
+        if host is None:
+            log_queue.put(f"远程节点不存在或未启用：{host_name}")
+            return
+
+        request = RemoteRunRequest(
+            scope=scope,
+            value=value,
+            attach_existing_app=attach_existing_app,
+        )
+        result = run_remote_tests(host, request, log_queue)
+        duration = round(result.finished_at - result.started_at, 2)
+        log_queue.put(f"远程执行完成 → 节点={result.host_name} 退出码={result.exit_code} 耗时={duration}s")
+        if collect_artifacts:
+            try:
+                artifact_result = collect_remote_artifacts(host, result.started_at, log_queue)
+                log_queue.put(
+                    "远程产物归档 → "
+                    f"文件数={artifact_result.files_copied} "
+                    f"本地目录={artifact_result.local_dir}"
+                )
+            except RemoteRunError as exc:
+                log_queue.put(f"远程产物拉取失败：{exc}")
+        if result.exit_code != 0:
+            log_queue.put(f"远程执行失败：退出码={result.exit_code}")
+    except (RemoteConfigError, RemoteRunError) as exc:
+        log_queue.put(f"远程执行器错误：{exc}")
+    except Exception as exc:
+        log_queue.put(f"远程执行器内部异常：{exc}")
+    finally:
+        _RUN_LOCK.release()
+        log_queue.put(None)
+
+
+def check_remote_host(host_name: str, log_queue: queue.Queue) -> None:
+    """后台通过 SSH 检查远程节点是否具备执行自动化的基础条件."""
+    if not _RUN_LOCK.acquire(blocking=False):
+        log_queue.put("已有 UI 执行任务正在运行，请等待当前任务结束后再检查远程节点。")
+        log_queue.put(None)
+        return
+
+    try:
+        host = _remote_host_by_name(host_name)
+        if host is None:
+            log_queue.put(f"远程节点不存在或未启用：{host_name}")
+            return
+
+        result = run_remote_health_check(host, log_queue)
+        duration = round(result.finished_at - result.started_at, 2)
+        log_queue.put(f"远程健康检查结束 → 节点={result.host_name} 退出码={result.exit_code} 耗时={duration}s")
+        if result.exit_code != 0:
+            log_queue.put(f"远程健康检查未通过：失败项数量={result.exit_code}")
+    except (RemoteConfigError, RemoteRunError) as exc:
+        log_queue.put(f"远程健康检查错误：{exc}")
+    except Exception as exc:
+        log_queue.put(f"远程健康检查内部异常：{exc}")
+    finally:
+        _RUN_LOCK.release()
+        log_queue.put(None)

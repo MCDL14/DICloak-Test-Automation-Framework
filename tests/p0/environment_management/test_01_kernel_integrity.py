@@ -6,9 +6,10 @@ import unittest
 from pathlib import Path
 
 from core.assertions import assert_equal, assert_true
+from core.app_config import resolve_app_config
 from core.cdp_driver import CDPDriver
 from core.config import load_config, timeout_seconds
-from core.kernel_cache import wait_for_kernel_executable_dir, wait_for_kernel_version_dir
+from core.kernel_cache import resolve_kernel_browsers_dir, wait_for_kernel_executable_dir, wait_for_kernel_version_dir
 from core.kernel_process import kernel_version_from_cdp, kernel_version_from_command_line, resolve_kernel_runtime
 from core.logger import setup_logger
 from core.process import process_executable_path_by_pid, wait_for_pid_running, wait_for_pid_stopped
@@ -22,7 +23,6 @@ KERNEL_142_PREFIX = "142"
 KERNEL_134_PREFIX = "134"
 KERNEL_134_DOWNLOAD_MAJOR = "134"
 KERNEL_CACHE_SUBDIR = "browsers"
-BROWSER_PROCESS_NAME = "GinsBrowser.exe"
 
 
 class TestKernelIntegrity(unittest.TestCase):
@@ -106,7 +106,7 @@ class TestKernelIntegrity(unittest.TestCase):
             wait_for_kernel_executable_dir(
                 browsers_dir,
                 KERNEL_134_PREFIX,
-                executable_name=BROWSER_PROCESS_NAME,
+                executable_name=resolve_app_config(self.config).browser_process_name,
                 timeout_seconds=kernel_download_timeout,
             )
 
@@ -207,7 +207,7 @@ class TestKernelIntegrity(unittest.TestCase):
                 )
 
     def _clear_cache_subdir(self, cache_dir: Path, subdir_name: str) -> Path:
-        target_dir = cache_dir / subdir_name
+        target_dir = resolve_kernel_browsers_dir(cache_dir, subdir_name)
         if target_dir.name.lower() != "browsers":
             raise AssertionError(f"refuse to clear unexpected cache subdir: {target_dir}")
         target_dir.mkdir(parents=True, exist_ok=True)

@@ -5,9 +5,11 @@ import unittest
 from pathlib import Path
 
 from core.assertions import assert_true
+from core.app_config import resolve_app_config
 from core.cdp_driver import CDPDriver
 from core.config import load_config, require_value, timeout_seconds
 from core.logger import setup_logger
+from core.platform.detect import is_windows
 from core.process import (
     is_process_running,
     main_process_ids,
@@ -24,6 +26,7 @@ from pages.login_page import LoginPage
 CASE_MODULE = "全局设置"
 
 
+@unittest.skipUnless(is_windows(), "packet capture blocking validation depends on Windows executable tools")
 class TestDisablePacketCaptureSoftware(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -47,7 +50,7 @@ class TestDisablePacketCaptureSoftware(unittest.TestCase):
         packet_startup_path = self._resolve_project_path(
             str(require_value(self.config, "test_data.packet_capture.startup_path")).strip()
         )
-        browser_process_name = str(self.config.get("app", {}).get("browser_process_name", "GinsBrowser.exe")).strip()
+        browser_process_name = resolve_app_config(self.config).browser_process_name.strip()
 
         assert_true(packet_startup_path.is_file(), f"packet capture startup path does not exist: {packet_startup_path}")
         assert_true(

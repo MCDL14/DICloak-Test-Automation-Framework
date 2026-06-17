@@ -1,0 +1,32 @@
+# Copy this file to config/remote_hosts.yaml and fill in real intranet hosts.
+# Do not commit config/remote_hosts.yaml if it contains real host credentials.
+hosts:
+  - name: linux-ubuntu
+    enabled: true
+    platform: linux
+    host: 192.168.20.160
+    port: 22
+    username: dic
+    project_dir: /home/dic/dicloak_automation_linux
+    python: python
+    config: config/config.yaml
+    venv_activate: .venv/bin/activate
+    # Prefer SSH key auth. If a password is required, put the password in this
+    # local environment variable instead of writing it into YAML.
+    password_env: DICLOAK_REMOTE_LINUX_PASSWORD
+    key_filename: ""
+    command_prefix: ""
+
+  - name: macos-arm64
+    enabled: true
+    platform: macos
+    host: 192.168.40.5
+    port: 22
+    username: tianji
+    project_dir: /Users/tianji/dicloak_automation_mac
+    python: python
+    config: config/config.macos.yaml
+    venv_activate: .venv/bin/activate
+    password_env: DICLOAK_REMOTE_MAC_PASSWORD
+    key_filename: ""
+    command_prefix: ""

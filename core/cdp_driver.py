@@ -143,6 +143,49 @@ class CDPDriver:
             return self.websocket.connected
         return False
 
+    def wait_for_app_ready(self, timeout_seconds: int | None = None) -> None:
+        if not self.page:
+            raise CDPConnectionError("Playwright page is not connected")
+        timeout_seconds = timeout_seconds or int(self.config.get("app", {}).get("startup_timeout", 60))
+        deadline = time.time() + timeout_seconds
+        last_state: dict[str, Any] = {}
+        while time.time() < deadline:
+            try:
+                self.page.wait_for_load_state("domcontentloaded", timeout=1000)
+            except Exception:
+                pass
+            try:
+                last_state = self.page.evaluate(
+                    """
+                    () => {
+                        const body = document.body;
+                        const text = body ? (body.innerText || body.textContent || "") : "";
+                        const loading = text.includes("正在加载中") || text.includes("Loading");
+                        const hasLoginControl = Boolean(document.querySelector('input[type="password"]'))
+                            || text.includes("登录")
+                            || text.includes("Login");
+                        const hasAppShell = Boolean(document.querySelector(".el-menu, aside, nav"));
+                        const hasActionControl = Boolean(document.querySelector("button, input, a"));
+                        return {
+                            ready: Boolean(text.trim()) && !loading && (hasLoginControl || hasAppShell || hasActionControl),
+                            url: window.location.href,
+                            text: text.slice(0, 200),
+                        };
+                    }
+                    """
+                )
+                if isinstance(last_state, dict) and last_state.get("ready"):
+                    self.logger.info(
+                        "APP frontend ready: url=%s text=%s",
+                        last_state.get("url", ""),
+                        str(last_state.get("text", "")).replace("\n", " ")[:120],
+                    )
+                    return
+            except Exception as exc:
+                last_state = {"error": str(exc)}
+            time.sleep(0.5)
+        raise CDPConnectionError(f"APP frontend was not ready within {timeout_seconds}s: {last_state}")
+
     def wait_for_selector(self, selector: str, timeout: int | None = None):
         timeout = timeout if timeout is not None else self._element_timeout_ms()
         return self._page().wait_for_selector(selector, state="visible", timeout=timeout)

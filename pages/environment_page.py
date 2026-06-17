@@ -4,6 +4,7 @@ import json
 import time
 from pathlib import Path
 
+from core.app_config import resolve_app_config
 from core.config import timeout_seconds as config_timeout_seconds
 from core.process import main_process_ids, wait_for_new_main_process_ids
 from pages.base_page import BasePage
@@ -998,8 +999,9 @@ class EnvironmentPage(BasePage):
         last_serials: list[int] = []
         while time.time() < deadline:
             last_serials = self.environment_serials_in_current_list()
-            if len(last_serials) >= 2 and self._serials_match_sort(last_serials, direction):
-                return last_serials
+            comparable_serials = self._serials_without_leading_sort_exceptions(last_serials, direction)
+            if len(comparable_serials) >= 2 and self._serials_match_sort(comparable_serials, direction):
+                return comparable_serials
             time.sleep(0.5)
         raise TimeoutError(
             "environment serials did not match sort direction: "
@@ -1233,9 +1235,29 @@ class EnvironmentPage(BasePage):
         self.wait_pagination_size_selector_visible()
         if self.cdp.evaluate(self._pagination_size_selected_script(normalized)):
             return
-        self.cdp.click_element_by_script(self._pagination_size_selector_script())
-        self.cdp.click_element_by_script(self._visible_dropdown_item_by_normalized_text_script(normalized))
+        self._open_pagination_size_selector()
+        self._click_visible_dropdown_item_by_normalized_text(normalized)
         self.wait_pagination_size_selected(normalized)
+
+    def _open_pagination_size_selector(self) -> None:
+        try:
+            self.cdp.click_element_by_script(self._pagination_size_selector_script())
+            return
+        except Exception:
+            point = self.cdp.evaluate(self._pagination_size_selector_center_script())
+            if point:
+                self.cdp.click_at(float(point["x"]), float(point["y"]))
+                return
+            if not self.cdp.evaluate(self._open_pagination_size_selector_script()):
+                raise
+
+    def _click_visible_dropdown_item_by_normalized_text(self, text: str) -> None:
+        try:
+            self.cdp.click_element_by_script(self._visible_dropdown_item_by_normalized_text_script(text))
+            return
+        except Exception:
+            if not self.cdp.evaluate(self._click_visible_dropdown_item_by_normalized_text_script(text)):
+                raise
 
     def wait_pagination_size_selected(self, page_size_text: str, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -1650,7 +1672,7 @@ class EnvironmentPage(BasePage):
         process_name = str(
             self.config.get("test_data", {})
             .get("kernel_integrity", {})
-            .get("browser_process_name", "GinsBrowser.exe")
+            .get("browser_process_name", resolve_app_config(self.config).browser_process_name)
         )
         existing_pids = set(main_process_ids(process_name))
         requests = self.cdp.click_element_by_script_and_collect_requests(
@@ -2082,6 +2104,66 @@ class EnvironmentPage(BasePage):
         })())
         """
 
+    def _pagination_size_selector_center_script(self) -> str:
+        return """
+        () => {
+            const finder = () => {
+                const selector = ".el-pagination__sizes .el-select__wrapper, .el-pagination__sizes .el-select";
+                const visible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== "none"
+                        && style.visibility !== "hidden"
+                        && rect.width > 0
+                        && rect.height > 0;
+                };
+                return Array.from(document.querySelectorAll(selector)).find(visible) || null;
+            };
+            const element = finder();
+            if (!element) return null;
+            element.scrollIntoView({ block: "center", inline: "center" });
+            const rect = element.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        }
+        """
+
+    def _open_pagination_size_selector_script(self) -> str:
+        return """
+        () => {
+            const finder = () => {
+                const selector = ".el-pagination__sizes .el-select__wrapper, .el-pagination__sizes .el-select";
+                const visible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== "none"
+                        && style.visibility !== "hidden"
+                        && rect.width > 0
+                        && rect.height > 0;
+                };
+                return Array.from(document.querySelectorAll(selector)).find(visible) || null;
+            };
+            const wrapper = finder();
+            if (!wrapper) return false;
+            const targets = [
+                wrapper,
+                wrapper.querySelector?.("input"),
+                wrapper.querySelector?.(".el-select__caret"),
+            ].filter(Boolean);
+            for (const target of targets) {
+                target.scrollIntoView?.({ block: "center", inline: "center" });
+                for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+                    target.dispatchEvent(new MouseEvent(type, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                    }));
+                }
+                target.focus?.();
+            }
+            return true;
+        }
+        """
+
     def _pagination_size_selected_script(self, page_size_text: str) -> str:
         return f"""
         () => {{
@@ -2119,6 +2201,36 @@ class EnvironmentPage(BasePage):
                 .filter((el) => visible(el))
                 .filter((el) => normalize(el.innerText || el.textContent) === expectedText);
             return items[items.length - 1] || null;
+        }}
+        """
+
+    def _click_visible_dropdown_item_by_normalized_text_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {text!r};
+            const normalize = (value) => String(value || "").replace(/\\s+/g, "").trim();
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const items = Array.from(document.querySelectorAll(".el-select-dropdown__item, .el-dropdown-menu__item, li"))
+                .filter((el) => visible(el))
+                .filter((el) => normalize(el.innerText || el.textContent) === expectedText);
+            const item = items[items.length - 1] || null;
+            if (!item) return false;
+            item.scrollIntoView?.({{ block: "center", inline: "center" }});
+            for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {{
+                item.dispatchEvent(new MouseEvent(type, {{
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                }}));
+            }}
+            return true;
         }}
         """
 
@@ -4265,6 +4377,14 @@ class EnvironmentPage(BasePage):
             return all(left >= right for left, right in zip(serials, serials[1:]))
         return False
 
+    @classmethod
+    def _serials_without_leading_sort_exceptions(cls, serials: list[int], direction: str) -> list[int]:
+        # 置顶环境会固定在列表首行，不参与普通“环境序号”升降序；排序断言只校验置顶行之后的普通行。
+        candidate = list(serials)
+        while len(candidate) >= 2 and not cls._serials_match_sort(candidate, direction):
+            candidate = candidate[1:]
+        return candidate
+
     @staticmethod
     def _unique_non_empty(values: list[str]) -> list[str]:
         result: list[str] = []
@@ -4400,11 +4520,22 @@ class EnvironmentPage(BasePage):
                 """
                 () => {
                     const visible = (el) => {
+                        const style = window.getComputedStyle(el);
                         const rect = el.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0;
+                        return style.display !== "none"
+                            && style.visibility !== "hidden"
+                            && Number(style.opacity || "1") > 0.01
+                            && el.getAttribute("aria-hidden") !== "true"
+                            && !el.classList.contains("is-leave")
+                            && rect.width > 0
+                            && rect.height > 0
+                            && rect.right > 0
+                            && rect.bottom > 0
+                            && rect.left < window.innerWidth
+                            && rect.top < window.innerHeight;
                     };
                     return Array.from(document.querySelectorAll(".el-drawer, .el-dialog, .el-message-box"))
-                        .filter(visible).length;
+                        .filter((el) => visible(el) && !(el.innerText || el.textContent || "").includes("快速入门")).length;
                 }
                 """
             )

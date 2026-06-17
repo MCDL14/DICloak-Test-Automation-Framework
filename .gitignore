@@ -10,9 +10,11 @@ env/
 
 config/config.yaml
 config/test_data.yaml
+config/remote_hosts.yaml
 logs/*
 reports/*
 screenshots/*
+remote_artifacts/*
 !logs/.gitkeep
 !reports/.gitkeep
 !screenshots/.gitkeep

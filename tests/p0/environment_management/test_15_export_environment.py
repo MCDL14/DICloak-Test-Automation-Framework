@@ -11,6 +11,7 @@ from core.cdp_driver import CDPDriver
 from core.config import load_config, timeout_seconds
 from core.files import batch_export_file, wait_for_file
 from core.logger import setup_logger
+from core.platform.desktop import desktop_file_dialog_supported, unsupported_desktop_file_dialog_message
 from core.ui_driver import UIDriver
 from pages.environment_page import EnvironmentPage
 from pages.login_page import LoginPage
@@ -63,6 +64,8 @@ class TestExportEnvironment(unittest.TestCase):
                     timeout_seconds=download_event_timeout,
                 )
             except PlaywrightTimeoutError:
+                if not desktop_file_dialog_supported():
+                    self.skipTest(unsupported_desktop_file_dialog_message())
                 ui_driver = UIDriver(self.config, self.logger)
                 ui_driver.save_file_in_dialog(export_file, timeout=15)
 

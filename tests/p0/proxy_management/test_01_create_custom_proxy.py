@@ -8,11 +8,12 @@ from core.assertions import assert_true
 from core.cdp_driver import CDPDriver
 from core.config import load_config
 from core.logger import setup_logger
-from core.windows_proxy import (
-    disable_windows_system_proxy,
-    enable_windows_system_proxy,
+from core.system_proxy import (
+    enable_system_proxy,
     proxy_server_from_config,
-    read_windows_system_proxy_settings,
+    read_system_proxy_settings,
+    restore_system_proxy_settings,
+    system_proxy_supported,
 )
 from pages.login_page import LoginPage
 from pages.proxy_page import ProxyPage
@@ -42,12 +43,12 @@ class TestCreateCustomProxy(unittest.TestCase):
         account = proxy_data["account"]
         password = proxy_data["password"]
         protocol = "HTTP"
-        system_proxy_server = proxy_server_from_config(self.config)
+        original_system_proxy_settings = None
         created_proxy_id = ""
         failures: list[str] = []
 
         try:
-            self._enable_windows_system_proxy(system_proxy_server)
+            original_system_proxy_settings = self._enable_system_proxy_if_supported()
             proxy_page.open_list()
             existing_ids = proxy_page.proxy_ids_by_type_host_port(protocol, host, port)
 
@@ -106,9 +107,10 @@ class TestCreateCustomProxy(unittest.TestCase):
             except Exception as exc:
                 failures.append(f"代理清理失败: {exc}")
             try:
-                self._disable_windows_system_proxy()
+                if original_system_proxy_settings is not None:
+                    self._restore_system_proxy(original_system_proxy_settings)
             except Exception as exc:
-                failures.append(f"Windows 系统代理关闭失败: {exc}")
+                failures.append(f"系统代理恢复失败: {exc}")
 
         assert_true(not failures, "; ".join(failures))
 
@@ -127,24 +129,31 @@ class TestCreateCustomProxy(unittest.TestCase):
             "password": password,
         }
 
-    def _enable_windows_system_proxy(self, proxy_server: str) -> None:
-        original_settings = read_windows_system_proxy_settings()
+    def _enable_system_proxy_if_supported(self) -> dict[str, tuple[bool, object, int | None]] | None:
+        if not system_proxy_supported():
+            self.logger.info("System proxy is unsupported on this platform; continue proxy management case without it")
+            return None
+        proxy_server = proxy_server_from_config(self.config)
+        original_settings = read_system_proxy_settings()
         self.logger.info(
-            "Windows system proxy enable proxy_server=%s original_enable=%s original_server=%s",
+            "System proxy enable proxy_server=%s original_enable=%s original_server=%s",
             proxy_server,
             original_settings.get("ProxyEnable", (False, None, None))[1],
             original_settings.get("ProxyServer", (False, None, None))[1],
         )
-        enable_windows_system_proxy(proxy_server)
+        enable_system_proxy(proxy_server)
+        return original_settings
 
-    def _disable_windows_system_proxy(self) -> None:
-        current_settings = read_windows_system_proxy_settings()
+    def _restore_system_proxy(self, original_settings: dict[str, tuple[bool, object, int | None]]) -> None:
+        current_settings = read_system_proxy_settings()
         self.logger.info(
-            "Windows system proxy disable current_enable=%s current_server=%s",
+            "System proxy restore current_enable=%s current_server=%s original_enable=%s original_server=%s",
             current_settings.get("ProxyEnable", (False, None, None))[1],
             current_settings.get("ProxyServer", (False, None, None))[1],
+            original_settings.get("ProxyEnable", (False, None, None))[1],
+            original_settings.get("ProxyServer", (False, None, None))[1],
         )
-        disable_windows_system_proxy()
+        restore_system_proxy_settings(original_settings)
 
 
 if __name__ == "__main__":

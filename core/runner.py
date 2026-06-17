@@ -82,6 +82,7 @@ class AutomationRunner:
                         "启动后 30 秒内未检测到 APP 进程，将继续尝试 CDP 连接。",
                     )
             cdp_driver.connect()
+            cdp_driver.wait_for_app_ready()
             cdp_driver.close()
             self.logger.info("CDP startup check passed and connection released before test execution")
         except (AppStartupError, CDPConnectionError, OSError) as exc:

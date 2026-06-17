@@ -15,6 +15,26 @@ def kernel_version_dirs(browsers_dir: Path, major_prefix: str) -> list[Path]:
     )
 
 
+def _has_kernel_version_dirs(browsers_dir: Path) -> bool:
+    if not browsers_dir.exists():
+        return False
+    pattern = re.compile(r"^\d+\.\d+(?:\.\d+)+$")
+    return any(item.is_dir() and pattern.match(item.name) for item in browsers_dir.iterdir())
+
+
+def resolve_kernel_browsers_dir(cache_dir: Path, subdir_name: str = "browsers") -> Path:
+    direct_dir = cache_dir / subdir_name
+    macos_user_data_dir = cache_dir.parent / "DICloak" / subdir_name
+    candidates = [direct_dir, macos_user_data_dir]
+    for candidate in candidates:
+        if _has_kernel_version_dirs(candidate):
+            return candidate
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return direct_dir
+
+
 def wait_for_kernel_version_dir(
     browsers_dir: Path,
     major_prefix: str,

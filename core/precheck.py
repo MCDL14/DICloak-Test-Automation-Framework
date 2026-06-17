@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.app_config import resolve_app_config
 from core.files import batch_import_file, local_extension_file, member_export_file_regex
 
 
@@ -58,10 +59,10 @@ class EnvironmentPrechecker:
         )
 
     def _check_app(self, result: PrecheckResult) -> None:
-        app = self.config["app"]
-        exe_path = Path(app.get("exe_path", ""))
-        work_dir = Path(app.get("work_dir", ""))
-        startup_args = app.get("startup_args", [])
+        app_config = resolve_app_config(self.config)
+        exe_path = app_config.exe_path
+        work_dir = app_config.work_dir
+        startup_args = app_config.startup_args
 
         result.add("APP exe_path exists", exe_path.is_file(), str(exe_path))
         result.add("APP work_dir exists", work_dir.is_dir(), str(work_dir))

@@ -33,7 +33,13 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 import streamlit as st
 
-from streamlit_runner import discover_cases, run_selected_tests
+from streamlit_runner import (
+    check_remote_host,
+    discover_cases,
+    discover_remote_hosts,
+    run_remote_cli,
+    run_selected_tests,
+)
 
 _LOG_IDLE_WARNING_SECONDS = 300
 _LOG_DISPLAY_LINES = 200
@@ -41,6 +47,18 @@ _LOG_DISPLAY_HEIGHT = 420
 _RESULT_SUMMARY_RE = re.compile(
     r"运行完成 → 总计=(\d+) 通过=(\d+) 失败=(\d+) 错误=(\d+) 跳过=(\d+) flaky=(\d+) 通过率=([\d.]+)%"
 )
+_CLI_SUMMARY_RE = re.compile(
+    r"Final test summary:\s*total=(\d+)\s+passed=(\d+)\s+failed=(\d+)"
+    r"\s+errors=(\d+)\s+skipped=(\d+)\s+flaky=(\d+)"
+)
+
+_REMOTE_SCOPE_OPTIONS = {
+    "远程预检": ("precheck", ""),
+    "P0 全量": ("level", "P0"),
+    "按业务模块": ("business_module", ""),
+    "按目录模块": ("module", ""),
+    "按单用例名": ("case", ""),
+}
 
 # ═══════════════════════════════════════════════════════════════════
 # 页面配置
@@ -105,7 +123,47 @@ def _summary_missing_message(log_text: str) -> tuple[str, str]:
         return "warning", "没有匹配到任何用例，本次未执行。"
     if "执行器内部异常" in log_text or "执行器启动失败" in log_text:
         return "error", "执行器内部异常，未能生成结果统计。请查看上方异常日志。"
+    if "远程执行器错误" in log_text or "远程执行器内部异常" in log_text or "远程执行失败" in log_text:
+        return "error", "远程执行失败，未能生成结果统计。请查看上方远程日志。"
+    if "远程健康检查错误" in log_text or "远程健康检查内部异常" in log_text or "远程健康检查未通过" in log_text:
+        return "error", "远程健康检查未通过。请查看上方 [FAIL] 项并补齐远端环境。"
+    if "远程健康检查结束" in log_text and "退出码=0" in log_text:
+        return "success", "远程健康检查通过。"
+    if "远程执行完成" in log_text and "退出码=0" in log_text:
+        return "success", "远程执行完成，当前运行范围没有生成用例统计。"
     return "warning", "执行完成，但未能解析结果统计。请查看上方日志。"
+
+
+def _parse_result_summary(log_text: str) -> tuple[int, int, int, int, int, int, str] | None:
+    ui_match = _RESULT_SUMMARY_RE.search(log_text)
+    if ui_match:
+        total, passed, failed, errors, skipped, flaky, rate = ui_match.groups()
+        return int(total), int(passed), int(failed), int(errors), int(skipped), int(flaky), rate
+
+    cli_match = _CLI_SUMMARY_RE.search(log_text)
+    if cli_match:
+        total, passed, failed, errors, skipped, flaky = [int(value) for value in cli_match.groups()]
+        rate = f"{round(passed / total * 100, 2) if total else 0.0}"
+        return total, passed, failed, errors, skipped, flaky, rate
+
+    return None
+
+
+@st.cache_data(ttl=30, show_spinner="正在读取远程节点...")
+def _load_remote_hosts() -> list[dict[str, str]]:
+    return discover_remote_hosts()
+
+
+@st.cache_data(ttl=30)
+def _load_directory_modules() -> list[str]:
+    tests_root = _PROJECT_ROOT / "tests" / "p0"
+    if not tests_root.exists():
+        return []
+    return sorted(
+        item.name
+        for item in tests_root.iterdir()
+        if item.is_dir() and item.name != "__pycache__"
+    )
 
 
 for c in cases:
@@ -145,9 +203,89 @@ with st.sidebar:
     # 运行模式
     st.divider()
     st.header("⚙️ 运行模式")
+    execution_mode = st.radio(
+        "执行位置",
+        options=["本机", "远程节点"],
+        horizontal=True,
+        help="本机模式按当前勾选用例执行；远程节点模式通过 SSH 在目标机器执行 CLI 命令。",
+    )
+
+    remote_host_name = ""
+    remote_scope = "precheck"
+    remote_value = ""
+    remote_attach_existing = False
+    remote_collect_artifacts = False
+    health_clicked = False
+
+    if execution_mode == "远程节点":
+        try:
+            remote_hosts = _load_remote_hosts()
+        except Exception as exc:
+            remote_hosts = []
+            st.error(f"远程节点配置读取失败：{exc}")
+
+        host_labels = [
+            f"{host['name']} ({host.get('platform') or 'unknown'} {host['username']}@{host['host']})"
+            for host in remote_hosts
+        ]
+        selected_host_label = st.selectbox(
+            "远程节点",
+            options=host_labels,
+            disabled=not host_labels,
+            help="节点来自 `config/remote_hosts.yaml`，真实密码请使用环境变量或 SSH key。",
+        )
+        if selected_host_label and host_labels:
+            remote_host_name = remote_hosts[host_labels.index(selected_host_label)]["name"]
+
+        health_clicked = st.button(
+            "检查远程节点",
+            use_container_width=True,
+            disabled=not remote_host_name,
+            help="只读检查远端项目目录、run.py、配置、venv、Python 依赖和 APP 路径，不启动 APP、不跑用例。",
+        )
+
+        remote_scope_label = st.selectbox(
+            "远程运行范围",
+            options=list(_REMOTE_SCOPE_OPTIONS.keys()),
+            help="第一版远程执行复用 CLI 粒度，不直接按当前勾选的 test_id 过滤。",
+        )
+        remote_scope, default_value = _REMOTE_SCOPE_OPTIONS[remote_scope_label]
+        remote_value = default_value
+
+        if remote_scope == "business_module":
+            remote_value = st.selectbox("业务模块", options=module_names)
+        elif remote_scope == "module":
+            directory_modules = _load_directory_modules()
+            if directory_modules:
+                remote_value = st.selectbox("目录模块", options=directory_modules)
+            else:
+                remote_value = ""
+                st.warning("未发现 `tests/p0` 目录模块。")
+        elif remote_scope == "case":
+            remote_value = st.text_input(
+                "单用例名",
+                placeholder="例如 test_01_kernel_integrity.py 或 test_xxx",
+            ).strip()
+
+        if remote_scope != "precheck":
+            remote_attach_existing = st.checkbox(
+                "远程连接已打开的 APP",
+                value=False,
+                help="勾选后给远端 run.py 追加 --attach-existing-app。",
+            )
+
+        remote_collect_artifacts = st.checkbox(
+            "远程执行后拉取产物",
+            value=True,
+            help="执行结束后拉取远端本次新增或修改的 logs、screenshots、reports 到本机 remote_artifacts。",
+        )
+
+        st.caption("远程模式暂不按左侧勾选用例执行；请使用上面的运行范围。")
+
     attach_existing = st.checkbox(
         "连接已打开的 APP",
         value=True,
+        disabled=execution_mode == "远程节点",
         help="勾选：连接已手动启动的 DICloak APP。\n取消：框架自动启动新 APP。",
     )
 
@@ -215,18 +353,24 @@ if visible_case_count == 0:
 st.divider()
 col_btn, col_info = st.columns([1, 3])
 with col_btn:
+    if execution_mode == "本机":
+        run_label = f"▶ 运行选中（{len(selected_ids)} 条）"
+        run_disabled = len(selected_ids) == 0
+    else:
+        run_label = "▶ 远程执行"
+        run_disabled = not remote_host_name or (remote_scope in {"module", "business_module", "case"} and not remote_value)
     run_clicked = st.button(
-        f"▶ 运行选中（{len(selected_ids)} 条）",
+        run_label,
         type="primary",
         use_container_width=True,
-        disabled=len(selected_ids) == 0,
+        disabled=run_disabled,
     )
 
 # ═══════════════════════════════════════════════════════════════════
 # 执行逻辑：后台线程 + 前台轮询日志
 # ═══════════════════════════════════════════════════════════════════
 
-if run_clicked:
+if run_clicked or health_clicked:
     # ── 占位容器（运行中动态更新） ──
     log_placeholder = st.empty()
     status_placeholder = st.empty()
@@ -234,19 +378,36 @@ if run_clicked:
     log_queue: queue.Queue = queue.Queue()
 
     # 启动后台执行线程
-    thread = threading.Thread(
-        target=run_selected_tests,
-        args=(selected_ids, log_queue),
-        kwargs={"attach_existing_app": attach_existing},
-        daemon=True,
-    )
+    if health_clicked:
+        thread = threading.Thread(
+            target=check_remote_host,
+            args=(remote_host_name, log_queue),
+            daemon=True,
+        )
+    elif execution_mode == "本机":
+        thread = threading.Thread(
+            target=run_selected_tests,
+            args=(selected_ids, log_queue),
+            kwargs={"attach_existing_app": attach_existing},
+            daemon=True,
+        )
+    else:
+        thread = threading.Thread(
+            target=run_remote_cli,
+            args=(remote_host_name, remote_scope, remote_value, log_queue),
+            kwargs={
+                "attach_existing_app": remote_attach_existing,
+                "collect_artifacts": remote_collect_artifacts,
+            },
+            daemon=True,
+        )
     thread.start()
 
     # 前台轮询 queue，实时刷新日志
     log_lines: list[str] = []
     last_log_time = time.time()
     idle_warning_shown = False
-    status_placeholder.info("⏳ 正在执行...")
+    status_placeholder.info("⏳ 正在检查..." if health_clicked else "⏳ 正在执行...")
 
     while True:
         try:
@@ -277,12 +438,9 @@ if run_clicked:
     full_text = "\n".join(log_lines)
 
     # 用正则从最终总结行提取统计
-    m = _RESULT_SUMMARY_RE.search(full_text)
-    if m:
-        total, passed, failed, errors, skipped, flaky, rate = m.groups()
-        total, passed, failed, errors, skipped, flaky = (
-            int(total), int(passed), int(failed), int(errors), int(skipped), int(flaky)
-        )
+    summary = _parse_result_summary(full_text)
+    if summary:
+        total, passed, failed, errors, skipped, flaky, rate = summary
 
         # 指标卡片栏
         cols = st.columns(6)
@@ -311,5 +469,7 @@ if run_clicked:
         level, message = _summary_missing_message(full_text)
         if level == "error":
             status_placeholder.error(f"❌ {message}")
+        elif level == "success":
+            status_placeholder.success(f"✅ {message}")
         else:
             status_placeholder.warning(f"⚠️ {message}")

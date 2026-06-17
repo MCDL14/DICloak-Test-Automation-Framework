@@ -12,6 +12,7 @@ from core.cdp_driver import CDPDriver
 from core.config import load_config, timeout_seconds
 from core.files import wait_for_file
 from core.logger import setup_logger
+from core.platform.desktop import desktop_file_dialog_supported, unsupported_desktop_file_dialog_message
 from pages.login_page import LoginPage
 from pages.member_page import MemberPage
 
@@ -73,6 +74,8 @@ class TestExportMember(unittest.TestCase):
                     timeout_seconds=download_event_timeout,
                 )
             except PlaywrightTimeoutError:
+                if not desktop_file_dialog_supported():
+                    self.skipTest(unsupported_desktop_file_dialog_message())
                 # CDP 下载未捕获到时，回退到 Windows 系统保存弹窗
                 # UIDriver 会按 temp_download_path 写入文件名
                 member_page.export_selected_members_via_save_dialog(temp_download_path)

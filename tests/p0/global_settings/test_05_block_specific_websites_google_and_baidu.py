@@ -8,6 +8,7 @@ from core.cdp_driver import CDPDriver
 from core.config import load_config, timeout_seconds
 from core.kernel_cdp import verify_kernel_website_blocklist_rules
 from core.kernel_process import resolve_kernel_runtime
+from core.local_http import LocalHttpProbe
 from core.logger import setup_logger
 from core.process import wait_for_pid_running, wait_for_pid_stopped
 from pages.environment_page import EnvironmentPage
@@ -22,7 +23,6 @@ BLOCKED_URLS = [
     "https://baidu.com",
     "https://chromewebstore.google.com",
 ]
-ALLOWED_URL = "https://bilibili.com"
 EXPECTED_BLOCK_TEXT = "ERR_BLOCKED_BY_CLIENT"
 
 
@@ -55,87 +55,88 @@ class TestBlockSpecificWebsitesGoogleAndBaidu(unittest.TestCase):
         cleanup_error: Exception | None = None
 
         try:
-            global_settings_page.open()
-            global_settings_page.validate_website_restriction_controls_without_saving(
-                test_url="https://baidu.com",
-                shortcut_name="谷歌应用商店",
-            )
-            global_settings_page.configure_website_restriction_blocklist(
-                urls=["https://baidu.com"],
-                shortcut_name="谷歌应用商店",
-            )
-
-            environment_page.open_list()
-            environment_page.search_environment(ENVIRONMENT_SEARCH_KEYWORD)
-            environment_name = environment_page.environment_name_at_position(2)
-            assert_true(
-                bool(environment_name),
-                f"second environment was not found by keyword: {ENVIRONMENT_SEARCH_KEYWORD}",
-            )
-
-            self._close_environment_if_open(
-                environment_page,
-                environment_name,
-                timeout_seconds=environment_close_timeout,
-                kernel_process_timeout=kernel_process_timeout,
-            )
-
-            kernel_pid = environment_page.open_environment_and_capture_pid(environment_name)
-            environment_opened = True
-            assert_true(
-                wait_for_pid_running(kernel_pid, timeout_seconds=kernel_process_timeout),
-                f"kernel process did not start: pid={kernel_pid}",
-            )
-            environment_page.wait_environment_action_text(
-                environment_name,
-                "关闭",
-                timeout_seconds=environment_open_timeout,
-            )
-
-            kernel_runtime = resolve_kernel_runtime(
-                environment_name,
-                kernel_pid,
-                timeout_seconds=kernel_cdp_timeout,
-                probe_timeout_seconds=kernel_cdp_probe_timeout,
-                http_timeout_seconds=http_probe_timeout,
-            )
-            result = verify_kernel_website_blocklist_rules(
-                kernel_runtime.cdp_port,
-                blocked_urls=BLOCKED_URLS,
-                allowed_url=ALLOWED_URL,
-                expected_block_text=EXPECTED_BLOCK_TEXT,
-                timeout_seconds=60,
-                http_timeout_seconds=http_probe_timeout,
-            )
-            for check in result.checks[: len(BLOCKED_URLS)]:
-                assert_true(
-                    check.blocked,
-                    "url was not blocked as expected: "
-                    f"requested_url={check.requested_url}, target_url={check.target_url}, "
-                    f"title={check.title}, error={check.error_text}, evidence={check.evidence[:1000]}",
+            with LocalHttpProbe() as allowed_probe:
+                global_settings_page.open()
+                global_settings_page.validate_website_restriction_controls_without_saving(
+                    test_url="https://baidu.com",
+                    shortcut_name="谷歌应用商店",
                 )
-            allowed_check = result.checks[-1]
-            assert_true(
-                allowed_check.loaded and not allowed_check.blocked,
-                "allowed url was not loaded as expected under blocklist: "
-                f"requested_url={allowed_check.requested_url}, target_url={allowed_check.target_url}, "
-                f"title={allowed_check.title}, error={allowed_check.error_text}, "
-                f"evidence={allowed_check.evidence[:1000]}",
-            )
+                global_settings_page.configure_website_restriction_blocklist(
+                    urls=["https://baidu.com"],
+                    shortcut_name="谷歌应用商店",
+                )
 
-            self._close_environment_if_open(
-                environment_page,
-                environment_name,
-                timeout_seconds=environment_close_timeout,
-                kernel_pid=kernel_pid,
-                kernel_process_timeout=kernel_process_timeout,
-            )
-            environment_opened = False
-            kernel_pid = 0
-            assert_true(
-                environment_page.environment_action_text(environment_name) == "打开",
-                f"environment action text was not restored to open: {environment_name}",
-            )
+                environment_page.open_list()
+                environment_page.search_environment(ENVIRONMENT_SEARCH_KEYWORD)
+                environment_name = environment_page.environment_name_at_position(2)
+                assert_true(
+                    bool(environment_name),
+                    f"second environment was not found by keyword: {ENVIRONMENT_SEARCH_KEYWORD}",
+                )
+
+                self._close_environment_if_open(
+                    environment_page,
+                    environment_name,
+                    timeout_seconds=environment_close_timeout,
+                    kernel_process_timeout=kernel_process_timeout,
+                )
+
+                kernel_pid = environment_page.open_environment_and_capture_pid(environment_name)
+                environment_opened = True
+                assert_true(
+                    wait_for_pid_running(kernel_pid, timeout_seconds=kernel_process_timeout),
+                    f"kernel process did not start: pid={kernel_pid}",
+                )
+                environment_page.wait_environment_action_text(
+                    environment_name,
+                    "关闭",
+                    timeout_seconds=environment_open_timeout,
+                )
+
+                kernel_runtime = resolve_kernel_runtime(
+                    environment_name,
+                    kernel_pid,
+                    timeout_seconds=kernel_cdp_timeout,
+                    probe_timeout_seconds=kernel_cdp_probe_timeout,
+                    http_timeout_seconds=http_probe_timeout,
+                )
+                result = verify_kernel_website_blocklist_rules(
+                    kernel_runtime.cdp_port,
+                    blocked_urls=BLOCKED_URLS,
+                    allowed_url=allowed_probe.url,
+                    expected_block_text=EXPECTED_BLOCK_TEXT,
+                    timeout_seconds=60,
+                    http_timeout_seconds=http_probe_timeout,
+                )
+                for check in result.checks[: len(BLOCKED_URLS)]:
+                    assert_true(
+                        check.blocked,
+                        "url was not blocked as expected: "
+                        f"requested_url={check.requested_url}, target_url={check.target_url}, "
+                        f"title={check.title}, error={check.error_text}, evidence={check.evidence[:1000]}",
+                    )
+                allowed_check = result.checks[-1]
+                assert_true(
+                    allowed_check.loaded and not allowed_check.blocked,
+                    "allowed url was not loaded as expected under blocklist: "
+                    f"requested_url={allowed_check.requested_url}, target_url={allowed_check.target_url}, "
+                    f"title={allowed_check.title}, error={allowed_check.error_text}, "
+                    f"evidence={allowed_check.evidence[:1000]}",
+                )
+
+                self._close_environment_if_open(
+                    environment_page,
+                    environment_name,
+                    timeout_seconds=environment_close_timeout,
+                    kernel_pid=kernel_pid,
+                    kernel_process_timeout=kernel_process_timeout,
+                )
+                environment_opened = False
+                kernel_pid = 0
+                assert_true(
+                    environment_page.environment_action_text(environment_name) == "打开",
+                    f"environment action text was not restored to open: {environment_name}",
+                )
         finally:
             try:
                 if environment_opened and environment_name:

@@ -60,21 +60,29 @@ class CDPDriver:
 
     def connect(self) -> None:
         driver = str(self.config["cdp"].get("driver", "playwright")).lower()
-        fallback = str(self.config["cdp"].get("fallback_driver", "websocket")).lower()
+        fallback = str(self.config["cdp"].get("fallback_driver", "")).lower()
         try:
             if driver == "playwright":
                 self.connect_playwright()
             elif driver == "websocket":
                 self.connect_websocket()
+                raise CDPConnectionError(
+                    "raw WebSocket CDP driver cannot operate Playwright page objects; "
+                    "use cdp.driver=playwright"
+                )
             else:
                 raise CDPConnectionError(f"unsupported CDP driver: {driver}")
         except Exception as exc:
             self.logger.error("Primary CDP driver failed: %s", exc)
+            self.close()
             if fallback and fallback != driver:
                 self.logger.info("Trying fallback CDP driver: %s", fallback)
                 if fallback == "websocket":
-                    self.connect_websocket()
-                    return
+                    raise CDPConnectionError(
+                        "Playwright CDP connection failed. The raw WebSocket fallback is disabled "
+                        "because it cannot operate existing page-object automation; restart the APP/CDP "
+                        "session or fix the Playwright CDP endpoint."
+                    ) from exc
                 if fallback == "playwright":
                     self.connect_playwright()
                     return
@@ -92,7 +100,11 @@ class CDPDriver:
         while time.time() < deadline:
             try:
                 self.playwright = sync_playwright().start()
-                self.browser = self.playwright.chromium.connect_over_cdp(self.endpoint)
+                remaining_ms = max(1000, int((deadline - time.time()) * 1000))
+                self.browser = self.playwright.chromium.connect_over_cdp(
+                    self.endpoint,
+                    timeout=remaining_ms,
+                )
                 context = self.browser.contexts[0] if self.browser.contexts else self.browser.new_context()
                 self.page = self._select_default_page(context.pages) if context.pages else context.new_page()
                 self.logger.info("Connected to APP through Playwright CDP: %s", self.endpoint)
@@ -100,8 +112,12 @@ class CDPDriver:
             except Exception as exc:
                 last_error = exc
                 self.close()
-                time.sleep(1)
-        raise CDPConnectionError(f"Playwright CDP connect timeout: {last_error}")
+                remaining = deadline - time.time()
+                if remaining > 0:
+                    time.sleep(min(1, remaining))
+        raise CDPConnectionError(
+            f"Playwright CDP connect timeout after {connect_timeout}s: {last_error}"
+        )
 
     def connect_websocket(self) -> None:
         try:

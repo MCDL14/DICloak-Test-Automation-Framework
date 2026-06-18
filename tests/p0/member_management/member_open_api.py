@@ -109,12 +109,22 @@ class MemberEditApiClient:
     def _get_with_status_retry(self, url: str, timeout: int):
         max_attempts = self.api_config.status_retry_times + 1
         response = None
+        last_error: requests.RequestException | None = None
         for attempt in range(1, max_attempts + 1):
-            response = requests.get(url, timeout=timeout)
+            try:
+                response = requests.get(url, timeout=timeout)
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < max_attempts:
+                    time.sleep(self.api_config.status_retry_interval_seconds)
+                    continue
+                raise
             if response.status_code == 200:
                 return response
             if attempt < max_attempts:
                 time.sleep(self.api_config.status_retry_interval_seconds)
+        if response is None and last_error is not None:
+            raise last_error
         return response
 
     @staticmethod

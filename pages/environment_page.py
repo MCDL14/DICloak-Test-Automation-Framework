@@ -340,6 +340,7 @@ class EnvironmentPage(BasePage):
 
     def dismiss_blocking_overlays(self) -> None:
         # 调试中断后可能残留创建环境抽屉、二次确认弹窗等，先关闭避免遮挡列表按钮。
+        self._hide_nonessential_floating_widgets()
         for _ in range(4):
             has_overlay = self.cdp.evaluate(
                 """
@@ -368,6 +369,47 @@ class EnvironmentPage(BasePage):
             if not clicked:
                 self.cdp.press("Escape")
             time.sleep(0.5)
+
+    def _hide_nonessential_floating_widgets(self) -> None:
+        # Crisp 在线客服浮层会固定在右下角并拦截分页控件点击；隐藏不影响被测业务页面。
+        try:
+            self.cdp.evaluate(
+                """
+                () => {
+                    const hidden = new Set();
+                    const hide = (el) => {
+                        if (!el || hidden.has(el)) return;
+                        hidden.add(el);
+                        el.style.setProperty("display", "none", "important");
+                        el.style.setProperty("pointer-events", "none", "important");
+                    };
+                    for (const el of Array.from(document.querySelectorAll(".crisp-client, [class*='crisp-client']"))) {
+                        hide(el);
+                    }
+                    const visible = (el) => {
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== "none"
+                            && style.visibility !== "hidden"
+                            && rect.width > 0
+                            && rect.height > 0;
+                    };
+                    for (const el of Array.from(document.body ? document.body.children : [])) {
+                        if (!visible(el)) continue;
+                        const text = String(el.innerText || el.textContent || "").toLowerCase();
+                        if (!text.includes("chat with us") && !text.includes("questions?")) continue;
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        const fixedLike = ["fixed", "sticky"].includes(style.position);
+                        const bottomRight = rect.right > window.innerWidth - 420 && rect.bottom > window.innerHeight - 260;
+                        if (fixedLike || bottomRight) hide(el);
+                    }
+                    return hidden.size;
+                }
+                """
+            )
+        except Exception:
+            return
 
     def _wait_for_search_input_visible(self) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
@@ -1232,6 +1274,7 @@ class EnvironmentPage(BasePage):
         normalized = str(page_size_text or "").replace(" ", "").strip()
         if not normalized:
             raise ValueError("pagination page size must not be empty")
+        self.dismiss_blocking_overlays()
         self.wait_pagination_size_selector_visible()
         if self.cdp.evaluate(self._pagination_size_selected_script(normalized)):
             return

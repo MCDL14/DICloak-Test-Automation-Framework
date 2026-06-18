@@ -1,0 +1,50 @@
+# Copy this file to config/remote_sync.yaml only when the default remote
+# snapshot sync rules need local overrides.
+#
+# The real config/remote_sync.yaml is ignored by git. Keep secrets and local
+# runtime configs out of sync packages; remote sync preserves the remote
+# config/*.yaml runtime files from the previous active project directory.
+# Runtime configs, connection caches, logs, screenshots, reports, and
+# remote_artifacts are always excluded even if a local override forgets them.
+
+include:
+  - "*.md"
+  - "run.py"
+  - "streamlit_runner.py"
+  - "requirements*.txt"
+  - "pyproject.toml"
+  - "core/**"
+  - "locators/**"
+  - "pages/**"
+  - "tests/**"
+  - "ui/**"
+  - "config/*.example.yaml"
+  - "test_data/README.md"
+  - "test_data/import/**"
+  - "test_data/export/**"
+  - "test_data/bookmarks/**"
+  - "test_data/members/**"
+  - "test_data/extensions/**"
+  - "test_data/Tools/**"
+
+exclude:
+  - ".git/**"
+  - ".venv/**"
+  - "venv/**"
+  - "env/**"
+  - "__pycache__/**"
+  - "**/__pycache__/**"
+  - "*.pyc"
+  - "*.pyo"
+  - ".pytest_cache/**"
+  - ".mypy_cache/**"
+  - ".ruff_cache/**"
+  - "logs/**"
+  - "reports/**"
+  - "screenshots/**"
+  - "remote_artifacts/**"
+  - "config/config.yaml"
+  - "config/test_data.yaml"
+  - "config/remote_hosts.yaml"
+  - "config/remote_sync.yaml"
+  - "config/remote_connection_cache.yaml"

@@ -16,6 +16,12 @@ hosts:
     password_env: DICLOAK_REMOTE_LINUX_PASSWORD
     key_filename: ""
     command_prefix: ""
+    # Optional snapshot sync settings. sync_release_root can be left blank;
+    # default is <project_dir>_releases, for example
+    # /home/dic/dicloak_automation_linux_releases.
+    sync_enabled: true
+    sync_release_root: ""
+    sync_keep_releases: 5
 
   - name: macos-arm64
     enabled: true
@@ -30,3 +36,7 @@ hosts:
     password_env: DICLOAK_REMOTE_MAC_PASSWORD
     key_filename: ""
     command_prefix: ""
+    # Default release root becomes /Users/tianji/dicloak_automation_mac_releases.
+    sync_enabled: true
+    sync_release_root: ""
+    sync_keep_releases: 5

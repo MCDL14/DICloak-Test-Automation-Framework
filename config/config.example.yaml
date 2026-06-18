@@ -50,8 +50,8 @@ cdp:
   port: 9222
   # 首选 CDP 驱动，当前优先使用 playwright
   driver: "playwright"
-  # 首选驱动失败时的兜底驱动
-  fallback_driver: "websocket"
+  # 首选驱动失败时的兜底驱动；保持为空，raw websocket 不能驱动 Playwright 页面对象
+  fallback_driver: ""
   # CDP 连接超时时间，单位秒
   connect_timeout: 30
   # 默认目标页面 URL 关键字；为空时后续通过页面标题或关键元素识别

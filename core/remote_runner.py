@@ -36,9 +36,13 @@ class RemoteHost:
     enabled: bool = True
     platform: str = ""
     password_env: str = ""
+    password: str = ""
     key_filename: str = ""
     venv_activate: str = ""
     command_prefix: str = ""
+    sync_enabled: bool = True
+    sync_release_root: str = ""
+    sync_keep_releases: int = 5
 
 
 @dataclass(frozen=True)
@@ -343,13 +347,40 @@ def _parse_remote_host(item: dict[str, Any], index: int) -> RemoteHost:
         python=str(item.get("python", "python")).strip() or "python",
         config=str(item.get("config", "config/config.yaml")).strip() or "config/config.yaml",
         port=port,
-        enabled=bool(item.get("enabled", True)),
+        enabled=_bool_value(item.get("enabled", True), default=True),
         platform=str(item.get("platform", "")).strip(),
         password_env=str(item.get("password_env", "")).strip(),
+        password="",
         key_filename=str(item.get("key_filename", "")).strip(),
         venv_activate=str(item.get("venv_activate", "")).strip(),
         command_prefix=str(item.get("command_prefix", "")).strip(),
+        sync_enabled=_bool_value(item.get("sync_enabled", True), default=True),
+        sync_release_root=str(item.get("sync_release_root", "")).strip(),
+        sync_keep_releases=_positive_int(item.get("sync_keep_releases", 5), default=5),
     )
+
+
+def _bool_value(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+    return bool(value)
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return default
+    return result if result > 0 else default
 
 
 def _exec_ssh_command(host: RemoteHost, command: str, log_queue: queue.Queue) -> int:
@@ -374,7 +405,7 @@ def _connect_ssh_client(host: RemoteHost) -> Any:
     except ImportError as exc:
         raise RemoteRunError("paramiko is required for UI remote execution") from exc
 
-    password = os.environ.get(host.password_env, "") if host.password_env else ""
+    password = host.password or (os.environ.get(host.password_env, "") if host.password_env else "")
     connect_kwargs: dict[str, Any] = {
         "hostname": host.host,
         "port": host.port,

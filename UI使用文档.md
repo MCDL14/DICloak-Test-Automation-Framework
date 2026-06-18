@@ -120,14 +120,17 @@ Stop-Process -Id <OwningProcess> -Force
 
 这是最核心的页面，功能包括：
 
-#### 步骤 1：筛选模块
-- 左侧栏 "筛选模块" 多选框：取消勾选不需要的模块
-- "搜索用例" 输入框：按模块、测试类、测试方法或完整 test_id 缩小当前展示范围
+#### 步骤 1：显示与批量选择
+- 左侧栏 "显示模块（不影响执行）" 多选框：只控制主区域显示哪些模块
+- "搜索显示" 输入框：按模块、测试类、测试方法或完整 test_id 缩小当前列表显示
+- 显示设置不会取消用例勾选，也不会改变本机执行范围
 - "全选"/"取消全选" 按钮：批量操作所有用例
 
 #### 步骤 2：选择用例
 - 每个模块是一个折叠面板（≤3 条用例默认展开）
-- 面板内有 "选中本模块" / "取消本模块" 按钮 + 每条用例的独立 checkbox
+- 模块标题行直接显示已选数量，并提供 "选中模块" / "取消模块" 按钮
+- 不展开模块也能看到模块选中状态，并直接全选或取消该模块
+- 折叠面板内保留每条用例的独立 checkbox
 - 勾选状态在切换面板时**不会丢失**（存在 session_state）
 - 单条用例取消勾选后，不会被模块级按钮之外的渲染流程自动改回选中
 
@@ -136,14 +139,52 @@ Stop-Process -Id <OwningProcess> -Force
 - **执行位置=远程节点**：通过 SSH 登录目标机器，在远端项目目录执行 `python run.py`。
 - **连接已打开的 APP**（默认勾选）：连接已手动启动的 DICloak APP
 - **取消勾选**：框架自动启动新 APP
-- 远程节点模式第一版支持的运行范围：
+- 本机执行使用全部已勾选用例；左侧显示设置只影响列表可见性。
+- 远程节点模式支持的运行范围：
   - 远程预检：`python run.py --config <config> --precheck`
   - P0 全量：`python run.py --config <config> --level P0`
   - 按业务模块：`python run.py --config <config> --business-module <name>`
   - 按目录模块：`python run.py --config <config> --module <module>`
   - 按单用例名：`python run.py --config <config> --case <case>`
 
-远程节点模式暂不按左侧勾选的 test id 过滤；请使用侧边栏里的远程运行范围。
+远程节点模式暂不按左侧勾选的 test id 过滤；请使用主页面“远程节点执行”区域里的远程运行范围。
+
+侧边栏“执行状态”会显示当前 UI 后台任务是否空闲。若用户刷新页面、终止前台轮询或旧任务异常结束后留下残留执行锁，页面会提示“检测到残留执行锁”，此时可点击“解除残留执行锁”后重新执行；如果后台线程仍在运行，则不会允许解除，避免同时抢占 APP/CDP。
+
+远程节点执行区域按操作层级组织：
+
+- 选择节点。
+- SSH 连接信息。
+- 远端项目/配置状态。
+- 代码同步动作。
+- 运行范围。
+- 执行选项。
+- 命令预览。
+
+远程节点模式会展示当前节点状态：
+
+- 节点名称、平台、SSH 地址。
+- 当前 UI 连接信息：SSH IP/主机、端口、用户名和本次会话密码状态。
+- 远端项目目录、运行配置、Python 命令、虚拟环境激活脚本。
+- 认证来源，只显示 `SSH key`、`SSH agent/key` 或 `password_env:<环境变量名>`，不显示真实密码。
+- 连接缓存状态；缓存只保存 IP、端口、用户名，不保存密码。
+- 代码同步开关、发布目录和保留快照数量。
+- 命令预览，用于在启动前确认实际会执行的 `cd <project_dir> && . <venv_activate> && python run.py ...`。
+
+远程连接信息填写：
+
+- 在“远程连接信息”中填写 SSH IP/主机、端口、用户名。
+- 可以填写“SSH 密码（本次 UI 会话）”，该密码只保存在当前 Streamlit 会话内存里，不写入 YAML、不写入缓存、不进入日志。
+- 勾选“缓存 IP、端口和用户名到本机”后，执行远程操作或点击“保存连接缓存”会写入 `config/remote_connection_cache.yaml`。
+- `config/remote_connection_cache.yaml` 已加入 `.gitignore`，用于减少重复输入；密码仍需要每次 UI 会话手动填写，或改用 `password_env` / SSH key。
+
+远程节点模式还提供远端代码管理：
+
+- **检查远端代码**：比较远端当前 `.remote_manifest.json` 和本地当前工作区快照，判断是否会跑旧代码。
+- **同步当前代码**：通过 SFTP 把本地当前工作区发布到远端新快照目录，不依赖远端安装 Git。
+- **远程执行前同步当前代码**：执行用例前先同步，默认关闭，避免误同步。
+
+同步会保留远端已有 `config/*.yaml` 运行配置和 `.venv`，并排除本地真实配置、远程连接缓存、日志、截图、报告和 `remote_artifacts/`。默认发布目录为 `<project_dir>_releases`，真实规则可通过本机 `config/remote_sync.yaml` 覆盖；示例见 `config/remote_sync.example.yaml`。
 
 远程节点模式还提供“检查远程节点”按钮。该按钮只做只读健康检查，不启动 APP、不执行用例。检查项包括：
 
@@ -182,6 +223,24 @@ remote_artifacts/<node-name>/<yyyyMMdd_HHmmss>/
 
 `remote_artifacts/` 已加入 `.gitignore`，不要提交远程日志、截图或报告。
 
+远程任务结束后，如果日志中包含健康检查、退出码或产物归档信息，执行页会额外展示“远程执行摘要”：
+
+- `[PASS]` / `[FAIL]` 数量。
+- 远程退出码和耗时。
+- 健康检查失败项数量。
+- 远程产物归档目录。
+- `[FAIL]` 明细行。
+
+#### 远程节点能力矩阵
+
+执行页会展示 Windows、Linux、macOS 的远程节点能力矩阵，避免不同平台边界混淆：
+
+| 平台 | 远程/本地执行 | CDP 自动化 | APP 托管启动 | 系统代理 | 原生文件选择器 | 产物拉取 | 已验证范围 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows | 支持 | 支持 | 支持 | 支持启停和恢复 | 支持 Windows UIAutomation 兜底 | 本机产物直接保留；远程节点可拉取 | Windows P0 主链路，代理检测受外部代理连通性影响 |
+| Linux | 支持 SSH 远程 CLI | 支持 | 已验证 | 暂不支持自动启停；代理管理继续执行业务流程 | 暂不支持 | 支持 `logs/screenshots/reports` | `precheck`、`environment_group_management`、`member_management`、`global_settings` 主流程；Web Store 安装检查仍受外部网络影响 |
+| macOS | 支持 SSH 远程 CLI | 支持 | 按远端配置和图形会话分层验证 | 暂不支持自动启停；代理管理不跳过 | 暂不支持 | 支持 `logs/screenshots/reports` | P0 全量、`environment_group_management`、代理管理业务流程 |
+
 #### 步骤 4：执行
 - 点击 "▶ 运行选中（N 条）" 按钮
 - 后台线程执行，前台**实时流式**显示日志（固定高度展示，最多保留 200 行）
@@ -201,7 +260,7 @@ remote_artifacts/<node-name>/<yyyyMMdd_HHmmss>/
 cp config/remote_hosts.example.yaml config/remote_hosts.yaml
 ```
 
-`config/remote_hosts.yaml` 已加入 `.gitignore`，用于保存本机真实内网节点。示例：
+`config/remote_hosts.yaml` 已加入 `.gitignore`，用于保存节点模板。SSH IP、端口、用户名可以直接在 UI 中填写并缓存到 `config/remote_connection_cache.yaml`；该缓存同样已加入 `.gitignore`，且不保存密码。示例：
 
 ```yaml
 hosts:
@@ -228,6 +287,13 @@ hosts:
 - `config`：远端自动化配置文件路径，相对 `project_dir`。
 - `password_env`：本机环境变量名，密码只从环境变量读取，不写入 YAML。
 - `key_filename`：SSH key 路径；推荐优先使用 SSH key。
+
+UI 连接信息优先级：
+
+1. UI 中填写的 SSH IP/端口/用户名会覆盖 `remote_hosts.yaml` 中的默认连接信息。
+2. UI 中填写的临时密码优先用于本次远程操作。
+3. 如果 UI 密码为空，则继续使用 `password_env`、`key_filename` 或 SSH agent/key。
+4. 本机连接缓存 `config/remote_connection_cache.yaml` 只作为下次打开 UI 时的默认填充值，不保存密码。
 
 Windows PowerShell 临时设置密码环境变量示例：
 
@@ -453,7 +519,11 @@ streamlit run ui/app.py --server.port 8502
 
 ### Q10: 远端没有项目会怎么样？
 
-点击“检查远程节点”会提前失败并提示 `[FAIL] project_dir missing: <path>`。如果直接远程执行，也会在 `cd <project_dir>` 阶段失败。当前 UI 不会自动部署项目。
+点击“检查远程节点”会提前失败并提示 `[FAIL] project_dir missing: <path>`。如果直接远程执行，也会在 `cd <project_dir>` 阶段失败。可以先点击“同步当前代码”创建远端快照和项目软链接；但同步不会自动创建 `.venv` 或真实 `config/*.yaml`，这些仍需要在远端准备或从旧项目目录保留。
+
+### Q11: 本机提示 CDP 连不上，但 9222 端口能访问？
+
+`/json/version` 能返回只说明 CDP HTTP 入口还在。若日志显示 `ws connected` 后 `BrowserType.connect_over_cdp` 超时，说明 Playwright 没能完成 browser-level CDP attach，当前 APP/CDP 会话通常需要重启。框架不再把 raw websocket 当作页面自动化兜底，因为它不能提供 Playwright `page`，后续页面对象无法点击、输入或截图。
 
 ---
 
@@ -465,14 +535,16 @@ streamlit run ui/app.py --server.port 8502
 - 当前 UI 已支持单机进程内的 SSH 远程节点执行，但不是多人测试平台，没有用户认证、权限隔离、远程任务队列或运行记录数据库。
 - 当前执行模型是单 Streamlit 进程内串行执行；跨进程的 CLI/UI 并发需要人工避免。
 - 当前历史页只读取 `logs/run_*.log`，不维护独立任务状态表。
-- 远程节点模式第一版不负责同步代码、安装依赖或创建远端配置；远端项目、虚拟环境、APP 图形会话和配置文件需提前准备好。
+- 远程节点模式支持 SFTP 快照同步当前代码，但不安装依赖、不创建真实运行配置；远端虚拟环境、APP 图形会话和配置文件仍需提前准备好。
+- 远程执行摘要优先展示最终用例统计；失败/错误详情只聚焦用例失败块和 unittest 错误块，避免把远端浏览器 stderr 噪声误当作用例失败详情。
+- 远程运行范围默认为“远程预检”，该模式只检查远端环境，不运行用例；执行按钮会随范围显示“执行远程预检”“远程执行 P0 全量”等文案，避免误把预检当作全量执行。
 
 ### 10.2 后续优先级
 
 1. 运行历史页增加模块筛选和失败详情搜索。
 2. 执行用例页增加按测试 ID 精确粘贴选择。
 3. 增加执行中取消任务能力，但必须同步设计 APP/CDP 清理和业务数据清理策略。
-4. 远程执行增加拉取远端日志、截图和报告能力。
+4. 远程节点代码同步继续补充回退入口和同步历史展示。
 5. 如果需要多人使用，引入任务队列、跨进程执行锁、用户权限和持久化运行记录。
 6. 将 UI 冒烟验证纳入固定检查项：启动服务、确认首页/执行页/历史页 HTTP 200、确认用例发现数量、关闭服务并确认端口释放。
 
@@ -482,6 +554,12 @@ streamlit run ui/app.py --server.port 8502
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| 2.9 | 2026-06-18 | 远程执行按钮按运行范围动态显示文案：预检明确显示“执行远程预检”，P0 显示“远程执行 P0 全量”，并补充预检不运行用例的提示 |
+| 2.8 | 2026-06-17 | 补充 Mac UI 远程同步后 P0 全量验证；远程执行摘要改为优先读取最终用例统计，失败/错误详情聚焦用例失败块，减少浏览器 stderr 噪声干扰 |
+| 2.7 | 2026-06-17 | 执行页优化显示筛选、模块级选择和远程节点布局：显示模块/搜索显示仅影响列表可见性，模块标题行可直接选中或取消模块，远程节点执行区按节点、SSH、状态、同步、范围、选项和命令预览分组 |
+| 2.6 | 2026-06-17 | 远程节点模式新增 UI 连接信息填写：支持在侧边栏填写 SSH IP、端口、用户名和本次会话密码，并把 IP、端口、用户名缓存到本机 `config/remote_connection_cache.yaml`；密码不落盘 |
+| 2.5 | 2026-06-17 | 远程节点模式新增“检查远端代码”“同步当前代码”和“远程执行前同步当前代码”：通过 SFTP 快照发布本地当前工作区到 Linux/macOS 远端，不依赖远端 Git，并保留远端配置、虚拟环境和旧快照 |
+| 2.4 | 2026-06-17 | 远程节点模式增强：侧边栏展示节点非敏感配置摘要和远程命令预览；执行结果区展示远程健康检查/退出码/产物归档摘要；新增 Windows/Linux/macOS 远程节点能力矩阵 |
 | 2.3 | 2026-06-16 | 补充 Linux 远程节点真实验证：健康检查通过，环境分组模块 `total=6 passed=6 failed=0 errors=0 skipped=0 flaky=0`，远程产物拉取到 `remote_artifacts/linux-ubuntu/20260616_191350`，并确认运行后无 `dicloak/ginsbrowser` 和 CDP 9222 残留 |
 | 2.2 | 2026-06-16 | 远程节点模式新增“远程执行后拉取产物”开关，执行后通过 SFTP 拉取本次新增/修改的 `logs`、`screenshots`、`reports` 到 `remote_artifacts/<node>/<timestamp>`；验证 Mac 环境分组模块通过并拉取 run log |
 | 2.1 | 2026-06-16 | 远程节点模式新增“检查远程节点”按钮，支持只读检查项目目录、run.py、配置、venv、Python 依赖、配置加载和 APP 路径；验证 Mac 健康检查通过，并验证项目目录缺失时会明确 `[FAIL] project_dir missing` |

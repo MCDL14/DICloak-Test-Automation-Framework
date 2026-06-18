@@ -98,15 +98,40 @@ class LoginPage(BasePage):
         try:
             self.fill("username_input", login_username)
             self.fill("password_input", login_password)
+            self.dismiss_login_notice_if_present()
             self.click("login_button")
         except Exception as exc:
+            self.dismiss_login_notice_if_present()
             self._login_by_visible_inputs(login_username, login_password, exc)
 
     def click_login_button(self) -> None:
+        self.dismiss_login_notice_if_present()
         try:
             self.click("login_button")
         except Exception:
+            self.dismiss_login_notice_if_present()
             self.cdp.click_element_by_script(self._login_button_script())
+
+    def dismiss_login_notice_if_present(self, timeout_seconds: float = 1.5) -> bool:
+        """Dismiss the login-page reason dialog shown after forced logout."""
+        deadline = time.time() + timeout_seconds
+        clicked = False
+        while time.time() < deadline:
+            try:
+                result = self.cdp.evaluate(self._login_notice_confirm_button_script())
+            except Exception:
+                return clicked
+            if not isinstance(result, dict) or not result.get("found"):
+                if clicked:
+                    return True
+                time.sleep(0.2)
+                continue
+            if result.get("clicked"):
+                clicked = True
+                time.sleep(0.4)
+                continue
+            return clicked
+        return clicked
 
     def login_failed_message(self) -> str:
         message = self.latest_visible_message_text()
@@ -231,8 +256,18 @@ class LoginPage(BasePage):
         raise TimeoutError("force logout popup did not appear")
 
     def click_force_logout_button(self) -> None:
-        self.cdp.click_element_by_script(self._force_logout_button_script())
-        self.wait_login_page_visible()
+        deadline = time.time() + int(self.config.get("timeouts", {}).get("page_seconds", 10))
+        last_result = None
+        while time.time() < deadline:
+            try:
+                last_result = self.cdp.evaluate(self._click_force_logout_button_script())
+            except Exception as exc:
+                last_result = {"clicked": False, "error": str(exc)}
+            if isinstance(last_result, dict) and last_result.get("clicked"):
+                self.wait_login_page_visible()
+                return
+            time.sleep(0.3)
+        raise TimeoutError(f"force logout button was not clicked: {last_result}")
 
     def wait_login_page_visible(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or int(self.config.get("timeouts", {}).get("page_seconds", 10))
@@ -612,6 +647,39 @@ class LoginPage(BasePage):
         }
         """.replace("__LOGOUT_TEXT__", json.dumps("\u9000\u51fa\u767b\u5f55"))
 
+    def _click_force_logout_button_script(self) -> str:
+        return """
+        () => {
+            const logoutText = __LOGOUT_TEXT__;
+            const buttonTexts = [logoutText, "确定", "确认"];
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const overlays = Array.from(document.querySelectorAll(
+                ".el-message-box, .el-dialog, .el-overlay, .el-notification, .el-popover"
+            )).filter((el) => visible(el) && (el.innerText || el.textContent || "").includes(logoutText));
+            for (const overlay of overlays.reverse()) {
+                const button = Array.from(overlay.querySelectorAll("button, [role='button'], a"))
+                    .filter(visible)
+                    .find((el) => buttonTexts.includes((el.innerText || el.textContent || "").trim()));
+                if (button) {
+                    button.click();
+                    return {
+                        clicked: true,
+                        buttonText: (button.innerText || button.textContent || "").trim(),
+                        overlayText: (overlay.innerText || overlay.textContent || "").trim(),
+                    };
+                }
+            }
+            return { clicked: false };
+        }
+        """.replace("__LOGOUT_TEXT__", json.dumps("\u9000\u51fa\u767b\u5f55"))
+
     def _login_page_visible_script(self) -> str:
         return """
         () => {
@@ -630,6 +698,49 @@ class LoginPage(BasePage):
             return Boolean(passwordInput && loginButton);
         }
         """.replace("__LOGIN_TEXT__", json.dumps("\u7acb\u5373\u767b\u5f55"))
+
+    def _login_notice_confirm_button_script(self) -> str:
+        reason_keywords = ["操作提示", "退出登录", "禁用", "停用", "团队管理员", "到期"]
+        confirm_texts = ["确定", "确认", "我知道了"]
+        return """
+        () => {
+            const reasonKeywords = __REASON_KEYWORDS__;
+            const confirmTexts = __CONFIRM_TEXTS__;
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const loginButton = Array.from(document.querySelectorAll("button"))
+                .find((button) => visible(button) && (button.innerText || button.textContent || "").trim() === __LOGIN_TEXT__);
+            const passwordInput = Array.from(document.querySelectorAll("input"))
+                .find((input) => visible(input) && input.type === "password");
+            if (!loginButton || !passwordInput) {
+                return { found: false, reason: "not login page" };
+            }
+            const overlays = Array.from(document.querySelectorAll(
+                ".el-message-box, .el-dialog, .el-overlay, .el-notification, .el-popover"
+            )).filter(visible).reverse();
+            for (const overlay of overlays) {
+                const text = (overlay.innerText || overlay.textContent || "").trim();
+                if (!reasonKeywords.some((keyword) => text.includes(keyword))) continue;
+                const button = Array.from(overlay.querySelectorAll("button, [role='button'], a"))
+                    .filter(visible)
+                    .find((el) => confirmTexts.includes((el.innerText || el.textContent || "").trim()));
+                if (!button) {
+                    return { found: true, clicked: false, text, reason: "button not found" };
+                }
+                button.click();
+                return { found: true, clicked: true, text };
+            }
+            return { found: false };
+        }
+        """.replace("__REASON_KEYWORDS__", json.dumps(reason_keywords, ensure_ascii=False)).replace(
+            "__CONFIRM_TEXTS__", json.dumps(confirm_texts, ensure_ascii=False)
+        ).replace("__LOGIN_TEXT__", json.dumps("\u7acb\u5373\u767b\u5f55"))
 
     def _confirm_logout_dialog_if_present(self) -> None:
         for text in ("确定", "确认", "退出登录"):

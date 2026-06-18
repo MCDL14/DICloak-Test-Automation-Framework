@@ -22,8 +22,12 @@ import logging
 import queue
 import sys
 import threading
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from core.app import AppManager, AppStartupError
 from core.case_module import get_test_case_module
@@ -41,13 +45,106 @@ from core.remote_runner import (
     run_remote_health_check,
     run_remote_tests,
 )
+from core.remote_sync import (
+    check_remote_code_status,
+    remote_release_root,
+    sync_remote_project,
+)
 from core.result import RunResult
 from core.runner import AutomationRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = PROJECT_ROOT / "config" / "config.yaml"
 REMOTE_HOSTS_PATH = PROJECT_ROOT / "config" / "remote_hosts.yaml"
+REMOTE_CONNECTION_CACHE_PATH = PROJECT_ROOT / "config" / "remote_connection_cache.yaml"
 _RUN_LOCK = threading.Lock()
+_RUN_STATE_LOCK = threading.Lock()
+_RUN_STATE: dict[str, Any] = {
+    "active": False,
+    "task": "",
+    "started_at": "",
+    "thread_ident": None,
+}
+
+
+def _mark_task_started(task: str) -> None:
+    with _RUN_STATE_LOCK:
+        _RUN_STATE.update(
+            {
+                "active": True,
+                "task": task,
+                "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "thread_ident": threading.get_ident(),
+            }
+        )
+
+
+def _mark_task_finished() -> None:
+    with _RUN_STATE_LOCK:
+        _RUN_STATE.update(
+            {
+                "active": False,
+                "task": "",
+                "started_at": "",
+                "thread_ident": None,
+            }
+        )
+
+
+def _state_snapshot() -> dict[str, Any]:
+    with _RUN_STATE_LOCK:
+        return dict(_RUN_STATE)
+
+
+def _thread_alive(thread_ident: int | None) -> bool:
+    if thread_ident is None:
+        return False
+    return any(thread.ident == thread_ident and thread.is_alive() for thread in threading.enumerate())
+
+
+def ui_task_status() -> dict[str, Any]:
+    """Return current in-process UI execution lock state for Streamlit display."""
+    state = _state_snapshot()
+    state["locked"] = _RUN_LOCK.locked()
+    state["thread_alive"] = _thread_alive(state.get("thread_ident"))
+    return state
+
+
+def reset_stale_ui_task_lock() -> bool:
+    """Release only a stale UI lock whose recorded worker thread is no longer alive."""
+    state = ui_task_status()
+    if not state.get("locked"):
+        _mark_task_finished()
+        return True
+    if state.get("active") and state.get("thread_alive"):
+        return False
+    try:
+        _RUN_LOCK.release()
+    except RuntimeError:
+        pass
+    _mark_task_finished()
+    return True
+
+
+def _acquire_run_lock(log_queue: queue.Queue, busy_message: str, task: str) -> bool:
+    if not _RUN_LOCK.acquire(blocking=False):
+        status = ui_task_status()
+        detail = ""
+        if status.get("task") or status.get("started_at"):
+            detail = f" 当前任务={status.get('task') or '-'} 开始={status.get('started_at') or '-'}"
+        log_queue.put(f"{busy_message}{detail}")
+        log_queue.put(None)
+        return False
+    _mark_task_started(task)
+    return True
+
+
+def _release_run_lock() -> None:
+    _mark_task_finished()
+    try:
+        _RUN_LOCK.release()
+    except RuntimeError:
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -142,9 +239,74 @@ def discover_remote_hosts() -> list[dict[str, str]]:
             "venv_activate": host.venv_activate,
             "command_prefix": host.command_prefix,
             "auth": _remote_auth_label(host),
+            "sync_enabled": "是" if host.sync_enabled else "否",
+            "sync_release_root": remote_release_root(host),
+            "sync_keep_releases": str(host.sync_keep_releases),
         }
         for host in hosts
     ]
+
+
+def load_remote_connection_cache() -> dict[str, dict[str, str]]:
+    """读取本机远程连接缓存；只包含 host/port/username，不保存密码."""
+    if not REMOTE_CONNECTION_CACHE_PATH.exists():
+        return {}
+    try:
+        with REMOTE_CONNECTION_CACHE_PATH.open("r", encoding="utf-8") as file_obj:
+            loaded = yaml.safe_load(file_obj) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise RuntimeError(f"远程连接缓存读取失败：{exc}") from exc
+
+    hosts = loaded.get("hosts", {})
+    if not isinstance(hosts, dict):
+        return {}
+
+    result: dict[str, dict[str, str]] = {}
+    for name, item in hosts.items():
+        if not isinstance(item, dict):
+            continue
+        host_name = str(name).strip()
+        if not host_name:
+            continue
+        result[host_name] = {
+            "host": str(item.get("host", "")).strip(),
+            "port": str(item.get("port", "")).strip(),
+            "username": str(item.get("username", "")).strip(),
+            "updated_at": str(item.get("updated_at", "")).strip(),
+        }
+    return result
+
+
+def save_remote_connection_cache(
+    host_name: str,
+    *,
+    ssh_host: str,
+    ssh_port: int,
+    ssh_username: str,
+) -> None:
+    """保存本机远程连接缓存；不会保存 SSH 密码."""
+    host_name = host_name.strip()
+    ssh_host = ssh_host.strip()
+    ssh_username = ssh_username.strip()
+    if not host_name or not ssh_host or not ssh_username:
+        return
+    try:
+        normalized_port = int(ssh_port)
+    except (TypeError, ValueError):
+        return
+    if not 1 <= normalized_port <= 65535:
+        return
+
+    cache = load_remote_connection_cache()
+    cache[host_name] = {
+        "host": ssh_host,
+        "port": str(normalized_port),
+        "username": ssh_username,
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    REMOTE_CONNECTION_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with REMOTE_CONNECTION_CACHE_PATH.open("w", encoding="utf-8") as file_obj:
+        yaml.safe_dump({"hosts": cache}, file_obj, allow_unicode=True, sort_keys=True)
 
 
 def preview_remote_command(
@@ -187,7 +349,7 @@ def remote_capability_matrix() -> list[dict[str, str]]:
             "系统代理": "暂不支持自动启停；代理管理继续执行业务流程",
             "原生文件选择器": "暂不支持",
             "产物拉取": "支持 logs/screenshots/reports",
-            "已验证范围": "precheck、environment_group_management",
+            "已验证范围": "precheck、environment_group_management、member_management、global_settings 主流程；Web Store 安装检查仍受外部网络影响",
         },
         {
             "平台": "macOS",
@@ -210,9 +372,51 @@ def _remote_auth_label(host: RemoteHost) -> str:
     return "SSH agent/key"
 
 
-def _remote_host_by_name(host_name: str) -> RemoteHost | None:
+def _remote_host_by_name(
+    host_name: str,
+    *,
+    ssh_host: str = "",
+    ssh_port: int | None = None,
+    ssh_username: str = "",
+    ssh_password: str = "",
+) -> RemoteHost | None:
     hosts = load_remote_hosts(REMOTE_HOSTS_PATH)
-    return next((item for item in hosts if item.name == host_name), None)
+    host = next((item for item in hosts if item.name == host_name), None)
+    if host is None:
+        return None
+    return _apply_remote_connection_override(
+        host,
+        ssh_host=ssh_host,
+        ssh_port=ssh_port,
+        ssh_username=ssh_username,
+        ssh_password=ssh_password,
+    )
+
+
+def _apply_remote_connection_override(
+    host: RemoteHost,
+    *,
+    ssh_host: str = "",
+    ssh_port: int | None = None,
+    ssh_username: str = "",
+    ssh_password: str = "",
+) -> RemoteHost:
+    resolved_port = host.port
+    if ssh_port is not None:
+        try:
+            resolved_port = int(ssh_port)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("SSH 端口必须是数字") from exc
+        if not 1 <= resolved_port <= 65535:
+            raise RuntimeError("SSH 端口必须在 1 到 65535 之间")
+
+    return replace(
+        host,
+        host=ssh_host.strip() or host.host,
+        port=resolved_port,
+        username=ssh_username.strip() or host.username,
+        password=ssh_password,
+    )
 
 
 def _discovery_logger() -> logging.Logger:
@@ -249,9 +453,7 @@ def run_selected_tests(
         log_queue: 实时日志推送队列，结束时放入 None 作为哨兵。
         attach_existing_app: True=连接已打开 APP，False=自动启动新 APP。
     """
-    if not _RUN_LOCK.acquire(blocking=False):
-        log_queue.put("已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。")
-        log_queue.put(None)
+    if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。", "本机用例执行"):
         return
 
     logger: logging.Logger | None = None
@@ -352,7 +554,7 @@ def run_selected_tests(
     finally:
         if logger and ui_handler:
             logger.removeHandler(ui_handler)
-        _RUN_LOCK.release()
+        _release_run_lock()
         log_queue.put(None)  # 哨兵：通知 UI 执行结束
 
 
@@ -364,18 +566,30 @@ def run_remote_cli(
     *,
     attach_existing_app: bool = False,
     collect_artifacts: bool = True,
+    sync_before_run: bool = False,
+    ssh_host: str = "",
+    ssh_port: int | None = None,
+    ssh_username: str = "",
+    ssh_password: str = "",
 ) -> None:
     """后台通过 SSH 在远程节点执行 run.py，并把远程日志推送到 UI."""
-    if not _RUN_LOCK.acquire(blocking=False):
-        log_queue.put("已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。")
-        log_queue.put(None)
+    if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。", "远程用例执行"):
         return
 
     try:
-        host = _remote_host_by_name(host_name)
+        host = _remote_host_by_name(
+            host_name,
+            ssh_host=ssh_host,
+            ssh_port=ssh_port,
+            ssh_username=ssh_username,
+            ssh_password=ssh_password,
+        )
         if host is None:
             log_queue.put(f"远程节点不存在或未启用：{host_name}")
             return
+
+        if sync_before_run:
+            sync_remote_project(host, log_queue, project_root=PROJECT_ROOT)
 
         request = RemoteRunRequest(
             scope=scope,
@@ -402,19 +616,99 @@ def run_remote_cli(
     except Exception as exc:
         log_queue.put(f"远程执行器内部异常：{exc}")
     finally:
-        _RUN_LOCK.release()
+        _release_run_lock()
         log_queue.put(None)
 
 
-def check_remote_host(host_name: str, log_queue: queue.Queue) -> None:
-    """后台通过 SSH 检查远程节点是否具备执行自动化的基础条件."""
-    if not _RUN_LOCK.acquire(blocking=False):
-        log_queue.put("已有 UI 执行任务正在运行，请等待当前任务结束后再检查远程节点。")
-        log_queue.put(None)
+def check_remote_code(
+    host_name: str,
+    log_queue: queue.Queue,
+    *,
+    ssh_host: str = "",
+    ssh_port: int | None = None,
+    ssh_username: str = "",
+    ssh_password: str = "",
+) -> None:
+    """后台检查远端当前代码快照是否和本地工作区一致."""
+    if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再检查远程代码。", "检查远端代码"):
         return
 
     try:
-        host = _remote_host_by_name(host_name)
+        host = _remote_host_by_name(
+            host_name,
+            ssh_host=ssh_host,
+            ssh_port=ssh_port,
+            ssh_username=ssh_username,
+            ssh_password=ssh_password,
+        )
+        if host is None:
+            log_queue.put(f"远程节点不存在或未启用：{host_name}")
+            return
+        check_remote_code_status(host, log_queue, project_root=PROJECT_ROOT)
+    except (RemoteConfigError, RemoteRunError) as exc:
+        log_queue.put(f"远程代码检查错误：{exc}")
+    except Exception as exc:
+        log_queue.put(f"远程代码检查内部异常：{exc}")
+    finally:
+        _release_run_lock()
+        log_queue.put(None)
+
+
+def sync_remote_code(
+    host_name: str,
+    log_queue: queue.Queue,
+    *,
+    ssh_host: str = "",
+    ssh_port: int | None = None,
+    ssh_username: str = "",
+    ssh_password: str = "",
+) -> None:
+    """后台把本地当前工作区同步为远端新的可回退快照."""
+    if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再同步远程代码。", "同步远端代码"):
+        return
+
+    try:
+        host = _remote_host_by_name(
+            host_name,
+            ssh_host=ssh_host,
+            ssh_port=ssh_port,
+            ssh_username=ssh_username,
+            ssh_password=ssh_password,
+        )
+        if host is None:
+            log_queue.put(f"远程节点不存在或未启用：{host_name}")
+            return
+        sync_remote_project(host, log_queue, project_root=PROJECT_ROOT)
+    except (RemoteConfigError, RemoteRunError) as exc:
+        log_queue.put(f"远程代码同步错误：{exc}")
+    except Exception as exc:
+        log_queue.put(f"远程代码同步内部异常：{exc}")
+    finally:
+        _release_run_lock()
+        log_queue.put(None)
+
+
+def check_remote_host(
+    host_name: str,
+    log_queue: queue.Queue,
+    *,
+    ssh_host: str = "",
+    ssh_port: int | None = None,
+    ssh_username: str = "",
+    ssh_password: str = "",
+) -> None:
+    """后台通过 SSH 检查远程节点是否具备执行自动化的基础条件."""
+    if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再检查远程节点。", "检查远程节点"):
+        return
+
+    try:
+        host = _remote_host_by_name(
+            host_name,
+            ssh_host=ssh_host,
+            ssh_port=ssh_port,
+            ssh_username=ssh_username,
+            ssh_password=ssh_password,
+        )
         if host is None:
             log_queue.put(f"远程节点不存在或未启用：{host_name}")
             return
@@ -429,5 +723,5 @@ def check_remote_host(host_name: str, log_queue: queue.Queue) -> None:
     except Exception as exc:
         log_queue.put(f"远程健康检查内部异常：{exc}")
     finally:
-        _RUN_LOCK.release()
+        _release_run_lock()
         log_queue.put(None)

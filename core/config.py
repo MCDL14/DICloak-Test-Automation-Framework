@@ -34,7 +34,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 9222,
         "driver": "playwright",
-        "fallback_driver": "websocket",
+        "fallback_driver": "",
         "connect_timeout": 30,
         "default_page_url_keyword": "",
     },

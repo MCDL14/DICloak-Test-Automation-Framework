@@ -11,6 +11,8 @@ env/
 config/config.yaml
 config/test_data.yaml
 config/remote_hosts.yaml
+config/remote_sync.yaml
+config/remote_connection_cache.yaml
 logs/*
 reports/*
 screenshots/*

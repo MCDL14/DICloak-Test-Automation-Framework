@@ -35,12 +35,18 @@ import streamlit as st
 
 from streamlit_runner import (
     check_remote_host,
+    check_remote_code,
     discover_cases,
     discover_remote_hosts,
+    load_remote_connection_cache,
     preview_remote_command,
     remote_capability_matrix,
+    reset_stale_ui_task_lock,
     run_remote_cli,
     run_selected_tests,
+    save_remote_connection_cache,
+    sync_remote_code,
+    ui_task_status,
 )
 
 _LOG_IDLE_WARNING_SECONDS = 300
@@ -56,6 +62,16 @@ _CLI_SUMMARY_RE = re.compile(
 _REMOTE_EXIT_RE = re.compile(r"远程(?:执行完成|健康检查结束) → 节点=([^\s]+) 退出码=(\d+) 耗时=([\d.]+)s")
 _REMOTE_HEALTH_DONE_RE = re.compile(r"远程健康检查完成 → 失败=(\d+)")
 _REMOTE_ARTIFACT_RE = re.compile(r"远程产物归档 → 文件数=(\d+) 本地目录=(.+)")
+_CASE_ERROR_BLOCK_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2}.*?CASE (?:FAIL|ERROR).*?)(?="
+    r"\n\d{4}-\d{2}-\d{2}.*?CASE START|\n\d{4}-\d{2}-\d{2}.*?Final test summary:|"
+    r"\n远程执行完成|\Z)",
+    re.DOTALL,
+)
+_UNITTEST_ERROR_BLOCK_RE = re.compile(
+    r"(=+\n(?:ERROR|FAIL): .*?)(?=\n-+\nRan \d+ test|\Z)",
+    re.DOTALL,
+)
 
 _REMOTE_SCOPE_OPTIONS = {
     "远程预检": ("precheck", ""),
@@ -132,6 +148,16 @@ def _summary_missing_message(log_text: str) -> tuple[str, str]:
         return "error", "远程执行失败，未能生成结果统计。请查看上方远程日志。"
     if "远程健康检查错误" in log_text or "远程健康检查内部异常" in log_text or "远程健康检查未通过" in log_text:
         return "error", "远程健康检查未通过。请查看上方 [FAIL] 项并补齐远端环境。"
+    if "远程代码检查错误" in log_text or "远程代码检查内部异常" in log_text:
+        return "error", "远程代码检查失败。请查看上方日志。"
+    if "远程代码同步错误" in log_text or "远程代码同步内部异常" in log_text:
+        return "error", "远程代码同步失败。请查看上方日志，远端旧快照仍保留。"
+    if "远程代码同步完成" in log_text:
+        return "success", "远程代码同步完成。"
+    if "远程代码检查完成" in log_text and "状态=synced" in log_text:
+        return "success", "远端代码已与本地当前工作区一致。"
+    if "远程代码检查完成" in log_text:
+        return "warning", "远端代码状态已检查，请根据日志判断是否需要同步。"
     if "远程健康检查结束" in log_text and "退出码=0" in log_text:
         return "success", "远程健康检查通过。"
     if "远程执行完成" in log_text and "退出码=0" in log_text:
@@ -154,8 +180,31 @@ def _parse_result_summary(log_text: str) -> tuple[int, int, int, int, int, int, 
     return None
 
 
+def _failure_detail_text(log_text: str) -> str:
+    blocks: list[str] = []
+    for pattern in (_CASE_ERROR_BLOCK_RE, _UNITTEST_ERROR_BLOCK_RE):
+        for match in pattern.finditer(log_text):
+            block = match.group(1).strip()
+            if block and block not in blocks:
+                blocks.append(block)
+
+    if blocks:
+        return "\n\n".join(blocks)
+
+    focused_lines = [
+        line
+        for line in log_text.splitlines()
+        if "CASE FAIL" in line
+        or "CASE ERROR" in line
+        or line.startswith("FAIL: ")
+        or line.startswith("ERROR: ")
+    ]
+    return "\n".join(focused_lines)
+
+
 def _remote_log_summary(log_lines: list[str]) -> dict[str, object]:
     log_text = "\n".join(log_lines)
+    result_summary = _parse_result_summary(log_text)
     pass_lines = [line for line in log_lines if line.startswith("[PASS]")]
     fail_lines = [line for line in log_lines if line.startswith("[FAIL]")]
     exit_match = _REMOTE_EXIT_RE.search(log_text)
@@ -168,6 +217,7 @@ def _remote_log_summary(log_lines: list[str]) -> dict[str, object]:
         "exit": exit_match.groups() if exit_match else None,
         "health_fail_count": int(health_match.group(1)) if health_match else None,
         "artifact": artifact_match.groups() if artifact_match else None,
+        "result_summary": result_summary,
     }
 
 
@@ -179,8 +229,14 @@ def _render_remote_result_summary(log_lines: list[str]) -> None:
 
     with st.expander("远程执行摘要", expanded=True):
         col_pass, col_fail, col_exit = st.columns(3)
-        col_pass.metric("[PASS]", summary["pass_count"])
-        col_fail.metric("[FAIL]", summary["fail_count"])
+        result_summary = summary.get("result_summary")
+        if result_summary:
+            _, passed, failed, errors, _, _, _ = result_summary
+            col_pass.metric("通过", passed)
+            col_fail.metric("失败/错误", failed + errors)
+        else:
+            col_pass.metric("[PASS]", summary["pass_count"])
+            col_fail.metric("[FAIL]", summary["fail_count"])
         exit_info = summary["exit"]
         if exit_info:
             _, exit_code, duration = exit_info
@@ -205,17 +261,56 @@ def _render_remote_result_summary(log_lines: list[str]) -> None:
             st.info(f"远程产物已归档：文件数={file_count}，本地目录={local_dir}")
 
 
-def _remote_host_details(host: dict[str, str]) -> list[dict[str, str]]:
+def _remote_host_details(
+    host: dict[str, str],
+    *,
+    current_host: str = "",
+    current_port: int | str = "",
+    current_username: str = "",
+    password_provided: bool = False,
+    cache_enabled: bool = False,
+) -> list[dict[str, str]]:
+    current_connection = ""
+    if current_host or current_username:
+        current_connection = f"{current_username or '-'}@{current_host or '-'}:{current_port or '22'}"
     return [
         {"字段": "节点", "值": host.get("name", "")},
         {"字段": "平台", "值": host.get("platform") or "unknown"},
-        {"字段": "SSH", "值": f"{host.get('username', '')}@{host.get('host', '')}:{host.get('port', '22')}"},
+        {"字段": "配置默认 SSH", "值": f"{host.get('username', '')}@{host.get('host', '')}:{host.get('port', '22')}"},
+        {"字段": "当前 UI 连接", "值": current_connection or "-"},
+        {"字段": "临时密码", "值": "已填写（仅本次会话）" if password_provided else "未填写"},
+        {"字段": "连接缓存", "值": "已启用（不含密码）" if cache_enabled else "未启用"},
         {"字段": "项目目录", "值": host.get("project_dir", "")},
         {"字段": "配置", "值": host.get("config", "")},
         {"字段": "Python", "值": host.get("python", "")},
         {"字段": "虚拟环境", "值": host.get("venv_activate") or "-"},
         {"字段": "认证", "值": host.get("auth", "")},
+        {"字段": "代码同步", "值": host.get("sync_enabled", "")},
+        {"字段": "发布目录", "值": host.get("sync_release_root", "")},
+        {"字段": "保留快照", "值": host.get("sync_keep_releases", "")},
     ]
+
+
+def _safe_port(value: object, default: int = 22) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return default
+    return port if 1 <= port <= 65535 else default
+
+
+def _remote_run_button_label(scope_label: str, value: str) -> str:
+    if scope_label == "远程预检":
+        return "▶ 执行远程预检"
+    if scope_label == "P0 全量":
+        return "▶ 远程执行 P0 全量"
+    if scope_label == "按业务模块":
+        return f"▶ 远程执行业务模块：{value or '-'}"
+    if scope_label == "按目录模块":
+        return f"▶ 远程执行目录模块：{value or '-'}"
+    if scope_label == "按单用例名":
+        return f"▶ 远程执行单用例：{value or '-'}"
+    return "▶ 远程执行"
 
 
 @st.cache_data(ttl=30, show_spinner="正在读取远程节点...")
@@ -238,27 +333,76 @@ def _load_directory_modules() -> list[str]:
 for c in cases:
     st.session_state.setdefault(_case_key(c["id"]), True)
 
+selected_ids: list[str] = [
+    case["id"]
+    for case in cases
+    if bool(st.session_state.get(_case_key(case["id"]), True))
+]
+selected_count = len(selected_ids)
+
 # ═══════════════════════════════════════════════════════════════════
 # 侧边栏：筛选 & 批量操作
 # ═══════════════════════════════════════════════════════════════════
 
+remote_host_name = ""
+remote_scope = "precheck"
+remote_value = ""
+remote_attach_existing = False
+remote_collect_artifacts = False
+remote_sync_before_run = False
+remote_ssh_host = ""
+remote_ssh_port = 22
+remote_ssh_username = ""
+remote_ssh_password = ""
+remote_cache_enabled = True
+remote_connection_ready = False
+selected_remote_host: dict[str, str] | None = None
+health_clicked = False
+code_status_clicked = False
+code_sync_clicked = False
+
 with st.sidebar:
-    st.header("🔍 筛选模块")
+    st.header("显示设置")
     show_modules = st.multiselect(
-        "只显示以下模块",
+        "显示模块（不影响执行）",
         options=module_names,
         default=module_names,
-        help="取消勾选可隐藏对应模块的用例",
+        help="只控制页面上显示哪些模块；不会取消勾选，也不会改变本机执行范围。",
     )
     case_keyword = st.text_input(
-        "搜索用例",
+        "搜索显示",
         placeholder="输入模块、类名、方法名或 test_id",
-        help="只影响当前页面展示和本次运行范围，不会清空已勾选状态。",
+        help="只缩小下方列表显示；不会清空已勾选状态，也不会改变本机执行范围。",
     ).strip()
+    hidden_module_count = len(set(module_names) - set(show_modules))
+    if hidden_module_count:
+        st.caption(f"已隐藏 {hidden_module_count} 个模块；隐藏不等于取消执行。")
 
     st.divider()
+    st.header("执行状态")
+    task_status = ui_task_status()
+    if task_status.get("locked"):
+        task_name = task_status.get("task") or "-"
+        started_at = task_status.get("started_at") or "-"
+        if task_status.get("active") and task_status.get("thread_alive"):
+            st.warning(f"后台任务仍在运行：{task_name}")
+            st.caption(f"开始时间：{started_at}")
+        else:
+            st.warning("检测到残留执行锁，当前没有活动后台线程。")
+            st.caption(f"上次任务：{task_name}；开始时间：{started_at}")
+            if st.button("解除残留执行锁", use_container_width=True):
+                if reset_stale_ui_task_lock():
+                    st.success("已解除残留执行锁，可以重新启动执行。")
+                    st.rerun()
+                else:
+                    st.error("后台任务仍在运行，暂不能解除执行锁。")
+    else:
+        st.success("空闲，可以启动执行。")
 
-    # 批量选择按钮
+    st.divider()
+    st.header("用例选择")
+    st.caption(f"当前已勾选 {selected_count}/{len(cases)} 条")
+
     col_a, col_b = st.columns(2)
     with col_a:
         if st.button("✅ 全选", use_container_width=True):
@@ -269,9 +413,8 @@ with st.sidebar:
             _set_all_cases_selected(False)
             st.rerun()
 
-    # 运行模式
     st.divider()
-    st.header("⚙️ 运行模式")
+    st.header("运行位置")
     execution_mode = st.radio(
         "执行位置",
         options=["本机", "远程节点"],
@@ -279,119 +422,235 @@ with st.sidebar:
         help="本机模式按当前勾选用例执行；远程节点模式通过 SSH 在目标机器执行 CLI 命令。",
     )
 
-    remote_host_name = ""
-    remote_scope = "precheck"
-    remote_value = ""
-    remote_attach_existing = False
-    remote_collect_artifacts = False
-    selected_remote_host: dict[str, str] | None = None
-    health_clicked = False
-
-    if execution_mode == "远程节点":
-        try:
-            remote_hosts = _load_remote_hosts()
-        except Exception as exc:
-            remote_hosts = []
-            st.error(f"远程节点配置读取失败：{exc}")
-
-        host_labels = [
-            f"{host['name']} ({host.get('platform') or 'unknown'} {host['username']}@{host['host']})"
-            for host in remote_hosts
-        ]
-        if not remote_hosts:
-            st.warning("未发现启用的远程节点；请根据 `config/remote_hosts.example.yaml` 创建 `config/remote_hosts.yaml`。")
-        selected_host_label = st.selectbox(
-            "远程节点",
-            options=host_labels,
-            disabled=not host_labels,
-            help="节点来自 `config/remote_hosts.yaml`，真实密码请使用环境变量或 SSH key。",
-        )
-        if selected_host_label and host_labels:
-            selected_remote_host = remote_hosts[host_labels.index(selected_host_label)]
-            remote_host_name = selected_remote_host["name"]
-
-        if selected_remote_host:
-            with st.expander("远程节点状态", expanded=True):
-                st.table(_remote_host_details(selected_remote_host))
-                st.caption("健康检查通过后再执行模块或全量任务，能更早发现项目目录、依赖或 APP 路径问题。")
-
-        health_clicked = st.button(
-            "检查远程节点",
-            use_container_width=True,
-            disabled=not remote_host_name,
-            help="只读检查远端项目目录、run.py、配置、venv、Python 依赖和 APP 路径，不启动 APP、不跑用例。",
-        )
-
-        remote_scope_label = st.selectbox(
-            "远程运行范围",
-            options=list(_REMOTE_SCOPE_OPTIONS.keys()),
-            help="第一版远程执行复用 CLI 粒度，不直接按当前勾选的 test_id 过滤。",
-        )
-        remote_scope, default_value = _REMOTE_SCOPE_OPTIONS[remote_scope_label]
-        remote_value = default_value
-
-        if remote_scope == "business_module":
-            remote_value = st.selectbox("业务模块", options=module_names)
-        elif remote_scope == "module":
-            directory_modules = _load_directory_modules()
-            if directory_modules:
-                remote_value = st.selectbox("目录模块", options=directory_modules)
-            else:
-                remote_value = ""
-                st.warning("未发现 `tests/p0` 目录模块。")
-        elif remote_scope == "case":
-            remote_value = st.text_input(
-                "单用例名",
-                placeholder="例如 test_01_kernel_integrity.py 或 test_xxx",
-            ).strip()
-
-        if remote_scope != "precheck":
-            remote_attach_existing = st.checkbox(
-                "远程连接已打开的 APP",
-                value=False,
-                help="勾选后给远端 run.py 追加 --attach-existing-app。",
-            )
-
-        remote_collect_artifacts = st.checkbox(
-            "远程执行后拉取产物",
+    if execution_mode == "本机":
+        attach_existing = st.checkbox(
+            "连接已打开的 APP",
             value=True,
-            help="执行结束后拉取远端本次新增或修改的 logs、screenshots、reports 到本机 remote_artifacts。",
+            help="勾选：连接已手动启动的 DICloak APP。\n取消：框架自动启动新 APP。",
         )
-
-        if selected_remote_host:
-            try:
-                command_preview = preview_remote_command(
-                    remote_host_name,
-                    remote_scope,
-                    remote_value,
-                    attach_existing_app=remote_attach_existing,
-                )
-                with st.expander("远程命令预览", expanded=False):
-                    st.code(command_preview, language="bash")
-            except Exception as exc:
-                st.warning(f"远程命令预览失败：{exc}")
-
-        st.caption("远程模式暂不按左侧勾选用例执行；请使用上面的运行范围。")
-
-    attach_existing = st.checkbox(
-        "连接已打开的 APP",
-        value=True,
-        disabled=execution_mode == "远程节点",
-        help="勾选：连接已手动启动的 DICloak APP。\n取消：框架自动启动新 APP。",
-    )
+        st.caption("本机模式执行全部已勾选用例。")
+    else:
+        attach_existing = True
+        st.caption("远程模式使用主页面的远程运行范围，不使用左侧用例勾选。")
 
     st.divider()
     st.caption(f"共 {len(cases)} 条用例 / {len(module_names)} 个模块")
 
 if execution_mode == "远程节点":
-    with st.expander("远程节点能力矩阵", expanded=True):
+    st.subheader("远程节点执行")
+    try:
+        remote_hosts = _load_remote_hosts()
+    except Exception as exc:
+        remote_hosts = []
+        st.error(f"远程节点配置读取失败：{exc}")
+
+    host_labels = [
+        f"{host['name']} ({host.get('platform') or 'unknown'} {host['username']}@{host['host']})"
+        for host in remote_hosts
+    ]
+    if not remote_hosts:
+        st.warning("未发现启用的远程节点；请根据 `config/remote_hosts.example.yaml` 创建 `config/remote_hosts.yaml`。")
+
+    st.markdown("**选择节点**")
+    selected_host_label = st.selectbox(
+        "远程节点",
+        options=host_labels,
+        disabled=not host_labels,
+        help="节点来自 config/remote_hosts.yaml；真实密码请使用本次会话密码、环境变量或 SSH key。",
+    )
+    if selected_host_label and host_labels:
+        selected_remote_host = remote_hosts[host_labels.index(selected_host_label)]
+        remote_host_name = selected_remote_host["name"]
+
+    if selected_remote_host:
+        try:
+            connection_cache = load_remote_connection_cache()
+        except Exception as exc:
+            connection_cache = {}
+            st.warning(f"远程连接缓存读取失败：{exc}")
+
+        cached_connection = connection_cache.get(remote_host_name, {})
+        default_ssh_host = cached_connection.get("host") or selected_remote_host.get("host", "")
+        default_ssh_port = _safe_port(cached_connection.get("port") or selected_remote_host.get("port", 22))
+        default_ssh_username = cached_connection.get("username") or selected_remote_host.get("username", "")
+
+        st.markdown("**SSH 连接信息**")
+        conn_host_col, conn_port_col, conn_user_col = st.columns([2, 1, 2])
+        with conn_host_col:
+            remote_ssh_host = st.text_input(
+                "SSH IP / 主机",
+                value=default_ssh_host,
+                key=f"remote_ssh_host_{remote_host_name}",
+                placeholder="例如 192.168.20.160",
+                help="用于本次 UI 远程操作的 SSH 地址；可缓存到本机，但不会写入仓库。",
+            ).strip()
+        with conn_port_col:
+            remote_ssh_port = int(st.number_input(
+                "端口",
+                min_value=1,
+                max_value=65535,
+                value=default_ssh_port,
+                step=1,
+                key=f"remote_ssh_port_{remote_host_name}",
+            ))
+        with conn_user_col:
+            remote_ssh_username = st.text_input(
+                "用户名",
+                value=default_ssh_username,
+                key=f"remote_ssh_username_{remote_host_name}",
+                placeholder="例如 dic / tianji",
+                help="用于本次 UI 远程操作的 SSH 用户名。",
+            ).strip()
+
+        pass_col, cache_col, save_col = st.columns([2, 2, 1])
+        with pass_col:
+            remote_ssh_password = st.text_input(
+                "SSH 密码（本次 UI 会话）",
+                value="",
+                type="password",
+                key=f"remote_ssh_password_{remote_host_name}",
+                help="密码只保存在当前 Streamlit 会话内存里，不写入 YAML、不写入连接缓存、不进入日志。",
+            )
+        with cache_col:
+            remote_cache_enabled = st.checkbox(
+                "缓存 IP、端口和用户名到本机",
+                value=True,
+                key=f"remote_cache_enabled_{remote_host_name}",
+                help="缓存文件为 config/remote_connection_cache.yaml，已加入 .gitignore；不会保存密码。",
+            )
+            if cached_connection.get("updated_at"):
+                st.caption(f"已加载本机缓存：{cached_connection['updated_at']}")
+            else:
+                st.caption("未发现本机缓存，使用节点默认连接信息。")
+        remote_connection_ready = bool(remote_host_name and remote_ssh_host and remote_ssh_username)
+        with save_col:
+            st.write("")
+            if st.button(
+                "保存缓存",
+                use_container_width=True,
+                disabled=not remote_connection_ready,
+                help="只保存 IP、端口和用户名；密码不会保存。",
+            ):
+                try:
+                    save_remote_connection_cache(
+                        remote_host_name,
+                        ssh_host=remote_ssh_host,
+                        ssh_port=remote_ssh_port,
+                        ssh_username=remote_ssh_username,
+                    )
+                    st.success("连接缓存已保存。")
+                except Exception as exc:
+                    st.error(f"连接缓存保存失败：{exc}")
+        if not remote_connection_ready:
+            st.warning("请填写 SSH IP / 主机和用户名。")
+
+        st.markdown("**远端项目/配置状态**")
+        with st.expander("查看节点状态", expanded=True):
+            st.table(_remote_host_details(
+                selected_remote_host,
+                current_host=remote_ssh_host,
+                current_port=remote_ssh_port,
+                current_username=remote_ssh_username,
+                password_provided=bool(remote_ssh_password),
+                cache_enabled=remote_cache_enabled,
+            ))
+
+        st.markdown("**代码同步动作**")
+        col_health, col_code_status, col_code_sync = st.columns(3)
+        with col_health:
+            health_clicked = st.button(
+                "检查远程节点",
+                use_container_width=True,
+                disabled=not remote_connection_ready,
+                help="只读检查远端项目目录、run.py、配置、venv、Python 依赖和 APP 路径，不启动 APP、不跑用例。",
+            )
+        with col_code_status:
+            code_status_clicked = st.button(
+                "检查远端代码",
+                use_container_width=True,
+                disabled=not remote_connection_ready,
+                help="比较远端当前快照和本地当前工作区，检查是否会跑旧代码。",
+            )
+        with col_code_sync:
+            code_sync_clicked = st.button(
+                "同步当前代码",
+                use_container_width=True,
+                disabled=not remote_connection_ready,
+                help="通过 SFTP 发布本地当前工作区到远端新快照，保留远端配置和旧快照。",
+            )
+
+        st.markdown("**运行范围**")
+        scope_col, value_col = st.columns([1, 2])
+        with scope_col:
+            remote_scope_label = st.selectbox(
+                "远程运行范围",
+                options=list(_REMOTE_SCOPE_OPTIONS.keys()),
+                help="远程执行复用 CLI 粒度，不直接按左侧勾选的 test_id 过滤。",
+            )
+        remote_scope, default_value = _REMOTE_SCOPE_OPTIONS[remote_scope_label]
+        remote_value = default_value
+        with value_col:
+            if remote_scope == "business_module":
+                remote_value = st.selectbox("业务模块", options=module_names)
+            elif remote_scope == "module":
+                directory_modules = _load_directory_modules()
+                if directory_modules:
+                    remote_value = st.selectbox("目录模块", options=directory_modules)
+                else:
+                    remote_value = ""
+                    st.warning("未发现 `tests/p0` 目录模块。")
+            elif remote_scope == "case":
+                remote_value = st.text_input(
+                    "单用例名",
+                    placeholder="例如 test_01_kernel_integrity.py 或 test_xxx",
+                ).strip()
+            else:
+                st.info("当前选择的是远程预检，只检查环境，不运行任何用例。")
+
+        st.markdown("**执行选项**")
+        option_attach_col, option_artifact_col, option_sync_col = st.columns(3)
+        with option_attach_col:
+            remote_attach_existing = st.checkbox(
+                "远程连接已打开的 APP",
+                value=False,
+                disabled=remote_scope == "precheck",
+                help="勾选后给远端 run.py 追加 --attach-existing-app；预检不使用该选项。",
+            )
+        with option_artifact_col:
+            remote_collect_artifacts = st.checkbox(
+                "远程执行后拉取产物",
+                value=True,
+                help="执行结束后拉取远端本次新增或修改的 logs、screenshots、reports 到本机 remote_artifacts。",
+            )
+        with option_sync_col:
+            remote_sync_before_run = st.checkbox(
+                "远程执行前同步当前代码",
+                value=False,
+                help="执行用例前先发布本地当前工作区到远端快照；默认关闭，避免误同步。",
+            )
+
+        st.markdown("**命令预览**")
+        try:
+            command_preview = preview_remote_command(
+                remote_host_name,
+                remote_scope,
+                remote_value,
+                attach_existing_app=remote_attach_existing,
+            )
+            with st.expander("查看远程命令", expanded=False):
+                st.code(command_preview, language="bash")
+        except Exception as exc:
+            st.warning(f"远程命令预览失败：{exc}")
+
+    st.caption("远程模式暂不按左侧勾选用例执行；请使用上面的运行范围。")
+
+    with st.expander("远程节点能力矩阵", expanded=False):
         st.table(remote_capability_matrix())
 
 # ═══════════════════════════════════════════════════════════════════
 # 主体：用例选择列表
 # ═══════════════════════════════════════════════════════════════════
 
-selected_ids: list[str] = []
 visible_case_count = 0
 
 for mod in module_names:
@@ -406,37 +665,42 @@ for mod in module_names:
     if not mod_cases:
         continue
     visible_case_count += len(mod_cases)
-    # 模块折叠面板：用例数 ≤ 3 时默认展开
+    all_mod_cases = by_module[mod]
+    mod_selected_count = sum(
+        1 for c in all_mod_cases
+        if bool(st.session_state.get(_case_key(c["id"]), True))
+    )
+    visible_suffix = ""
+    if len(mod_cases) != len(all_mod_cases):
+        visible_suffix = f"；当前显示 {len(mod_cases)} 条"
+
+    col_name, col_count, col_select, col_clear = st.columns([4, 1.2, 1.2, 1.2])
+    with col_name:
+        st.markdown(f"**{mod}**")
+        st.caption(f"模块用例 {len(all_mod_cases)} 条{visible_suffix}")
+    with col_count:
+        st.write("")
+        st.caption(f"已选 {mod_selected_count}/{len(all_mod_cases)}")
+    with col_select:
+        if st.button("选中模块", key=f"select_mod_{mod}", use_container_width=True):
+            _set_case_selected(all_mod_cases, True)
+            st.rerun()
+    with col_clear:
+        if st.button("取消模块", key=f"clear_mod_{mod}", use_container_width=True):
+            _set_case_selected(all_mod_cases, False)
+            st.rerun()
+
     with st.expander(
-        f"📁 {mod}（{len(mod_cases)} 条）",
+        f"查看用例（{len(mod_cases)} 条）",
         expanded=len(mod_cases) <= 3,
     ):
-        mod_selected_count = sum(
-            1 for c in mod_cases
-            if bool(st.session_state.get(_case_key(c["id"]), True))
-        )
-        col_select, col_clear, col_count = st.columns([1, 1, 4])
-        with col_select:
-            if st.button("选中本模块", key=f"select_mod_{mod}", use_container_width=True):
-                _set_case_selected(mod_cases, True)
-                st.rerun()
-        with col_clear:
-            if st.button("取消本模块", key=f"clear_mod_{mod}", use_container_width=True):
-                _set_case_selected(mod_cases, False)
-                st.rerun()
-        with col_count:
-            st.caption(f"已选 {mod_selected_count}/{len(mod_cases)} 条")
-
-        # 逐条用例 checkbox
         for c in mod_cases:
             key = _case_key(c["id"])
-            checked = st.checkbox(
+            st.checkbox(
                 f"`{c['class_name']}.{c['method_name']}`",
                 key=key,
                 help=c["id"],
             )
-            if checked:
-                selected_ids.append(c["id"])
 
 if visible_case_count == 0:
     st.info("当前筛选条件下没有可显示的用例。")
@@ -452,31 +716,84 @@ with col_btn:
         run_label = f"▶ 运行选中（{len(selected_ids)} 条）"
         run_disabled = len(selected_ids) == 0
     else:
-        run_label = "▶ 远程执行"
-        run_disabled = not remote_host_name or (remote_scope in {"module", "business_module", "case"} and not remote_value)
+        run_label = _remote_run_button_label(remote_scope_label, remote_value)
+        run_disabled = (
+            not remote_connection_ready
+            or (remote_scope in {"module", "business_module", "case"} and not remote_value)
+        )
+    if task_status.get("locked"):
+        run_disabled = True
     run_clicked = st.button(
         run_label,
         type="primary",
         use_container_width=True,
         disabled=run_disabled,
     )
+with col_info:
+    if execution_mode == "本机":
+        st.caption("本机执行全部已勾选用例；显示模块和搜索显示只影响列表可见性。")
+    elif remote_scope == "precheck":
+        st.caption("当前会执行远程预检，不会运行用例；如需跑全部用例，请把远程运行范围改为“P0 全量”。")
+    else:
+        st.caption("远程执行使用上方远程运行范围；左侧用例勾选仅保留给本机模式。")
 
 # ═══════════════════════════════════════════════════════════════════
 # 执行逻辑：后台线程 + 前台轮询日志
 # ═══════════════════════════════════════════════════════════════════
 
-if run_clicked or health_clicked:
+if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
     # ── 占位容器（运行中动态更新） ──
     log_placeholder = st.empty()
     status_placeholder = st.empty()
 
     log_queue: queue.Queue = queue.Queue()
 
+    if execution_mode == "远程节点" and remote_cache_enabled and remote_connection_ready:
+        try:
+            save_remote_connection_cache(
+                remote_host_name,
+                ssh_host=remote_ssh_host,
+                ssh_port=remote_ssh_port,
+                ssh_username=remote_ssh_username,
+            )
+        except Exception as exc:
+            st.warning(f"连接缓存保存失败：{exc}")
+
     # 启动后台执行线程
     if health_clicked:
         thread = threading.Thread(
             target=check_remote_host,
             args=(remote_host_name, log_queue),
+            kwargs={
+                "ssh_host": remote_ssh_host,
+                "ssh_port": remote_ssh_port,
+                "ssh_username": remote_ssh_username,
+                "ssh_password": remote_ssh_password,
+            },
+            daemon=True,
+        )
+    elif code_status_clicked:
+        thread = threading.Thread(
+            target=check_remote_code,
+            args=(remote_host_name, log_queue),
+            kwargs={
+                "ssh_host": remote_ssh_host,
+                "ssh_port": remote_ssh_port,
+                "ssh_username": remote_ssh_username,
+                "ssh_password": remote_ssh_password,
+            },
+            daemon=True,
+        )
+    elif code_sync_clicked:
+        thread = threading.Thread(
+            target=sync_remote_code,
+            args=(remote_host_name, log_queue),
+            kwargs={
+                "ssh_host": remote_ssh_host,
+                "ssh_port": remote_ssh_port,
+                "ssh_username": remote_ssh_username,
+                "ssh_password": remote_ssh_password,
+            },
             daemon=True,
         )
     elif execution_mode == "本机":
@@ -493,6 +810,11 @@ if run_clicked or health_clicked:
             kwargs={
                 "attach_existing_app": remote_attach_existing,
                 "collect_artifacts": remote_collect_artifacts,
+                "sync_before_run": remote_sync_before_run,
+                "ssh_host": remote_ssh_host,
+                "ssh_port": remote_ssh_port,
+                "ssh_username": remote_ssh_username,
+                "ssh_password": remote_ssh_password,
             },
             daemon=True,
         )
@@ -502,7 +824,14 @@ if run_clicked or health_clicked:
     log_lines: list[str] = []
     last_log_time = time.time()
     idle_warning_shown = False
-    status_placeholder.info("⏳ 正在检查..." if health_clicked else "⏳ 正在执行...")
+    if health_clicked:
+        status_placeholder.info("⏳ 正在检查远程节点...")
+    elif code_status_clicked:
+        status_placeholder.info("⏳ 正在检查远端代码...")
+    elif code_sync_clicked:
+        status_placeholder.info("⏳ 正在同步远端代码...")
+    else:
+        status_placeholder.info("⏳ 正在执行...")
 
     while True:
         try:
@@ -532,7 +861,7 @@ if run_clicked or health_clicked:
 
     full_text = "\n".join(log_lines)
 
-    if health_clicked or execution_mode == "远程节点":
+    if health_clicked or code_status_clicked or code_sync_clicked or execution_mode == "远程节点":
         _render_remote_result_summary(log_lines)
 
     # 用正则从最终总结行提取统计
@@ -552,15 +881,11 @@ if run_clicked or health_clicked:
         # 失败详情
         if failed > 0 or errors > 0:
             with st.expander("🔍 失败/错误详情", expanded=True):
-                # 提取 FAIL/ERROR 行
-                fail_lines = [
-                    line for line in log_lines
-                    if "FAIL:" in line or "ERROR:" in line or "failed:" in line.lower()
-                ]
-                if fail_lines:
-                    st.code("\n".join(fail_lines), language="text")
+                failure_details = _failure_detail_text(full_text)
+                if failure_details:
+                    st.code(failure_details, language="text")
                 else:
-                    st.caption("详情请查看上方完整日志中的 FAIL/ERROR 行")
+                    st.caption("详情请查看上方完整日志中的 CASE FAIL/CASE ERROR 行")
 
         status_placeholder.success("✅ 执行完成")
     else:

@@ -45,7 +45,7 @@ class AutomationRunner:
         level: str | None = None,
         module: str | None = None,
         business_module: str | None = None,
-        case: str | None = None,
+        case: str | list[str] | tuple[str, ...] | None = None,
         attach_existing_app: bool = False,
     ) -> int:
         if self.config["run"].get("precheck_before_run", True):
@@ -99,13 +99,19 @@ class AutomationRunner:
             if not attach_existing_app:
                 app_manager.close()
 
-    def _build_suite(self, level: str | None, module: str | None, case: str | None) -> unittest.TestSuite:
+    def _build_suite(
+        self,
+        level: str | None,
+        module: str | None,
+        case: str | list[str] | tuple[str, ...] | None,
+    ) -> unittest.TestSuite:
         tests_root = Path("tests")
         selected_level = (level or self.config["run"].get("case_level") or "P0").lower()
 
-        if case:
+        case_values = self._case_values(case)
+        if case_values:
             suite = self._discover_suite(tests_root)
-            return self._filter_suite(suite, case)
+            return self._filter_suite_by_cases(suite, case_values)
 
         if module:
             return self._build_module_suite(
@@ -117,6 +123,29 @@ class AutomationRunner:
 
         start_dir = tests_root / selected_level
         return self._discover_suite(start_dir)
+
+    def _case_values(self, case: str | list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+        if case is None:
+            return ()
+        if isinstance(case, str):
+            values = (case,)
+        else:
+            values = tuple(case)
+        return tuple(value.strip() for value in values if value and value.strip())
+
+    def _filter_suite_by_cases(self, suite: unittest.TestSuite, cases: tuple[str, ...]) -> unittest.TestSuite:
+        filtered = unittest.TestSuite()
+        seen: set[str] = set()
+        for test in self._iter_tests(suite):
+            test_id = test.id()
+            if test_id in seen:
+                continue
+            if any(case in test_id for case in cases):
+                filtered.addTest(test)
+                seen.add(test_id)
+        if filtered.countTestCases() == 0:
+            self.logger.warning("No test cases matched case selection: %s", ", ".join(cases))
+        return filtered
 
     def _build_module_suite(
         self,
@@ -314,7 +343,8 @@ class AutomationRunner:
                     self._merge_final_test_result(aggregate, attempt_result)
                     break
 
-                if attempt < max_attempts:
+                should_retry = attempt_result.errors > 0 and attempt_result.failed == 0
+                if should_retry and attempt < max_attempts:
                     self.logger.warning(
                         "Test failed on attempt %s/%s: %s\n%s",
                         attempt,
@@ -331,6 +361,8 @@ class AutomationRunner:
                         time.sleep(retry_interval_seconds)
                 else:
                     self._write_attempt_output(attempt_output, stream=stream)
+                    self._merge_final_test_result(aggregate, attempt_result)
+                    break
             else:
                 if final_result is not None:
                     self._merge_final_test_result(aggregate, final_result)

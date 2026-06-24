@@ -602,7 +602,11 @@ class CDPDriver:
             raise TimeoutError(f"selector is not clickable: {selector}")
 
     def screenshot(self, path: str) -> None:
-        self._page().screenshot(path=path, full_page=True)
+        self._page().screenshot(
+            path=path,
+            full_page=True,
+            timeout=timeout_ms(self.config, "screenshot_seconds", 5),
+        )
 
     def close(self) -> None:
         if self.browser:

@@ -68,6 +68,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "element_seconds": 10,
         "script_element_seconds": 10,
         "request_seconds": 30,
+        "screenshot_seconds": 5,
         "page_seconds": 10,
         "login_marker_seconds": 3,
         "search_result_seconds": 10,

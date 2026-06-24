@@ -24,6 +24,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 import streamlit as st
+from core.run_metadata import parse_run_metadata, run_scope_label
 
 st.set_page_config(page_title="运行历史", page_icon="📋", layout="wide")
 st.title("📋 运行历史")
@@ -63,6 +64,18 @@ def _parse_log_summary(log_path: Path) -> dict | None:
         return None
 
     info: dict = {}
+    metadata = parse_run_metadata(text)
+    if metadata:
+        info["metadata"] = metadata
+        start_metadata = metadata.get("start", {})
+        end_metadata = metadata.get("end", {})
+        if start_metadata.get("source"):
+            info["run_source"] = start_metadata.get("source")
+        scope_label = run_scope_label(start_metadata)
+        if scope_label:
+            info["run_scope"] = scope_label
+        if end_metadata.get("exit_code") is not None:
+            info["exit_code"] = end_metadata.get("exit_code")
 
     # ── 时间 ──
     m_time = _TIME_RE.search(text)
@@ -114,6 +127,20 @@ def _parse_log_summary(log_path: Path) -> dict | None:
         else:
             info["pass_rate"] = 0.0
         info["source"] = "兜底"
+        return info
+
+    if metadata:
+        end_metadata = metadata.get("end", {})
+        run_source = str(info.get("run_source") or "").upper()
+        info["total"] = int(end_metadata.get("total") or 0)
+        info["passed"] = int(end_metadata.get("passed") or 0)
+        info["failed"] = int(end_metadata.get("failed") or 0)
+        info["errors"] = int(end_metadata.get("errors") or 0)
+        info["skipped"] = int(end_metadata.get("skipped") or 0)
+        info["flaky"] = int(end_metadata.get("flaky") or 0)
+        info["success"] = bool(end_metadata.get("success", end_metadata.get("exit_code") == 0))
+        info["pass_rate"] = round(info["passed"] / info["total"] * 100, 2) if info["total"] > 0 else 0.0
+        info["source"] = "UI" if run_source.startswith("UI") else "CLI"
         return info
 
     return None
@@ -248,6 +275,8 @@ for i, entry in enumerate(visible_logs):
     pass_rate = entry.get("pass_rate", None)
     success = entry.get("success")
     source = entry.get("source", "?")
+    run_source = entry.get("run_source", "")
+    run_scope = entry.get("run_scope", "")
 
     # 状态图标
     icon = "✅" if success else ("❌" if success is False else "❓")
@@ -258,6 +287,10 @@ for i, entry in enumerate(visible_logs):
     if pass_rate is not None:
         title += f"  ({pass_rate}%)"
     title += f"  [{source}]"
+    if run_source or run_scope:
+        title += f"  {run_source or '-'}"
+        if run_scope:
+            title += f" / {run_scope}"
 
     with st.expander(title):
         # 指标卡片
@@ -271,7 +304,11 @@ for i, entry in enumerate(visible_logs):
             c6.metric("🔁 Flaky", flaky)
 
             if pass_rate is not None:
-                st.caption(f"通过率: {pass_rate}%  |  来源: {source}  |  文件: `{entry['name']}` ({entry['size_kb']} KB)")
+                scope_text = f"  |  运行: {run_source or '-'} {run_scope or ''}" if (run_source or run_scope) else ""
+                st.caption(
+                    f"通过率: {pass_rate}%  |  来源: {source}{scope_text}  |  "
+                    f"文件: `{entry['name']}` ({entry['size_kb']} KB)"
+                )
         else:
             st.caption(f"文件: `{entry['name']}` ({entry['size_kb']} KB)  |  来源: {source}")
 

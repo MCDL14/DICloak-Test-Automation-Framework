@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core.config import ConfigError, load_config
 from core.logger import setup_logger
+from core.run_metadata import cli_run_start_fields, log_run_end, log_run_start
 from core.runner import AutomationRunner, ExitCode
 
 
@@ -19,7 +20,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Run cases from one business module, for example 环境管理, 代理管理, 扩展管理, 环境分组管理, 成员管理, 全局设置",
     )
-    parser.add_argument("--case", default=None, help="Run one unittest case by name")
+    parser.add_argument(
+        "--case",
+        action="append",
+        default=None,
+        help="Run one unittest case by name; repeat to run multiple selected cases",
+    )
     parser.add_argument("--precheck", action="store_true", help="Only run environment precheck")
     parser.add_argument(
         "--attach-existing-app",
@@ -39,20 +45,28 @@ def main(argv: list[str] | None = None) -> int:
 
     logger = setup_logger(config, reset=True)
     runner = AutomationRunner(config=config, logger=logger)
+    log_run_start(logger, **cli_run_start_fields(args))
 
     try:
         if args.precheck:
-            return runner.run_precheck_only()
-        return runner.run(
-            level=args.level,
-            module=args.module,
-            business_module=args.business_module,
-            case=args.case,
-            attach_existing_app=args.attach_existing_app,
-        )
+            exit_code = runner.run_precheck_only()
+        else:
+            exit_code = runner.run(
+                level=args.level,
+                module=args.module,
+                business_module=args.business_module,
+                case=args.case,
+                attach_existing_app=args.attach_existing_app,
+            )
+        log_run_end(logger, source="CLI", exit_code=exit_code, success=exit_code == ExitCode.SUCCESS)
+        return exit_code
     except KeyboardInterrupt:
         logger.warning("Run interrupted by user")
+        log_run_end(logger, source="CLI", exit_code=ExitCode.USER_INTERRUPTED, success=False)
         return ExitCode.USER_INTERRUPTED
+    except Exception:
+        log_run_end(logger, source="CLI", exit_code=1, success=False, error="unhandled_exception")
+        raise
 
 
 if __name__ == "__main__":

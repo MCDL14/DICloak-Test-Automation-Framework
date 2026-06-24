@@ -51,6 +51,7 @@ from core.remote_sync import (
     sync_remote_project,
 )
 from core.result import RunResult
+from core.run_metadata import log_run_end, log_run_start
 from core.runner import AutomationRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -315,6 +316,7 @@ def preview_remote_command(
     value: str,
     *,
     attach_existing_app: bool = False,
+    case_ids: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     """返回远程执行命令预览，供 UI 展示；不会连接 SSH 或读取密码."""
     host = _remote_host_by_name(host_name)
@@ -323,6 +325,7 @@ def preview_remote_command(
     request = RemoteRunRequest(
         scope=scope,
         value=value,
+        values=tuple(case_ids or ()),
         attach_existing_app=attach_existing_app,
     )
     return build_remote_command(host, request)
@@ -462,6 +465,13 @@ def run_selected_tests(
     try:
         config = _build_config()
         logger = setup_logger(config, reset=True)
+        log_run_start(
+            logger,
+            source="UI_LOCAL",
+            scope="cases",
+            selected_count=len(test_ids),
+            attach_existing_app=attach_existing_app,
+        )
 
         # ── 挂载 UI 日志 Handler ──
         ui_handler = _QueueLogHandler(log_queue)
@@ -478,6 +488,7 @@ def run_selected_tests(
                     f"  - {item.name}: {item.message}" for item in precheck.failed_items
                 )
                 logger.error("环境预检失败:\n%s", failed_items)
+                log_run_end(logger, source="UI_LOCAL", exit_code=2, success=False)
                 return
 
         # ── 2. 构建 filtered suite ──
@@ -497,6 +508,7 @@ def run_selected_tests(
 
         if case_count == 0:
             logger.warning("没有匹配到任何用例")
+            log_run_end(logger, source="UI_LOCAL", exit_code=0, success=True, total=0)
             return
 
         # ── 3. APP 生命周期 + CDP 校验 ──
@@ -519,6 +531,7 @@ def run_selected_tests(
         except (AppStartupError, CDPConnectionError, OSError) as exc:
             logger.error("APP 启动或 CDP 连接失败: %s", exc)
             runner.notifier.send_failure("Dicloak APP 启动或 CDP 连接失败", str(exc))
+            log_run_end(logger, source="UI_LOCAL", exit_code=3, success=False)
             return
 
         # ── 4. 执行 suite ──
@@ -542,12 +555,25 @@ def run_selected_tests(
             )
             if run_result.failures:
                 logger.warning("失败详情:\n%s", run_result.failed_summary())
+            log_run_end(
+                logger,
+                source="UI_LOCAL",
+                exit_code=0 if run_result.success else 1,
+                success=run_result.success,
+                total=run_result.total,
+                passed=run_result.passed,
+                failed=run_result.failed,
+                errors=run_result.errors,
+                skipped=run_result.skipped,
+                flaky=run_result.flaky,
+            )
         finally:
             cdp_driver.close()
             if not attach_existing_app:
                 app_manager.close()
     except Exception as exc:
         if logger:
+            log_run_end(logger, source="UI_LOCAL", exit_code=1, success=False, error="internal_exception")
             logger.error("执行器内部异常: %s", exc, exc_info=True)
         else:
             log_queue.put(f"执行器启动失败: {exc}")
@@ -571,6 +597,7 @@ def run_remote_cli(
     ssh_port: int | None = None,
     ssh_username: str = "",
     ssh_password: str = "",
+    case_ids: list[str] | None = None,
 ) -> None:
     """后台通过 SSH 在远程节点执行 run.py，并把远程日志推送到 UI."""
     if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。", "远程用例执行"):
@@ -594,6 +621,7 @@ def run_remote_cli(
         request = RemoteRunRequest(
             scope=scope,
             value=value,
+            values=tuple(case_ids or ()),
             attach_existing_app=attach_existing_app,
         )
         result = run_remote_tests(host, request, log_queue)

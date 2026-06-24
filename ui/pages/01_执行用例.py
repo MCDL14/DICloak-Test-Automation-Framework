@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
+import inspect
 from pathlib import Path
 
 # 确保项目根目录在 sys.path 中（ui/pages/ 的上上级）
@@ -73,13 +74,7 @@ _UNITTEST_ERROR_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
-_REMOTE_SCOPE_OPTIONS = {
-    "远程预检": ("precheck", ""),
-    "P0 全量": ("level", "P0"),
-    "按业务模块": ("business_module", ""),
-    "按目录模块": ("module", ""),
-    "按单用例名": ("case", ""),
-}
+_REMOTE_RUN_TYPE_OPTIONS = ("远程预检", "执行用例")
 
 # ═══════════════════════════════════════════════════════════════════
 # 页面配置
@@ -161,7 +156,7 @@ def _summary_missing_message(log_text: str) -> tuple[str, str]:
     if "远程健康检查结束" in log_text and "退出码=0" in log_text:
         return "success", "远程健康检查通过。"
     if "远程执行完成" in log_text and "退出码=0" in log_text:
-        return "success", "远程执行完成，当前运行范围没有生成用例统计。"
+        return "success", "远程执行完成，当前任务没有生成用例统计。"
     return "warning", "执行完成，但未能解析结果统计。请查看上方日志。"
 
 
@@ -299,18 +294,57 @@ def _safe_port(value: object, default: int = 22) -> int:
     return port if 1 <= port <= 65535 else default
 
 
-def _remote_run_button_label(scope_label: str, value: str) -> str:
+def _remote_run_button_label(scope_label: str, value: str, *, case_count: int = 0) -> str:
     if scope_label == "远程预检":
         return "▶ 执行远程预检"
-    if scope_label == "P0 全量":
-        return "▶ 远程执行 P0 全量"
-    if scope_label == "按业务模块":
-        return f"▶ 远程执行业务模块：{value or '-'}"
-    if scope_label == "按目录模块":
-        return f"▶ 远程执行目录模块：{value or '-'}"
-    if scope_label == "按单用例名":
-        return f"▶ 远程执行单用例：{value or '-'}"
+    if scope_label == "执行用例":
+        return f"▶ 远程执行选中（{case_count} 条）"
     return "▶ 远程执行"
+
+
+def _accepts_keyword(func: object, keyword: str) -> bool:
+    try:
+        return keyword in inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _remote_selected_cases_supported() -> bool:
+    return _accepts_keyword(preview_remote_command, "case_ids") and _accepts_keyword(run_remote_cli, "case_ids")
+
+
+def _render_execution_status(container, *, allow_reset_button: bool) -> dict[str, object]:
+    task_status = ui_task_status()
+    with container.container():
+        if task_status.get("locked"):
+            task_name = task_status.get("task") or "-"
+            started_at = task_status.get("started_at") or "-"
+            if task_status.get("active") and task_status.get("thread_alive"):
+                st.warning(f"后台任务仍在运行：{task_name}")
+                st.caption(f"开始时间：{started_at}")
+            else:
+                st.warning("检测到残留执行锁，当前没有活动后台线程。")
+                st.caption(f"上次任务：{task_name}；开始时间：{started_at}")
+                if allow_reset_button and st.button("解除残留执行锁", use_container_width=True):
+                    if reset_stale_ui_task_lock():
+                        st.success("已解除残留执行锁，可以重新启动执行。")
+                        st.rerun()
+                    else:
+                        st.error("后台任务仍在运行，暂不能解除执行锁。")
+        else:
+            st.success("空闲，可以启动执行。")
+    return task_status
+
+
+def _refresh_execution_status(container, *, thread: threading.Thread | None = None) -> dict[str, object]:
+    if thread and thread.is_alive():
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            status = ui_task_status()
+            if status.get("locked") or not thread.is_alive():
+                break
+            time.sleep(0.05)
+    return _render_execution_status(container, allow_reset_button=False)
 
 
 @st.cache_data(ttl=30, show_spinner="正在读取远程节点...")
@@ -345,6 +379,8 @@ selected_count = len(selected_ids)
 # ═══════════════════════════════════════════════════════════════════
 
 remote_host_name = ""
+remote_run_type = "远程预检"
+remote_scope_label = "远程预检"
 remote_scope = "precheck"
 remote_value = ""
 remote_attach_existing = False
@@ -380,24 +416,8 @@ with st.sidebar:
 
     st.divider()
     st.header("执行状态")
-    task_status = ui_task_status()
-    if task_status.get("locked"):
-        task_name = task_status.get("task") or "-"
-        started_at = task_status.get("started_at") or "-"
-        if task_status.get("active") and task_status.get("thread_alive"):
-            st.warning(f"后台任务仍在运行：{task_name}")
-            st.caption(f"开始时间：{started_at}")
-        else:
-            st.warning("检测到残留执行锁，当前没有活动后台线程。")
-            st.caption(f"上次任务：{task_name}；开始时间：{started_at}")
-            if st.button("解除残留执行锁", use_container_width=True):
-                if reset_stale_ui_task_lock():
-                    st.success("已解除残留执行锁，可以重新启动执行。")
-                    st.rerun()
-                else:
-                    st.error("后台任务仍在运行，暂不能解除执行锁。")
-    else:
-        st.success("空闲，可以启动执行。")
+    task_status_container = st.empty()
+    task_status = _render_execution_status(task_status_container, allow_reset_button=True)
 
     st.divider()
     st.header("用例选择")
@@ -431,7 +451,7 @@ with st.sidebar:
         st.caption("本机模式执行全部已勾选用例。")
     else:
         attach_existing = True
-        st.caption("远程模式使用主页面的远程运行范围，不使用左侧用例勾选。")
+        st.caption("远程模式选择“执行用例”时，会按下方已勾选用例执行。")
 
     st.divider()
     st.caption(f"共 {len(cases)} 条用例 / {len(module_names)} 个模块")
@@ -445,7 +465,7 @@ if execution_mode == "远程节点":
         st.error(f"远程节点配置读取失败：{exc}")
 
     host_labels = [
-        f"{host['name']} ({host.get('platform') or 'unknown'} {host['username']}@{host['host']})"
+        f"{host['name']} ({host.get('platform') or 'unknown'})"
         for host in remote_hosts
     ]
     if not remote_hosts:
@@ -456,7 +476,7 @@ if execution_mode == "远程节点":
         "远程节点",
         options=host_labels,
         disabled=not host_labels,
-        help="节点来自 config/remote_hosts.yaml；真实密码请使用本次会话密码、环境变量或 SSH key。",
+        help="节点来自 config/remote_hosts.yaml；通常只需要选择要执行的系统。",
     )
     if selected_host_label and host_labels:
         selected_remote_host = remote_hosts[host_labels.index(selected_host_label)]
@@ -474,35 +494,19 @@ if execution_mode == "远程节点":
         default_ssh_port = _safe_port(cached_connection.get("port") or selected_remote_host.get("port", 22))
         default_ssh_username = cached_connection.get("username") or selected_remote_host.get("username", "")
 
-        st.markdown("**SSH 连接信息**")
-        conn_host_col, conn_port_col, conn_user_col = st.columns([2, 1, 2])
-        with conn_host_col:
-            remote_ssh_host = st.text_input(
-                "SSH IP / 主机",
-                value=default_ssh_host,
-                key=f"remote_ssh_host_{remote_host_name}",
-                placeholder="例如 192.168.20.160",
-                help="用于本次 UI 远程操作的 SSH 地址；可缓存到本机，但不会写入仓库。",
-            ).strip()
-        with conn_port_col:
-            remote_ssh_port = int(st.number_input(
-                "端口",
-                min_value=1,
-                max_value=65535,
-                value=default_ssh_port,
-                step=1,
-                key=f"remote_ssh_port_{remote_host_name}",
-            ))
-        with conn_user_col:
-            remote_ssh_username = st.text_input(
-                "用户名",
-                value=default_ssh_username,
-                key=f"remote_ssh_username_{remote_host_name}",
-                placeholder="例如 dic / tianji",
-                help="用于本次 UI 远程操作的 SSH 用户名。",
-            ).strip()
+        remote_ssh_host = default_ssh_host
+        remote_ssh_port = default_ssh_port
+        remote_ssh_username = default_ssh_username
 
-        pass_col, cache_col, save_col = st.columns([2, 2, 1])
+        st.markdown("**连接信息**")
+        connection_caption = f"{remote_ssh_username or '-'}@{remote_ssh_host or '-'}:{remote_ssh_port}"
+        if cached_connection.get("updated_at"):
+            connection_caption += f" · 已加载本机缓存 {cached_connection['updated_at']}"
+        else:
+            connection_caption += " · 使用节点默认连接"
+        st.caption(connection_caption)
+
+        pass_col, edit_col = st.columns([2, 1])
         with pass_col:
             remote_ssh_password = st.text_input(
                 "SSH 密码（本次 UI 会话）",
@@ -511,107 +515,96 @@ if execution_mode == "远程节点":
                 key=f"remote_ssh_password_{remote_host_name}",
                 help="密码只保存在当前 Streamlit 会话内存里，不写入 YAML、不写入连接缓存、不进入日志。",
             )
-        with cache_col:
-            remote_cache_enabled = st.checkbox(
-                "缓存 IP、端口和用户名到本机",
-                value=True,
-                key=f"remote_cache_enabled_{remote_host_name}",
-                help="缓存文件为 config/remote_connection_cache.yaml，已加入 .gitignore；不会保存密码。",
-            )
-            if cached_connection.get("updated_at"):
-                st.caption(f"已加载本机缓存：{cached_connection['updated_at']}")
-            else:
-                st.caption("未发现本机缓存，使用节点默认连接信息。")
-        remote_connection_ready = bool(remote_host_name and remote_ssh_host and remote_ssh_username)
-        with save_col:
+        with edit_col:
             st.write("")
-            if st.button(
-                "保存缓存",
-                use_container_width=True,
-                disabled=not remote_connection_ready,
-                help="只保存 IP、端口和用户名；密码不会保存。",
-            ):
-                try:
-                    save_remote_connection_cache(
-                        remote_host_name,
-                        ssh_host=remote_ssh_host,
-                        ssh_port=remote_ssh_port,
-                        ssh_username=remote_ssh_username,
-                    )
-                    st.success("连接缓存已保存。")
-                except Exception as exc:
-                    st.error(f"连接缓存保存失败：{exc}")
+            st.caption("IP、端口和用户名可在下方修改。")
+
+        with st.expander("修改 SSH 连接", expanded=not bool(default_ssh_host and default_ssh_username)):
+            conn_host_col, conn_port_col, conn_user_col = st.columns([2, 1, 2])
+            with conn_host_col:
+                remote_ssh_host = st.text_input(
+                    "SSH IP / 主机",
+                    value=default_ssh_host,
+                    key=f"remote_ssh_host_{remote_host_name}",
+                    placeholder="例如 192.168.20.160",
+                    help="用于本次 UI 远程操作的 SSH 地址；可缓存到本机，但不会写入仓库。",
+                ).strip()
+            with conn_port_col:
+                remote_ssh_port = int(st.number_input(
+                    "端口",
+                    min_value=1,
+                    max_value=65535,
+                    value=default_ssh_port,
+                    step=1,
+                    key=f"remote_ssh_port_{remote_host_name}",
+                ))
+            with conn_user_col:
+                remote_ssh_username = st.text_input(
+                    "用户名",
+                    value=default_ssh_username,
+                    key=f"remote_ssh_username_{remote_host_name}",
+                    placeholder="例如 dic / tianji",
+                    help="用于本次 UI 远程操作的 SSH 用户名。",
+                ).strip()
+
+            cache_col, save_col = st.columns([2, 1])
+            with cache_col:
+                remote_cache_enabled = st.checkbox(
+                    "缓存 IP、端口和用户名到本机",
+                    value=True,
+                    key=f"remote_cache_enabled_{remote_host_name}",
+                    help="缓存文件为 config/remote_connection_cache.yaml，已加入 .gitignore；不会保存密码。",
+                )
+            remote_connection_ready = bool(remote_host_name and remote_ssh_host and remote_ssh_username)
+            with save_col:
+                if st.button(
+                    "保存缓存",
+                    use_container_width=True,
+                    disabled=not remote_connection_ready,
+                    help="只保存 IP、端口和用户名；密码不会保存。",
+                ):
+                    try:
+                        save_remote_connection_cache(
+                            remote_host_name,
+                            ssh_host=remote_ssh_host,
+                            ssh_port=remote_ssh_port,
+                            ssh_username=remote_ssh_username,
+                        )
+                        st.success("连接缓存已保存。")
+                    except Exception as exc:
+                        st.error(f"连接缓存保存失败：{exc}")
+        remote_connection_ready = bool(remote_host_name and remote_ssh_host and remote_ssh_username)
         if not remote_connection_ready:
             st.warning("请填写 SSH IP / 主机和用户名。")
 
-        st.markdown("**远端项目/配置状态**")
-        with st.expander("查看节点状态", expanded=True):
-            st.table(_remote_host_details(
-                selected_remote_host,
-                current_host=remote_ssh_host,
-                current_port=remote_ssh_port,
-                current_username=remote_ssh_username,
-                password_provided=bool(remote_ssh_password),
-                cache_enabled=remote_cache_enabled,
-            ))
-
-        st.markdown("**代码同步动作**")
-        col_health, col_code_status, col_code_sync = st.columns(3)
-        with col_health:
-            health_clicked = st.button(
-                "检查远程节点",
-                use_container_width=True,
-                disabled=not remote_connection_ready,
-                help="只读检查远端项目目录、run.py、配置、venv、Python 依赖和 APP 路径，不启动 APP、不跑用例。",
+        st.markdown("**运行类型**")
+        type_col, info_col = st.columns([1, 2])
+        with type_col:
+            remote_run_type = st.selectbox(
+                "运行类型",
+                options=list(_REMOTE_RUN_TYPE_OPTIONS),
+                help="远程预检只检查环境；执行用例才会运行测试。",
             )
-        with col_code_status:
-            code_status_clicked = st.button(
-                "检查远端代码",
-                use_container_width=True,
-                disabled=not remote_connection_ready,
-                help="比较远端当前快照和本地当前工作区，检查是否会跑旧代码。",
-            )
-        with col_code_sync:
-            code_sync_clicked = st.button(
-                "同步当前代码",
-                use_container_width=True,
-                disabled=not remote_connection_ready,
-                help="通过 SFTP 发布本地当前工作区到远端新快照，保留远端配置和旧快照。",
-            )
-
-        st.markdown("**运行范围**")
-        scope_col, value_col = st.columns([1, 2])
-        with scope_col:
-            remote_scope_label = st.selectbox(
-                "远程运行范围",
-                options=list(_REMOTE_SCOPE_OPTIONS.keys()),
-                help="远程执行复用 CLI 粒度，不直接按左侧勾选的 test_id 过滤。",
-            )
-        remote_scope, default_value = _REMOTE_SCOPE_OPTIONS[remote_scope_label]
-        remote_value = default_value
-        with value_col:
-            if remote_scope == "business_module":
-                remote_value = st.selectbox("业务模块", options=module_names)
-            elif remote_scope == "module":
-                directory_modules = _load_directory_modules()
-                if directory_modules:
-                    remote_value = st.selectbox("目录模块", options=directory_modules)
-                else:
-                    remote_value = ""
-                    st.warning("未发现 `tests/p0` 目录模块。")
-            elif remote_scope == "case":
-                remote_value = st.text_input(
-                    "单用例名",
-                    placeholder="例如 test_01_kernel_integrity.py 或 test_xxx",
-                ).strip()
-            else:
-                st.info("当前选择的是远程预检，只检查环境，不运行任何用例。")
+        if remote_run_type == "远程预检":
+            remote_scope_label = "远程预检"
+            remote_scope = "precheck"
+            remote_value = ""
+            with info_col:
+                st.info("当前只检查远端环境，不运行任何用例。")
+        else:
+            remote_scope_label = "执行用例"
+            remote_scope = "cases"
+            remote_value = ""
+            with info_col:
+                st.info(f"将远程执行下方已勾选的 {len(selected_ids)} 条用例。")
+                if not _remote_selected_cases_supported():
+                    st.error("远程按勾选用例执行需要重启 Streamlit 后端，请重启 UI 后再运行。")
 
         st.markdown("**执行选项**")
         option_attach_col, option_artifact_col, option_sync_col = st.columns(3)
         with option_attach_col:
             remote_attach_existing = st.checkbox(
-                "远程连接已打开的 APP",
+                "使用远端已打开 APP",
                 value=False,
                 disabled=remote_scope == "precheck",
                 help="勾选后给远端 run.py 追加 --attach-existing-app；预检不使用该选项。",
@@ -624,86 +617,125 @@ if execution_mode == "远程节点":
             )
         with option_sync_col:
             remote_sync_before_run = st.checkbox(
-                "远程执行前同步当前代码",
+                "执行前同步当前代码",
                 value=False,
                 help="执行用例前先发布本地当前工作区到远端快照；默认关闭，避免误同步。",
             )
 
-        st.markdown("**命令预览**")
-        try:
-            command_preview = preview_remote_command(
-                remote_host_name,
-                remote_scope,
-                remote_value,
-                attach_existing_app=remote_attach_existing,
-            )
-            with st.expander("查看远程命令", expanded=False):
-                st.code(command_preview, language="bash")
-        except Exception as exc:
-            st.warning(f"远程命令预览失败：{exc}")
+        with st.expander("检查和同步", expanded=False):
+            col_health, col_code_status, col_code_sync = st.columns(3)
+            with col_health:
+                health_clicked = st.button(
+                    "检查远程节点",
+                    use_container_width=True,
+                    disabled=not remote_connection_ready,
+                    help="只读检查远端项目目录、run.py、配置、venv、Python 依赖和 APP 路径，不启动 APP、不跑用例。",
+                )
+            with col_code_status:
+                code_status_clicked = st.button(
+                    "检查远端代码",
+                    use_container_width=True,
+                    disabled=not remote_connection_ready,
+                    help="比较远端当前快照和本地当前工作区，检查是否会跑旧代码。",
+                )
+            with col_code_sync:
+                code_sync_clicked = st.button(
+                    "同步当前代码",
+                    use_container_width=True,
+                    disabled=not remote_connection_ready,
+                    help="通过 SFTP 发布本地当前工作区到远端新快照，保留远端配置和旧快照。",
+                )
+            st.caption("日常执行一般只需要选择运行类型后点击底部运行按钮；这里用于排查环境或手动发布当前代码。")
 
-    st.caption("远程模式暂不按左侧勾选用例执行；请使用上面的运行范围。")
+        with st.expander("高级信息", expanded=False):
+            if remote_scope == "cases" and not _remote_selected_cases_supported():
+                st.warning("当前 Streamlit 后端未加载支持按勾选用例执行的版本，重启 UI 后可查看远程命令预览。")
+            else:
+                try:
+                    command_preview = preview_remote_command(
+                        remote_host_name,
+                        remote_scope,
+                        remote_value,
+                        attach_existing_app=remote_attach_existing,
+                        case_ids=selected_ids if remote_scope == "cases" else None,
+                    )
+                    st.markdown("**命令预览**")
+                    st.code(command_preview, language="bash")
+                except Exception as exc:
+                    st.warning(f"远程命令预览失败：{exc}")
+            st.markdown("**节点配置**")
+            st.table(_remote_host_details(
+                selected_remote_host,
+                current_host=remote_ssh_host,
+                current_port=remote_ssh_port,
+                current_username=remote_ssh_username,
+                password_provided=bool(remote_ssh_password),
+                cache_enabled=remote_cache_enabled,
+            ))
+            st.markdown("**平台能力**")
+            st.table(remote_capability_matrix())
 
-    with st.expander("远程节点能力矩阵", expanded=False):
-        st.table(remote_capability_matrix())
+    st.caption("远程模式选择“执行用例”时，会按下方已勾选用例执行。")
 
 # ═══════════════════════════════════════════════════════════════════
 # 主体：用例选择列表
 # ═══════════════════════════════════════════════════════════════════
 
 visible_case_count = 0
+show_case_list = not (execution_mode == "远程节点" and remote_scope == "precheck")
 
-for mod in module_names:
-    if mod not in show_modules:
-        continue
+if not show_case_list:
+    st.info("远程预检只检查远端环境，不运行用例，当前不展示用例列表。")
+else:
+    for mod in module_names:
+        if mod not in show_modules:
+            continue
 
-    mod_cases = [
-        case
-        for case in by_module[mod]
-        if _case_matches_keyword(case, case_keyword)
-    ]
-    if not mod_cases:
-        continue
-    visible_case_count += len(mod_cases)
-    all_mod_cases = by_module[mod]
-    mod_selected_count = sum(
-        1 for c in all_mod_cases
-        if bool(st.session_state.get(_case_key(c["id"]), True))
-    )
-    visible_suffix = ""
-    if len(mod_cases) != len(all_mod_cases):
-        visible_suffix = f"；当前显示 {len(mod_cases)} 条"
+        mod_cases = [
+            case
+            for case in by_module[mod]
+            if _case_matches_keyword(case, case_keyword)
+        ]
+        if not mod_cases:
+            continue
+        visible_case_count += len(mod_cases)
+        all_mod_cases = by_module[mod]
+        mod_selected_count = sum(
+            1 for c in all_mod_cases
+            if bool(st.session_state.get(_case_key(c["id"]), True))
+        )
 
-    col_name, col_count, col_select, col_clear = st.columns([4, 1.2, 1.2, 1.2])
-    with col_name:
-        st.markdown(f"**{mod}**")
-        st.caption(f"模块用例 {len(all_mod_cases)} 条{visible_suffix}")
-    with col_count:
-        st.write("")
-        st.caption(f"已选 {mod_selected_count}/{len(all_mod_cases)}")
-    with col_select:
-        if st.button("选中模块", key=f"select_mod_{mod}", use_container_width=True):
-            _set_case_selected(all_mod_cases, True)
-            st.rerun()
-    with col_clear:
-        if st.button("取消模块", key=f"clear_mod_{mod}", use_container_width=True):
-            _set_case_selected(all_mod_cases, False)
-            st.rerun()
+        col_name, col_count, col_select, col_clear = st.columns(
+            [4, 1.2, 1.2, 1.2],
+            vertical_alignment="center",
+        )
+        with col_name:
+            st.markdown(f"**{mod}**")
+        with col_count:
+            st.markdown(f"已选 {mod_selected_count}/{len(all_mod_cases)}")
+        with col_select:
+            if st.button("选中模块", key=f"select_mod_{mod}", use_container_width=True):
+                _set_case_selected(all_mod_cases, True)
+                st.rerun()
+        with col_clear:
+            if st.button("取消模块", key=f"clear_mod_{mod}", use_container_width=True):
+                _set_case_selected(all_mod_cases, False)
+                st.rerun()
 
-    with st.expander(
-        f"查看用例（{len(mod_cases)} 条）",
-        expanded=len(mod_cases) <= 3,
-    ):
-        for c in mod_cases:
-            key = _case_key(c["id"])
-            st.checkbox(
-                f"`{c['class_name']}.{c['method_name']}`",
-                key=key,
-                help=c["id"],
-            )
+        with st.expander(
+            f"查看用例（{len(mod_cases)} 条）",
+            expanded=len(mod_cases) <= 3,
+        ):
+            for c in mod_cases:
+                key = _case_key(c["id"])
+                st.checkbox(
+                    f"`{c['class_name']}.{c['method_name']}`",
+                    key=key,
+                    help=c["id"],
+                )
 
-if visible_case_count == 0:
-    st.info("当前筛选条件下没有可显示的用例。")
+    if visible_case_count == 0:
+        st.info("当前筛选条件下没有可显示的用例。")
 
 # ═══════════════════════════════════════════════════════════════════
 # 运行按钮
@@ -716,10 +748,11 @@ with col_btn:
         run_label = f"▶ 运行选中（{len(selected_ids)} 条）"
         run_disabled = len(selected_ids) == 0
     else:
-        run_label = _remote_run_button_label(remote_scope_label, remote_value)
+        run_label = _remote_run_button_label(remote_scope_label, remote_value, case_count=len(selected_ids))
         run_disabled = (
             not remote_connection_ready
-            or (remote_scope in {"module", "business_module", "case"} and not remote_value)
+            or (remote_scope == "cases" and len(selected_ids) == 0)
+            or (remote_scope == "cases" and not _remote_selected_cases_supported())
         )
     if task_status.get("locked"):
         run_disabled = True
@@ -733,9 +766,9 @@ with col_info:
     if execution_mode == "本机":
         st.caption("本机执行全部已勾选用例；显示模块和搜索显示只影响列表可见性。")
     elif remote_scope == "precheck":
-        st.caption("当前会执行远程预检，不会运行用例；如需跑全部用例，请把远程运行范围改为“P0 全量”。")
+        st.caption("当前会执行远程预检，不会运行用例；如需跑用例，请把运行类型改为“执行用例”。")
     else:
-        st.caption("远程执行使用上方远程运行范围；左侧用例勾选仅保留给本机模式。")
+        st.caption("远程执行会使用下方已勾选用例；显示模块和搜索显示只影响列表可见性。")
 
 # ═══════════════════════════════════════════════════════════════════
 # 执行逻辑：后台线程 + 前台轮询日志
@@ -815,10 +848,12 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
                 "ssh_port": remote_ssh_port,
                 "ssh_username": remote_ssh_username,
                 "ssh_password": remote_ssh_password,
+                "case_ids": selected_ids if remote_scope == "cases" else None,
             },
             daemon=True,
         )
     thread.start()
+    _refresh_execution_status(task_status_container, thread=thread)
 
     # 前台轮询 queue，实时刷新日志
     log_lines: list[str] = []
@@ -841,10 +876,12 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
             log_lines.append(msg)
             last_log_time = time.time()
             idle_warning_shown = False
+            _refresh_execution_status(task_status_container, thread=thread)
             # 只保留最近日志行避免 UI 卡顿
             display = "\n".join(log_lines[-_LOG_DISPLAY_LINES:])
             log_placeholder.code(display, language="text", height=_LOG_DISPLAY_HEIGHT)
         except queue.Empty:
+            _refresh_execution_status(task_status_container, thread=thread)
             if not thread.is_alive():
                 break
             idle_seconds = int(time.time() - last_log_time)
@@ -854,6 +891,7 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
                     "如果 APP/CDP 或系统弹窗卡住，请到本机窗口检查当前状态。"
                 )
                 idle_warning_shown = True
+    _refresh_execution_status(task_status_container)
 
     # ═══════════════════════════════════════════════════════════════
     # 结果解析与展示

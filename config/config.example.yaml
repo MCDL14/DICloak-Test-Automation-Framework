@@ -117,6 +117,8 @@ timeouts:
   script_element_seconds: 10
   # 普通请求/响应监听等待时间；打开环境等特殊场景会使用更长的业务超时
   request_seconds: 30
+  # 失败截图时 CDP 截图调用的超时时间；超时后会回退到桌面截图
+  screenshot_seconds: 5
   # 普通页面区域加载等待时间；用于环境列表、基础设置页等页面内容出现
   page_seconds: 10
   # 登录态标识等待时间；用于判断头像等已登录元素是否存在

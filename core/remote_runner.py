@@ -49,6 +49,7 @@ class RemoteHost:
 class RemoteRunRequest:
     scope: str
     value: str = ""
+    values: tuple[str, ...] = ()
     attach_existing_app: bool = False
 
 
@@ -257,6 +258,12 @@ def build_remote_command(host: RemoteHost, request: RemoteRunRequest) -> str:
         run_parts.extend(["--business-module", _quote(value)])
     elif scope == "case":
         run_parts.extend(["--case", _quote(value)])
+    elif scope == "cases":
+        case_values = tuple(item.strip() for item in request.values if item.strip())
+        if not case_values:
+            raise RemoteConfigError("remote run scope 'cases' requires at least one case")
+        for item in case_values:
+            run_parts.extend(["--case", _quote(item)])
     else:
         raise RemoteConfigError(f"unsupported remote run scope: {scope}")
 

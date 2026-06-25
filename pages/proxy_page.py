@@ -556,11 +556,40 @@ class ProxyPage(BasePage):
         if not clean_ids:
             return
         self.select_proxy_rows_by_ids(clean_ids)
-        self.cdp.click_element_by_script(self._proxy_bulk_action_script("删除"))
+        self.click_proxy_bulk_action(("删除",))
         self.confirm_secondary_dialog(("确定删除", "确认删除", "确定", "确认"))
         for proxy_id in clean_ids:
             self.wait_proxy_absent(proxy_id)
         self.wait_proxy_selected_count(0)
+
+    def click_proxy_bulk_action(self, texts: tuple[str, ...]) -> None:
+        self._wait_for_proxy_list()
+        last_error: Exception | None = None
+        for text in texts:
+            try:
+                self.cdp.click_element_by_script(self._proxy_bulk_action_script(text), timeout=5000)
+                return
+            except Exception as exc:
+                last_error = exc
+        raise TimeoutError(f"proxy bulk action was not found: {texts}") from last_error
+
+    def start_bulk_detect_selected_proxies(self, proxy_ids: set[str]) -> dict[str, str]:
+        clean_ids = {str(proxy_id).strip() for proxy_id in proxy_ids if str(proxy_id).strip()}
+        if not clean_ids:
+            return {}
+        before_results = {proxy_id: self.row_detect_result(proxy_id) for proxy_id in clean_ids}
+        self.select_proxy_rows_by_ids(clean_ids)
+        self.click_proxy_bulk_action(("批量检测", "检测代理", "检测"))
+        return before_results
+
+    def wait_proxy_row_detection_finished(self, proxy_id: str, before_text: str) -> str:
+        clean_id = str(proxy_id).strip()
+        detecting_cell_index = self.wait_row_detecting_visible_or_result_changed(clean_id, before_text)
+        hidden_cell_index = self.wait_row_detecting_hidden(clean_id)
+        return self.row_detect_result(
+            clean_id,
+            cell_index=detecting_cell_index if detecting_cell_index is not None else hidden_cell_index,
+        )
 
     def wait_proxy_absent(self, proxy_id: str, timeout_seconds: int | None = None) -> None:
         clean_id = str(proxy_id).strip()
@@ -1288,6 +1317,18 @@ class ProxyPage(BasePage):
                     && rect.height > 0;
             }};
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const parseProxyCell = (text) => {{
+                const idMatch = text.match(/ID:\\s*(\\d+)/);
+                const proxyMatch = text.match(/([A-Z0-9]+):\\/\\/([^:\\s]+):(\\d+)(?::([^:\\s]+):([^\\s]+))?/i);
+                return {{
+                    id: idMatch ? idMatch[1] : "",
+                    type: proxyMatch ? proxyMatch[1].toUpperCase() : "",
+                    host: proxyMatch ? proxyMatch[2] : "",
+                    port: proxyMatch ? proxyMatch[3] : "",
+                    account: proxyMatch && proxyMatch[4] ? proxyMatch[4] : "",
+                    password: proxyMatch && proxyMatch[5] ? proxyMatch[5] : "",
+                }};
+            }};
             const parse = (text) => {{
                 const idMatch = text.match(/ID:\\s*(\\d+)/);
                 const proxyMatch = text.match(/([A-Z0-9]+):\\/\\/([^:\\s]+):(\\d+)/i);
@@ -1313,10 +1354,15 @@ class ProxyPage(BasePage):
                     const parsed = parse(clean(row.innerText || row.textContent));
                     if (cells.length >= 8) {{
                         const proxyCell = cells.find((cell) => /[A-Z0-9]+:\\/\\//i.test(cell)) || "";
-                        const proxyMatch = proxyCell.match(/([A-Z0-9]+):\\/\\/([^:\\s]+):(\\d+)/i);
-                        parsed.type = parsed.type || (proxyMatch ? proxyMatch[1].toUpperCase() : "");
-                        parsed.host = parsed.host || (proxyMatch ? proxyMatch[2] : "");
-                        parsed.port = parsed.port || (proxyMatch ? proxyMatch[3] : "");
+                        const proxy = parseProxyCell(proxyCell);
+                        parsed.id = parsed.id || proxy.id;
+                        parsed.type = parsed.type || proxy.type;
+                        parsed.host = parsed.host || proxy.host;
+                        parsed.port = parsed.port || proxy.port;
+                        parsed.account = proxy.account;
+                        parsed.password = proxy.password;
+                        parsed.remark = cells[3] || "";
+                        parsed.outbound_ip = cells[4] || "";
                     }}
                     return parsed;
                 }})

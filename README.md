@@ -324,7 +324,7 @@ CDP 9222: none
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 61 条 P0 用例：环境管理 25 条、全局设置 12 条、环境分组管理 6 条、成员管理 15 条、代理管理 3 条。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 62 条 P0 用例：环境管理 25 条、全局设置 12 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
 
 当前已完成并验证环境管理模块 25 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
@@ -406,16 +406,18 @@ CDP 9222: none
 
 四条成员 open API 用例在异常路径增加了 `api_case_recovery.py` 兜底恢复：用例出现问题后会 best-effort 调用接口恢复自动化账号 `status=ENABLED`、`disuse_enable=false`，再尝试重新登录配置中的自动化账号、确认自动化团队并回到成员列表。恢复失败不会覆盖原始用例失败原因，但会写入 warning 日志，方便排查现场。
 
-当前已新增代理管理模块 3 条 P0 用例，文件位于 `tests/p0/proxy_management/`：
+当前已新增代理管理模块 4 条 P0 用例，文件位于 `tests/p0/proxy_management/`：
 
 - `test_01_create_custom_proxy.py`：创建自定义代理，进入代理管理页前先开启 Windows 系统代理，系统代理主机和端口由 `config.yaml` 顶层 `windows_system_proxy.host/port` 配置，默认 `127.0.0.1:7897`，结束后关闭系统代理；进入代理管理页后创建 HTTP 自定义代理，填写主机、端口、账号、密码，并显式确保“代理类型”为 `HTTP`；在创建弹窗中点击“检测代理”，等待“连接测试成功”或“连接失败”；保存后按新代理 ID、主机、端口和代理类型一起校验列表创建成功，点击行内第一个操作按钮重新检测并从“检测中”所在单元格读取结果，最后点击行内最后一个操作按钮删除，并按新代理 ID、主机、端口和代理类型一起校验删除成功。若弹窗或列表检测结果为“连接失败”，用例会延迟断言失败，同时继续执行清理逻辑。账号和密码优先从本地 `config/test_data.yaml` 或环境变量 `DICLOAK_PROXY_CUSTOM_ACCOUNT`、`DICLOAK_PROXY_CUSTOM_PASSWORD` 读取，不写入仓库模板。
 - `test_02_batch_create_proxy.py`：批量创建代理，进入代理管理页点击“批量创建”，先输入单条 `HTTP://192.168.20.33:7897:test:M12345678{批量创建代理}` 并在下方预览表按代理类型、代理主机、代理端口、代理账号、代理密码和代理备注逐项软断言；Windows 平台启用配置中的系统代理 `127.0.0.1:7897` 后点击“检测代理”，等待出口 IP 列检测结束并软断言存在实际出口 IP，随后恢复系统代理；再输入带第 3 行错误的多行数据，软断言出现“第3行格式有误”；最后输入有效多行数据，点击“确定”，按预期成功 3 个、重复 2 个校验结果弹窗，确认后在列表中按新代理 ID、类型、主机和端口校验创建结果，勾选本次创建的 3 条代理，通过列表上方批量操作栏点击“删除”并在二次确认弹窗点击“确定删除”，删除后再次校验 3 条代理均不存在。该用例使用软断言收集问题，业务流程和清理不会因中途断言失败提前中断。
 - `test_03_create_nodemaven_proxy.py`：创建 NodeMaven 动态代理，进入代理管理页点击“创建代理”，选择 `NodeMaven (动态代理)`，填写主机、端口、账号、密码，选择国家/地区“美国”并填写备注；Windows 平台启用配置中的系统代理 `127.0.0.1:7897` 后在创建弹窗点击“检测代理”，等待“连接测试成功/连接失败”，检测成功时软断言弹窗详情包含 `United States(US)`；点击“确定”后按新代理 ID、类型、主机、端口和备注校验列表创建结果，点击该行操作列第一个按钮重新检测，检测成功时软断言出口 IP 列包含 `US-United States`；删除代理前先显式关闭系统代理，再删除该代理并校验删除成功，最后在兜底清理中恢复用例开始前的系统代理快照。该用例的账号和密码优先从本地 `config/test_data.yaml` 的 `test_data.proxy_nodemaven` 或环境变量 `DICLOAK_PROXY_NODEMAVEN_ACCOUNT`、`DICLOAK_PROXY_NODEMAVEN_PASSWORD` 读取。
+- `test_04_batch_create_and_bulk_detect_proxy.py`：批量创建并批量检测代理，进入代理管理页点击“批量创建”，输入 3 条 `HTTP` 代理：`192.168.20.33:7897`、`127.0.0.1:7897` 和 `gate.nodemaven.com:8080`，备注均为“批量检测代理”；NodeMaven 网关账号和密码从本地 `test_data.proxy_nodemaven` 或 `DICLOAK_PROXY_NODEMAVEN_ACCOUNT`、`DICLOAK_PROXY_NODEMAVEN_PASSWORD` 注入，不写入仓库。用例提交批量创建后校验结果弹窗 `成功 3 个、重复 0 个`，在列表中按新代理 ID 校验三条代理创建成功和可见字段正确，勾选这三条代理后点击列表上方“批量检测”，逐行等待检测结束并软断言连接成功，最后批量删除并校验三条代理均不存在。
 
 代理检测等待说明：创建代理弹窗会先确认真实检测已启动，例如“检测代理”按钮 disabled/loading、弹窗 loading、文案变化或最终结果已出现，再等待“连接测试成功/连接失败”；批量检测和列表行内检测继续基于按钮禁用、出口 IP 列变化和“检测中”状态等待。超时时会输出最后一次按钮状态、loading 状态、出口 IP 文案或当前行文本，便于区分代理连通性问题、APP 未发起检测和列表渲染/保存问题。
 
 最近验证记录：
 
+- `python run.py --config config/config.yaml --module test_04_batch_create_and_bulk_detect_proxy.py`：2026-06-25 新增代理管理“批量创建代理后批量检测”用例后通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；日志确认三条代理创建成功，列表上方“批量检测”后三条代理均返回 `连接成功`，随后按新代理 ID 批量删除并校验不存在。
 - `python run.py --config config/config.yaml --module test_02_batch_create_proxy.py --attach-existing-app`：2026-06-24 优化代理检测等待诊断后复跑通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；批量检测仍按真实按钮禁用/出口 IP 列变化结束，未增加硬等待。
 - `python run.py --config config/config.yaml --module test_03_create_nodemaven_proxy.py --attach-existing-app`：2026-06-24 优化代理检测等待诊断后复跑通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；日志确认创建弹窗检测返回 `连接测试成功` 且详情包含 `国家/地区: United States(US)`，列表行内检测返回 `连接成功` 且出口 IP 列包含 `US-United States`，删除代理前先出现 `System proxy disable before NodeMaven delete`，随后按新代理 ID 删除并校验不存在。
 - `python run.py --config config/config.yaml --module test_13_sort_environment_serial.py --attach-existing-app`：2026-06-08 兼容环境列表表头由“环境序号/环境名称/环境分组”调整为“序号/名称/分组”后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。

@@ -39,6 +39,7 @@ class TestBatchCreateProxy(unittest.TestCase):
         failures: list[str] = []
         original_system_proxy_settings = None
         created_proxy_ids: set[str] = set()
+        prerequisite_proxy_ids: set[str] = set()
         existing_ids_by_target: dict[tuple[str, str], set[str]] = {}
 
         single_line = "HTTP://192.168.20.33:7897:test:M12345678{批量创建代理}"
@@ -100,6 +101,11 @@ class TestBatchCreateProxy(unittest.TestCase):
 
         try:
             proxy_page.open_list()
+            for target in expected_duplicate_rows:
+                prerequisite_proxy_id = self._ensure_duplicate_prerequisite(proxy_page, target)
+                if prerequisite_proxy_id:
+                    prerequisite_proxy_ids.add(prerequisite_proxy_id)
+
             for target in expected_created_rows:
                 key = (target["host"], target["port"])
                 existing_ids_by_target[key] = proxy_page.proxy_ids_by_host_port(*key)
@@ -209,6 +215,12 @@ class TestBatchCreateProxy(unittest.TestCase):
                     )
                 except Exception as exc:
                     failures.append(f"批量创建代理兜底清理失败 {target['host']}:{target['port']}: {exc}")
+            for proxy_id in list(prerequisite_proxy_ids):
+                try:
+                    proxy_page.delete_proxy_by_id(proxy_id)
+                    prerequisite_proxy_ids.discard(proxy_id)
+                except Exception as exc:
+                    failures.append(f"批量创建代理前置重复数据清理失败 id={proxy_id}: {exc}")
 
         assert_true(not failures, "; ".join(failures))
 
@@ -271,6 +283,18 @@ class TestBatchCreateProxy(unittest.TestCase):
         if not clean_value or clean_value in {"--", "-- --"}:
             return False
         return any(char.isdigit() for char in clean_value)
+
+    def _ensure_duplicate_prerequisite(self, proxy_page: ProxyPage, target: dict[str, str]) -> str:
+        existing_ids = proxy_page.proxy_ids_by_type_host_port(target["type"], target["host"], target["port"])
+        if existing_ids:
+            return ""
+        proxy_page.open_create_dialog()
+        proxy_page.ensure_create_dialog_proxy_type(target["type"])
+        proxy_page.fill_create_dialog(target["host"], target["port"], "", "")
+        proxy_page.confirm_create_dialog()
+        proxy_id = proxy_page.wait_new_proxy_visible_by_type(target["type"], target["host"], target["port"], existing_ids)
+        self.logger.info("Proxy batch prerequisite duplicate created id=%s target=%s", proxy_id, target)
+        return proxy_id
 
     def _enable_system_proxy_if_supported(self) -> dict[str, tuple[bool, object, int | None]] | None:
         if not system_proxy_supported():

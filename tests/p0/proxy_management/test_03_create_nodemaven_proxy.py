@@ -48,14 +48,14 @@ class TestCreateNodeMavenProxy(unittest.TestCase):
         expected_dialog_country = proxy_data["expected_dialog_country"]
         expected_row_country = proxy_data["expected_row_country"]
         remark = proxy_data["remark"]
-        created_proxy_id = ""
+        created_proxy_serial = ""
         failures: list[str] = []
         original_system_proxy_settings = None
-        existing_ids: set[str] = set()
+        existing_serials: set[str] = set()
 
         try:
             proxy_page.open_list()
-            existing_ids = proxy_page.proxy_ids_by_type_host_port(proxy_type, host, port)
+            existing_serials = proxy_page.proxy_serials_by_type_host_port(proxy_type, host, port)
 
             proxy_page.open_create_dialog()
             proxy_page.ensure_create_dialog_proxy_type(proxy_type)
@@ -79,13 +79,13 @@ class TestCreateNodeMavenProxy(unittest.TestCase):
                 )
 
             if proxy_page.try_confirm_create_dialog(timeout_seconds=8):
-                created_proxy_id = proxy_page.wait_new_proxy_visible_by_type(proxy_type, host, port, existing_ids)
+                created_proxy_serial = proxy_page.wait_new_proxy_visible_by_type(proxy_type, host, port, existing_serials)
             else:
                 proxy_page.cancel_create_dialog()
 
-            self._soft_check(failures, bool(created_proxy_id), "NodeMaven 代理未创建成功，无法继续列表校验和行内检测")
-            if created_proxy_id:
-                row = proxy_page.proxy_row_by_id(created_proxy_id)
+            self._soft_check(failures, bool(created_proxy_serial), "NodeMaven 代理未创建成功，无法继续列表校验和行内检测")
+            if created_proxy_serial:
+                row = proxy_page.proxy_row_by_serial(created_proxy_serial)
                 self._soft_check_created_row(
                     failures,
                     row,
@@ -95,13 +95,13 @@ class TestCreateNodeMavenProxy(unittest.TestCase):
                         "port": port,
                         "remark": remark,
                     },
-                    created_proxy_id,
+                    created_proxy_serial,
                 )
 
-                self.logger.info("NodeMaven row detect start id=%s", created_proxy_id)
-                row_result = proxy_page.detect_proxy_in_row(created_proxy_id)
-                row_text = proxy_page.row_text_by_id(created_proxy_id)
-                self.logger.info("NodeMaven row detect result id=%s result=%s text=%s", created_proxy_id, row_result, row_text)
+                self.logger.info("NodeMaven row detect start serial=%s", created_proxy_serial)
+                row_result = proxy_page.detect_proxy_in_row(created_proxy_serial)
+                row_text = proxy_page.row_text_by_serial(created_proxy_serial)
+                self.logger.info("NodeMaven row detect result serial=%s result=%s text=%s", created_proxy_serial, row_result, row_text)
                 if row_result == ProxyPage.FAILURE_TEXT:
                     failures.append("NodeMaven 代理列表行内检测结果为连接失败")
                 elif not self._is_success_result(row_result):
@@ -116,30 +116,30 @@ class TestCreateNodeMavenProxy(unittest.TestCase):
                 if original_system_proxy_settings is not None:
                     self._disable_system_proxy_before_delete()
 
-                deleted_proxy_id = created_proxy_id
-                self.logger.info("NodeMaven delete start id=%s", deleted_proxy_id)
-                proxy_page.delete_proxy_by_id(created_proxy_id)
-                created_proxy_id = ""
-                self.logger.info("NodeMaven delete finished id=%s", deleted_proxy_id)
+                deleted_proxy_serial = created_proxy_serial
+                self.logger.info("NodeMaven delete start serial=%s", deleted_proxy_serial)
+                proxy_page.delete_proxy_by_serial(created_proxy_serial)
+                created_proxy_serial = ""
+                self.logger.info("NodeMaven delete finished serial=%s", deleted_proxy_serial)
                 self._soft_check(
                     failures,
-                    not proxy_page.proxy_exists_by_id(deleted_proxy_id),
-                    f"NodeMaven 代理删除后仍存在: id={deleted_proxy_id}",
+                    not proxy_page.proxy_exists_by_serial(deleted_proxy_serial),
+                    f"NodeMaven 代理删除后仍存在: serial={deleted_proxy_serial}",
                 )
         finally:
             try:
-                if original_system_proxy_settings is not None and created_proxy_id:
+                if original_system_proxy_settings is not None and created_proxy_serial:
                     self._disable_system_proxy_before_delete()
-                if created_proxy_id:
-                    self.logger.info("NodeMaven cleanup delete remaining id=%s", created_proxy_id)
-                    proxy_page.delete_proxy_by_id(created_proxy_id)
-                    created_proxy_id = ""
+                if created_proxy_serial:
+                    self.logger.info("NodeMaven cleanup delete remaining serial=%s", created_proxy_serial)
+                    proxy_page.delete_proxy_by_serial(created_proxy_serial)
+                    created_proxy_serial = ""
             except Exception as exc:
-                failures.append(f"NodeMaven 代理清理失败 id={created_proxy_id}: {exc}")
+                failures.append(f"NodeMaven 代理清理失败 serial={created_proxy_serial}: {exc}")
             try:
                 if original_system_proxy_settings is not None:
                     self._disable_system_proxy_before_delete()
-                proxy_page.delete_newest_proxy_by_host_port_excluding(host, port, existing_ids)
+                proxy_page.delete_newest_proxy_by_host_port_excluding(host, port, existing_serials, proxy_type)
             except Exception as exc:
                 failures.append(f"NodeMaven 代理兜底清理失败 {host}:{port}: {exc}")
             try:
@@ -160,12 +160,12 @@ class TestCreateNodeMavenProxy(unittest.TestCase):
         failures: list[str],
         row: dict[str, str],
         expected: dict[str, str],
-        row_id: str,
+        row_serial: str,
     ) -> None:
         self._soft_check(
             failures,
             bool(row),
-            f"NodeMaven 代理未在列表中找到: id={row_id}, expected={expected}",
+            f"NodeMaven 代理未在列表中找到: serial={row_serial}, expected={expected}",
         )
         if not row:
             return

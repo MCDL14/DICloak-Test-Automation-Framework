@@ -59,11 +59,11 @@ class TestBlockSpecificWebsitesGoogleAndBaidu(unittest.TestCase):
                 global_settings_page.open()
                 global_settings_page.validate_website_restriction_controls_without_saving(
                     test_url="https://baidu.com",
-                    shortcut_name="谷歌应用商店",
+                    shortcut_name="Chrome 应用商店",
                 )
                 global_settings_page.configure_website_restriction_blocklist(
                     urls=["https://baidu.com"],
-                    shortcut_name="谷歌应用商店",
+                    shortcut_name="Chrome 应用商店",
                 )
 
                 environment_page.open_list()

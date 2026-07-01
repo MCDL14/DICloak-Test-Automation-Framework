@@ -75,7 +75,7 @@ class TestEnvironmentFieldDisplayLimit(unittest.TestCase):
                     global_settings_page._wait_global_setting_states_stable()
                     assert_true(
                         not global_settings_page.environment_field_display_limit_enabled(),
-                        "环境字段显示限制功能开关在用例清理后仍未关闭",
+                        "环境列表字段权限功能开关在用例清理后仍未关闭",
                     )
                 elif global_settings_dirty:
                     self.cdp.reload()

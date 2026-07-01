@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -160,21 +161,14 @@ class MemberPage(BasePage):
         self.wait_member_filters_cleared()
 
     def member_name_id_values_in_current_list(self) -> list[dict[str, str]]:
-        values = self.cdp.evaluate(self._member_name_id_values_in_current_list_script())
-        if not isinstance(values, list):
-            return []
-        result: list[dict[str, str]] = []
-        for value in values:
-            if not isinstance(value, dict):
-                continue
-            result.append(
-                {
-                    "name": str(value.get("name") or "").strip(),
-                    "id": str(value.get("id") or "").strip(),
-                    "raw": str(value.get("raw") or "").strip(),
-                }
-            )
-        return result
+        return [
+            {
+                "name": value["name"],
+                "id": value["id"],
+                "raw": value["raw"],
+            }
+            for value in self._member_records_in_current_list()
+        ]
 
     def member_names_in_current_list(self) -> list[str]:
         return [
@@ -182,6 +176,112 @@ class MemberPage(BasePage):
             for value in self.member_name_id_values_in_current_list()
             if str(value.get("name") or "").strip()
         ]
+
+    def _member_records_in_current_list(self) -> list[dict[str, str]]:
+        visible_rows = self.cdp.evaluate(self._member_visible_rows_script())
+        api_rows = self.cdp.evaluate(self._member_api_records_script())
+        if not isinstance(visible_rows, list):
+            return []
+        api_records = self._normalize_member_api_records(api_rows if isinstance(api_rows, list) else [])
+        result: list[dict[str, str]] = []
+        for row in visible_rows:
+            if not isinstance(row, dict):
+                continue
+            visible_record = {
+                "id": str(row.get("id") or "").strip(),
+                "name": str(row.get("name") or "").strip(),
+                "raw": str(row.get("raw") or "").strip(),
+                "remark": str(row.get("remark") or "").strip(),
+                "created_time": str(row.get("created_time") or "").strip(),
+                "text": str(row.get("text") or "").strip(),
+            }
+            matched_record = self._match_member_api_record(visible_record, api_records)
+            if matched_record:
+                visible_record["id"] = matched_record["id"]
+                visible_record["name"] = visible_record["name"] or matched_record["name"]
+                visible_record["remark"] = matched_record["remark"]
+                visible_record["created_time"] = visible_record["created_time"] or matched_record["created_time"]
+            result.append(visible_record)
+        return result
+
+    def _member_record_by_id_in_current_list(self, member_id: str) -> dict[str, str] | None:
+        clean_id = str(member_id or "").strip()
+        if not clean_id:
+            return None
+        for record in self._member_records_in_current_list():
+            if record.get("id") == clean_id:
+                return record
+        return None
+
+    def _member_api_record_by_id(self, member_id: str) -> dict[str, str] | None:
+        clean_id = str(member_id or "").strip()
+        if not clean_id:
+            return None
+        api_rows = self.cdp.evaluate(self._member_api_records_script())
+        if not isinstance(api_rows, list):
+            return None
+        for record in self._normalize_member_api_records(api_rows):
+            if record["id"] == clean_id:
+                return record
+        return None
+
+    def _normalize_member_api_records(self, rows: list[object]) -> list[dict[str, str]]:
+        records: list[dict[str, str]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            records.append(
+                {
+                    "id": str(row.get("id") or "").strip(),
+                    "name": str(row.get("name") or "").strip(),
+                    "remark": self._member_list_display_value(row.get("remark")),
+                    "created_time": str(row.get("create_time") or "").strip(),
+                    "creator": str(row.get("create_by_name") or "").strip(),
+                    "email": str(row.get("email") or "").strip(),
+                    "raw": str(row.get("name") or "").strip(),
+                }
+            )
+        return records
+
+    def _match_member_api_record(
+        self,
+        visible_record: dict[str, str],
+        api_records: list[dict[str, str]],
+    ) -> dict[str, str] | None:
+        visible_id = visible_record.get("id", "")
+        if visible_id:
+            matched_by_id = [record for record in api_records if record["id"] == visible_id]
+            if len(matched_by_id) == 1:
+                return matched_by_id[0]
+
+        name = visible_record.get("name", "")
+        if not name:
+            return None
+        candidates = [record for record in api_records if record["name"] == name]
+        if len(candidates) == 1:
+            return candidates[0]
+
+        remark = visible_record.get("remark", "")
+        if remark:
+            remark_matches = [record for record in candidates if record["remark"] == remark]
+            if len(remark_matches) == 1:
+                return remark_matches[0]
+            if remark_matches:
+                candidates = remark_matches
+
+        created_time = visible_record.get("created_time", "")
+        if created_time:
+            created_matches = [record for record in candidates if record["created_time"] == created_time]
+            if len(created_matches) == 1:
+                return created_matches[0]
+            if created_matches:
+                candidates = created_matches
+
+        return None
+
+    def _member_list_display_value(self, value: object) -> str:
+        text = str(value or "").strip()
+        return text if text else "--"
 
     def member_id_by_exact_name(self, member_name: str) -> str:
         clean_name = str(member_name or "").strip()
@@ -267,21 +367,32 @@ class MemberPage(BasePage):
     # ── 批量操作 ──────────────────────────────────────────────────────────
 
     def member_ids_by_remark(self, remark: str) -> list[str]:
-        values = self.cdp.evaluate(self._member_ids_by_remark_script(remark))
-        if not isinstance(values, list):
-            return []
-        return [str(value).strip() for value in values if str(value or "").strip()]
+        clean_remark = str(remark or "").strip()
+        return [
+            value["id"]
+            for value in self._member_records_in_current_list()
+            if value["id"] and value["remark"] == clean_remark
+        ]
 
     def member_remark_values_by_ids(self, member_ids: list[str]) -> dict[str, str]:
-        values = self.cdp.evaluate(self._member_id_remark_values_script())
-        if not isinstance(values, dict):
-            return {}
-        return {str(key): str(value or "").strip() for key, value in values.items() if str(key) in member_ids}
+        expected_ids = {str(member_id).strip() for member_id in member_ids if str(member_id or "").strip()}
+        return {
+            value["id"]: value["remark"]
+            for value in self._member_records_in_current_list()
+            if value["id"] in expected_ids
+        }
 
     def select_visible_members_by_ids(self, member_ids: list[str]) -> None:
+        self.open_list()
+        self.clear_filters()
         self.clear_selected_members()
+        records_by_id = {value["id"]: value for value in self._member_records_in_current_list() if value["id"]}
         for member_id in member_ids:
-            self.cdp.click_element_by_script(self._member_checkbox_by_id_script(member_id))
+            clean_id = str(member_id or "").strip()
+            record = records_by_id.get(clean_id)
+            if not record:
+                raise TimeoutError(f"member row was not found by id in current list: {clean_id}")
+            self.cdp.click_element_by_script(self._member_checkbox_by_record_script(record))
         self._wait_member_selected_count(len(member_ids))
         self.wait_batch_more_operation_visible()
 
@@ -1512,6 +1623,87 @@ class MemberPage(BasePage):
         }}
         """
 
+    def _member_visible_rows_script(self) -> str:
+        return f"""
+        () => {{
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const cleanCompact = (value) => String(value || "").replace(/\\s+/g, "");
+            const parseNameId = (value) => {{
+                const raw = clean(value);
+                const match = raw.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
+                return {{
+                    raw,
+                    name: match ? clean(match[1]) : raw,
+                    id: match ? match[2] : "",
+                }};
+            }};
+            const headers = Array.from(document.querySelectorAll({self.locator("table_header")!r}))
+                .filter(visible)
+                .map((header) => cleanCompact(header.innerText || header.textContent));
+            let nameIndex = headers.findIndex((header) => header.includes("鎴愬憳鍚嶇О"));
+            if (nameIndex < 0) nameIndex = 1;
+            let remarkIndex = headers.findIndex((header) => header === "澶囨敞");
+            if (remarkIndex < 0) remarkIndex = 2;
+            let createdIndex = headers.findIndex((header) => header.includes("鍒涘缓鏃堕棿"));
+            if (createdIndex < 0) createdIndex = 12;
+            return Array.from(document.querySelectorAll({self.locator("table_row")!r}))
+                .filter(visible)
+                .map((row, rowIndex) => {{
+                    const cells = Array.from(row.querySelectorAll({self.locator("table_cell")!r})).filter(visible);
+                    const parsed = parseNameId(cells[nameIndex]?.innerText || cells[nameIndex]?.textContent || "");
+                    return {{
+                        id: parsed.id,
+                        name: parsed.name,
+                        raw: parsed.raw,
+                        remark: clean(cells[remarkIndex]?.innerText || cells[remarkIndex]?.textContent || ""),
+                        created_time: clean(cells[createdIndex]?.innerText || cells[createdIndex]?.textContent || ""),
+                        text: clean(row.innerText || row.textContent || ""),
+                        row_index: String(rowIndex),
+                    }};
+                }})
+                .filter((item) => item.raw);
+        }}
+        """
+
+    def _member_api_records_script(self) -> str:
+        return """
+        async () => {
+            const parseJson = (value) => {
+                try {
+                    return JSON.parse(value || "{}");
+                } catch (error) {
+                    return {};
+                }
+            };
+            const state = parseJson(localStorage.getItem("basic:state"));
+            const token = String(state.token || "").trim();
+            if (!token) return [];
+            const url = "https://gin-server.dicloak.com/gin/v1/member?page_size=200&page_no=1&not_logged=false&detail=true";
+            const response = await fetch(url, {
+                headers: {
+                    "Accept": "application/json, text/plain, */*",
+                    "X-TOKEN": token,
+                    "X-LANG": "zh_CN",
+                    "X-Version": (document.title.match(/V(\\d+\\.\\d+\\.\\d+)/) || [])[1] || "",
+                    "X-Platform": "APP",
+                },
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (payload && payload.code === 0 && payload.data && Array.isArray(payload.data.list)) {
+                return payload.data.list;
+            }
+            return [];
+        }
+        """
+
     def _member_remark_values_in_current_list_script(self) -> str:
         return f"""
         () => {{
@@ -1874,6 +2066,60 @@ class MemberPage(BasePage):
                     return match && match[1] === expectedId;
                 }});
                 if (!matched) continue;
+                const checkbox = Array.from(row.querySelectorAll(".el-checkbox, label"))
+                    .find((el) => visible(el));
+                if (!checkbox) return null;
+                const wrapper = checkbox.closest(".el-checkbox") || checkbox;
+                if (wrapper.classList.contains("is-checked")) return null;
+                return checkbox;
+            }}
+            return null;
+        }}
+        """
+
+    def _member_checkbox_by_record_script(self, member_record: dict[str, str]) -> str:
+        return f"""
+        () => {{
+            const expected = {json.dumps(member_record, ensure_ascii=False)};
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const cleanCompact = (value) => String(value || "").replace(/\\s+/g, "");
+            const parseNameId = (value) => {{
+                const raw = clean(value);
+                const match = raw.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
+                return {{
+                    raw,
+                    name: match ? clean(match[1]) : raw,
+                    id: match ? match[2] : "",
+                }};
+            }};
+            const headers = Array.from(document.querySelectorAll({self.locator("table_header")!r}))
+                .filter(visible)
+                .map((header) => cleanCompact(header.innerText || header.textContent));
+            let nameIndex = headers.findIndex((header) => header.includes("鎴愬憳鍚嶇О"));
+            if (nameIndex < 0) nameIndex = 1;
+            let remarkIndex = headers.findIndex((header) => header === "澶囨敞");
+            if (remarkIndex < 0) remarkIndex = 2;
+            let createdIndex = headers.findIndex((header) => header.includes("鍒涘缓鏃堕棿"));
+            if (createdIndex < 0) createdIndex = 12;
+            const rows = Array.from(document.querySelectorAll({self.locator("table_row")!r}))
+                .filter((row) => visible(row));
+            for (const row of rows) {{
+                const cells = Array.from(row.querySelectorAll({self.locator("table_cell")!r})).filter(visible);
+                const parsed = parseNameId(cells[nameIndex]?.innerText || cells[nameIndex]?.textContent || "");
+                const remark = clean(cells[remarkIndex]?.innerText || cells[remarkIndex]?.textContent || "");
+                const createdTime = clean(cells[createdIndex]?.innerText || cells[createdIndex]?.textContent || "");
+                if (parsed.id && expected.id && parsed.id !== expected.id) continue;
+                if (parsed.name !== expected.name) continue;
+                if (expected.remark && remark !== expected.remark) continue;
+                if (expected.created_time && createdTime !== expected.created_time) continue;
                 const checkbox = Array.from(row.querySelectorAll(".el-checkbox, label"))
                     .find((el) => visible(el));
                 if (!checkbox) return null;

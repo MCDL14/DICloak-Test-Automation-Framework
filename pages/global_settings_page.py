@@ -9,6 +9,10 @@ from pages.base_page import BasePage
 
 class GlobalSettingsPage(BasePage):
     locator_file = "global_settings_locators.yaml"
+    DISABLE_DEVTOOLS_LABELS = ("禁止打开浏览器开发者工具", "禁止打开浏览器开发者工具界面")
+    ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS = ("环境列表字段权限", "环境字段显示限制")
+    ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG_TITLES = ("列表字段", "列表字段设置")
+    GOOGLE_EXTENSION_SHORTCUT_LABELS = ("Chrome 应用商店", "谷歌应用商店")
     _ENVIRONMENT_FIELD_ALIASES = {
         "环境序号": ("环境序号", "序号"),
         "环境名称": ("环境名称", "名称"),
@@ -32,7 +36,7 @@ class GlobalSettingsPage(BasePage):
 
     def ensure_disable_devtools_enabled(self) -> bool:
         """Return True when this method changed the setting."""
-        return self.ensure_checkbox_enabled("禁止打开浏览器开发者工具界面")
+        return self.ensure_checkbox_enabled(self.DISABLE_DEVTOOLS_LABELS)
 
     def ensure_disable_extension_management_enabled(self) -> bool:
         """Return True when this method changed the setting."""
@@ -228,7 +232,7 @@ class GlobalSettingsPage(BasePage):
             before_checkboxes=before_checkboxes,
             before_switches=before_switches,
             allowed_checkbox_names=set(),
-            allowed_switch_names={"环境字段显示限制"},
+            allowed_switch_names=set(self.ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS),
         )
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
         self._wait_save_finished()
@@ -250,7 +254,7 @@ class GlobalSettingsPage(BasePage):
                 before_checkboxes=before_checkboxes,
                 before_switches=before_switches,
                 allowed_checkbox_names=set(),
-                allowed_switch_names={"环境字段显示限制"},
+                allowed_switch_names=set(self.ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS),
             )
             self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
             self._wait_save_finished()
@@ -263,12 +267,12 @@ class GlobalSettingsPage(BasePage):
             if not self.environment_field_display_limit_enabled():
                 return changed
 
-        raise AssertionError("环境字段显示限制功能开关关闭保存后仍然保持开启")
+        raise AssertionError("环境列表字段权限功能开关关闭保存后仍然保持开启")
 
     def environment_field_display_limit_enabled(self) -> bool:
         value = self.cdp.evaluate(self._environment_field_display_limit_enabled_script())
         if value is None:
-            raise RuntimeError("环境字段显示限制 switch was not found")
+            raise RuntimeError("环境列表字段权限 switch was not found")
         return bool(value)
 
     def configure_environment_list_pagination_setting(self, page_size_text: str = "20 条/页") -> None:
@@ -397,10 +401,11 @@ class GlobalSettingsPage(BasePage):
     def configure_website_restriction_blocklist(
         self,
         urls: list[str],
-        shortcut_name: str = "谷歌应用商店",
+        shortcut_name: str = "Chrome 应用商店",
     ) -> None:
         """Enable website restriction and save a blocklist with a shortcut option."""
         self._wait_for_website_restriction()
+        shortcut_names = self._website_shortcut_candidates(shortcut_name)
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         if not self.website_restriction_enabled():
             self._set_website_restriction_enabled(True)
@@ -414,7 +419,7 @@ class GlobalSettingsPage(BasePage):
         self._assert_no_unexpected_existing_state_changes(
             before_checkboxes=before_checkboxes,
             before_switches=before_switches,
-            allowed_checkbox_names={shortcut_name},
+            allowed_checkbox_names=set(shortcut_names),
             allowed_switch_names={"访问网站限制"},
         )
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
@@ -449,11 +454,12 @@ class GlobalSettingsPage(BasePage):
     def validate_website_restriction_controls_without_saving(
         self,
         test_url: str,
-        shortcut_name: str | None = "谷歌应用商店",
+        shortcut_name: str | None = "Chrome 应用商店",
         mode_text: str = "禁止访问指定网址",
     ) -> None:
         """Probe website restriction controls and restore UI state without saving."""
         self._wait_for_website_restriction()
+        shortcut_names = self._website_shortcut_candidates(shortcut_name) if shortcut_name else tuple()
         baseline_checkboxes, baseline_switches = self._wait_global_setting_states_stable()
         baseline_enabled = self.website_restriction_enabled()
 
@@ -482,12 +488,12 @@ class GlobalSettingsPage(BasePage):
             before_switches=baseline_switches,
             after_checkboxes=after_content_checkboxes,
             after_switches=after_content_switches,
-            allowed_checkbox_names={shortcut_name} if shortcut_name else set(),
+            allowed_checkbox_names=set(shortcut_names),
             allowed_switch_names={"访问网站限制"},
         )
         if self.cdp.evaluate(self._website_restriction_url_value_script()) != test_url:
             raise AssertionError("访问网站限制网址列表输入后未回显预期内容")
-        if shortcut_name and not self.cdp.evaluate(self._website_restriction_shortcut_checked_script(shortcut_name)):
+        if shortcut_name and not self.cdp.evaluate(self._website_restriction_shortcut_checked_script(shortcut_names)):
             raise AssertionError(f"访问网站限制快捷选择未保持勾选: {shortcut_name}")
         if not self.cdp.evaluate(self._website_restriction_radio_checked_script(mode_text)):
             raise AssertionError(f"访问网站限制方式未保持为：{mode_text}")
@@ -547,8 +553,22 @@ class GlobalSettingsPage(BasePage):
             raise RuntimeError("访问网站限制 switch was not found")
         return bool(value)
 
-    def ensure_checkbox_enabled(self, label_text: str) -> bool:
+    @staticmethod
+    def _label_candidates(label_text: str | tuple[str, ...]) -> tuple[str, ...]:
+        if isinstance(label_text, tuple):
+            return tuple(str(item).strip() for item in label_text if str(item).strip())
+        return (str(label_text).strip(),)
+
+    def _resolve_visible_checkbox_label(self, label_text: str | tuple[str, ...]) -> str:
+        for candidate in self._label_candidates(label_text):
+            if self.cdp.evaluate(self._checkbox_exists_script(candidate)):
+                return candidate
+        candidates = self._label_candidates(label_text)
+        raise TimeoutError(f"checkbox was not found: {candidates}")
+
+    def ensure_checkbox_enabled(self, label_text: str | tuple[str, ...]) -> bool:
         """Enable one global setting checkbox without allowing other checkbox changes."""
+        label_text = self._resolve_visible_checkbox_label(label_text)
         self._wait_for_checkbox(label_text)
         before_states = self._wait_checkbox_states_stable()
         if self.checkbox_checked(label_text):
@@ -564,8 +584,9 @@ class GlobalSettingsPage(BasePage):
         self._wait_checkbox_checked(label_text, True)
         return True
 
-    def ensure_checkbox_disabled(self, label_text: str) -> bool:
+    def ensure_checkbox_disabled(self, label_text: str | tuple[str, ...]) -> bool:
         """Disable one global setting checkbox without allowing other checkbox changes."""
+        label_text = self._resolve_visible_checkbox_label(label_text)
         self._wait_for_checkbox(label_text)
         before_states = self._wait_checkbox_states_stable()
         if not self.checkbox_checked(label_text):
@@ -822,7 +843,7 @@ class GlobalSettingsPage(BasePage):
             if self.cdp.evaluate(self._environment_field_display_limit_exists_script()):
                 return
             time.sleep(0.2)
-        raise TimeoutError("环境字段显示限制 switch did not appear")
+        raise TimeoutError("环境列表字段权限 switch did not appear")
 
     def _wait_for_environment_list_pagination_setting(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -989,7 +1010,7 @@ class GlobalSettingsPage(BasePage):
             if value is expected:
                 return
             time.sleep(0.2)
-        raise TimeoutError(f"环境字段显示限制 switch state did not become expected: {expected}")
+        raise TimeoutError(f"环境列表字段权限 switch state did not become expected: {expected}")
 
     def _set_environment_field_display_limit_enabled(self, expected: bool) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
@@ -1014,7 +1035,7 @@ class GlobalSettingsPage(BasePage):
                         return
             time.sleep(0.2)
 
-        raise TimeoutError(f"环境字段显示限制 switch state did not become {expected}: last={last_state}")
+        raise TimeoutError(f"环境列表字段权限 switch state did not become {expected}: last={last_state}")
 
     def _wait_environment_list_pagination_setting_enabled(
         self,
@@ -1167,7 +1188,7 @@ class GlobalSettingsPage(BasePage):
             if self.cdp.evaluate(self._environment_field_display_limit_dialog_visible_script()):
                 return
             time.sleep(0.2)
-        raise TimeoutError("环境字段显示限制字段设置弹窗未出现")
+        raise TimeoutError("环境列表字段权限字段设置弹窗未出现")
 
     def _wait_environment_field_display_limit_dialog_checkbox_checked(
         self,
@@ -1180,7 +1201,7 @@ class GlobalSettingsPage(BasePage):
             if value is expected:
                 return
             time.sleep(0.2)
-        raise TimeoutError(f"环境字段显示限制弹窗字段勾选状态未达到预期: field={text}, expected={expected}")
+        raise TimeoutError(f"环境列表字段权限弹窗字段勾选状态未达到预期: field={text}, expected={expected}")
 
     def _wait_environment_field_display_limit_all_checkbox_checked(self, expected: bool) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
@@ -1197,7 +1218,7 @@ class GlobalSettingsPage(BasePage):
             if selectable_states and all(value is expected for value in selectable_states.values()):
                 return
             time.sleep(0.2)
-        raise TimeoutError(f"环境字段显示限制弹窗全选状态未达到预期: expected={expected}")
+        raise TimeoutError(f"环境列表字段权限弹窗全选状态未达到预期: expected={expected}")
 
     def _wait_environment_field_display_limit_current_setting(
         self,
@@ -1213,7 +1234,7 @@ class GlobalSettingsPage(BasePage):
             if actual == expected:
                 return
             time.sleep(0.2)
-        raise TimeoutError(f"环境字段显示限制当前设置未回显预期字段: expected={expected}")
+        raise TimeoutError(f"环境列表字段权限当前设置未回显预期字段: expected={expected}")
 
     def _upload_bookmark_file(self, file_path: Path) -> None:
         file_content = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -1360,15 +1381,22 @@ class GlobalSettingsPage(BasePage):
         raise TimeoutError(f"访问网站限制方式未切换到: {mode_text}")
 
     def _ensure_website_restriction_shortcut_checked(self, shortcut_name: str) -> None:
-        if self.cdp.evaluate(self._website_restriction_shortcut_checked_script(shortcut_name)):
+        shortcut_names = self._website_shortcut_candidates(shortcut_name)
+        if self.cdp.evaluate(self._website_restriction_shortcut_checked_script(shortcut_names)):
             return
-        self.cdp.click_element_by_script(self._website_restriction_shortcut_script(shortcut_name))
+        self.cdp.click_element_by_script(self._website_restriction_shortcut_script(shortcut_names))
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
         while time.time() < deadline:
-            if self.cdp.evaluate(self._website_restriction_shortcut_checked_script(shortcut_name)):
+            if self.cdp.evaluate(self._website_restriction_shortcut_checked_script(shortcut_names)):
                 return
             time.sleep(0.2)
         raise TimeoutError(f"访问网站限制快捷选择未勾选: {shortcut_name}")
+
+    def _website_shortcut_candidates(self, shortcut_name: str) -> tuple[str, ...]:
+        clean_name = str(shortcut_name or "").strip()
+        if clean_name in self.GOOGLE_EXTENSION_SHORTCUT_LABELS:
+            return self.GOOGLE_EXTENSION_SHORTCUT_LABELS
+        return (clean_name,)
 
     def _wait_checkbox_states_stable(self, timeout_seconds: int | None = None) -> dict[str, bool]:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -1717,19 +1745,19 @@ class GlobalSettingsPage(BasePage):
             repr(self.locator("input")),
         )
 
-    def _website_restriction_shortcut_script(self, shortcut_name: str) -> str:
+    def _website_restriction_shortcut_script(self, shortcut_names: tuple[str, ...]) -> str:
         return """
         () => {
-            const shortcutName = __SHORTCUT_NAME__;
+            const shortcutNames = __SHORTCUT_NAMES__;
             const root = __WEBSITE_RESTRICTION_ROOT__();
             if (!root) return null;
             const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
-                .find((el) => (el.innerText || el.textContent || "").includes(shortcutName));
+                .find((el) => shortcutNames.some((name) => (el.innerText || el.textContent || "").includes(name)));
             if (!checkbox) return null;
             checkbox.scrollIntoView({ block: "center" });
             return checkbox;
         }
-        """.replace("__SHORTCUT_NAME__", repr(shortcut_name)).replace(
+        """.replace("__SHORTCUT_NAMES__", repr(list(shortcut_names))).replace(
             "__WEBSITE_RESTRICTION_ROOT__",
             self._website_restriction_root_function(),
         ).replace(
@@ -1737,18 +1765,18 @@ class GlobalSettingsPage(BasePage):
             repr(self.locator("checkbox")),
         )
 
-    def _website_restriction_shortcut_checked_script(self, shortcut_name: str) -> str:
+    def _website_restriction_shortcut_checked_script(self, shortcut_names: tuple[str, ...]) -> str:
         return """
         () => {
-            const shortcutName = __SHORTCUT_NAME__;
+            const shortcutNames = __SHORTCUT_NAMES__;
             const root = __WEBSITE_RESTRICTION_ROOT__();
             if (!root) return false;
             const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
-                .find((el) => (el.innerText || el.textContent || "").includes(shortcutName));
+                .find((el) => shortcutNames.some((name) => (el.innerText || el.textContent || "").includes(name)));
             if (!checkbox) return false;
             return checkbox.classList.contains("is-checked") || Boolean(checkbox.querySelector(__INPUT_SELECTOR__)?.checked);
         }
-        """.replace("__SHORTCUT_NAME__", repr(shortcut_name)).replace(
+        """.replace("__SHORTCUT_NAMES__", repr(list(shortcut_names))).replace(
             "__WEBSITE_RESTRICTION_ROOT__",
             self._website_restriction_root_function(),
         ).replace(
@@ -2599,6 +2627,7 @@ class GlobalSettingsPage(BasePage):
     def _environment_field_display_limit_dialog_visible_script(self) -> str:
         return """
         () => {
+            const dialogTitles = __DIALOG_TITLES__;
             const visible = (el) => {
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -2608,9 +2637,12 @@ class GlobalSettingsPage(BasePage):
                     && rect.height > 0;
             };
             return Array.from(document.querySelectorAll(__DIALOG_SELECTOR__))
-                .some((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
+                .some((dialog) => visible(dialog) && dialogTitles.some((title) => (dialog.innerText || "").includes(title)));
         }
-        """.replace("__DIALOG_SELECTOR__", repr(self.locator("dialog")))
+        """.replace("__DIALOG_TITLES__", repr(list(self.ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG_TITLES))).replace(
+            "__DIALOG_SELECTOR__",
+            repr(self.locator("dialog")),
+        )
 
     def _environment_field_display_limit_dialog_checkbox_script(self, text: str) -> str:
         return f"""
@@ -2742,6 +2774,7 @@ class GlobalSettingsPage(BasePage):
     def _environment_field_display_limit_dialog_function(self) -> str:
         return """
         (() => {
+            const dialogTitles = __DIALOG_TITLES__;
             const visible = (el) => {
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -2751,16 +2784,20 @@ class GlobalSettingsPage(BasePage):
                     && rect.height > 0;
             };
             const dialogs = Array.from(document.querySelectorAll(__DIALOG_SELECTOR__))
-                .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
+                .filter((dialog) => visible(dialog) && dialogTitles.some((title) => (dialog.innerText || "").includes(title)));
             return dialogs[dialogs.length - 1] || null;
         })
-        """.replace("__DIALOG_SELECTOR__", repr(self.locator("dialog")))
+        """.replace("__DIALOG_TITLES__", repr(list(self.ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG_TITLES))).replace(
+            "__DIALOG_SELECTOR__",
+            repr(self.locator("dialog")),
+        )
 
     def _environment_field_display_limit_root_function(self) -> str:
         return """
         (() => {
             const formItemSelector = __FORM_ITEM_SELECTOR__;
             const switchSelector = __SWITCH_SELECTOR__;
+            const settingLabels = __SETTING_LABELS__;
             const visible = (el) => {
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -2772,13 +2809,16 @@ class GlobalSettingsPage(BasePage):
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             const candidates = Array.from(document.querySelectorAll(formItemSelector))
                 .filter(visible)
-                .filter((el) => clean(el.innerText || el.textContent).includes("环境字段显示限制"))
+                .filter((el) => {
+                    const text = clean(el.innerText || el.textContent);
+                    return settingLabels.some((label) => text.includes(label));
+                })
                 .filter((el) => el.querySelector(switchSelector))
                 .sort((left, right) => {
                     const leftText = clean(left.innerText || left.textContent);
                     const rightText = clean(right.innerText || right.textContent);
-                    const leftScore = leftText.startsWith("环境字段显示限制") ? 0 : 1;
-                    const rightScore = rightText.startsWith("环境字段显示限制") ? 0 : 1;
+                    const leftScore = settingLabels.some((label) => leftText.startsWith(label)) ? 0 : 1;
+                    const rightScore = settingLabels.some((label) => rightText.startsWith(label)) ? 0 : 1;
                     if (leftScore !== rightScore) return leftScore - rightScore;
                     const leftRect = left.getBoundingClientRect();
                     const rightRect = right.getBoundingClientRect();
@@ -2786,7 +2826,10 @@ class GlobalSettingsPage(BasePage):
             });
             return candidates[0] || null;
         })
-        """.replace("__FORM_ITEM_SELECTOR__", repr(self.locator("form_item"))).replace(
+        """.replace("__SETTING_LABELS__", repr(list(self.ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS))).replace(
+            "__FORM_ITEM_SELECTOR__",
+            repr(self.locator("form_item")),
+        ).replace(
             "__SWITCH_SELECTOR__",
             repr(self.locator("switch")),
         )

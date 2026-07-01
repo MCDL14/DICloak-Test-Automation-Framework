@@ -8,6 +8,8 @@ from pages.base_page import BasePage
 
 
 class PersonalSettingsPage(BasePage):
+    DOWNLOAD_RECORD_KERNEL_TAB_TEXTS = ("浏览器内核", "内核")
+
     def open_from_avatar(self) -> None:
         # 个人设置入口在顶部头像菜单里；如果头像 DOM 变动，优先检查这个 selector。
         self._dismiss_blocking_overlays()
@@ -16,8 +18,11 @@ class PersonalSettingsPage(BasePage):
         self._wait_for_hash("#/personalInfo")
 
     def open_basic_settings(self) -> None:
-        # “基础设置”tab 的稳定 id 是 #tab-basicSetting，注意不要点到“环境偏好设置”。
-        self.cdp.click("#tab-basicSetting")
+        # 新版个人设置使用自绘分段按钮，旧版曾有 #tab-basicSetting；这里按真实可见 tab 文案定位。
+        try:
+            self.cdp.click("#tab-basicSetting", timeout=2000)
+        except Exception:
+            self.cdp.click_element_by_script(self._personal_settings_tab_script("基础设置"))
         self._wait_for_basic_settings()
 
     def environment_cache_dir(self) -> Path:
@@ -45,8 +50,8 @@ class PersonalSettingsPage(BasePage):
         raise RuntimeError("environment cache directory was not found on basic settings page")
 
     def open_download_record_kernel_tab(self) -> None:
-        # 下载记录里的“内核”是自绘 tab，不是 Element Plus tab，需要限定在 #DownloadLog 内点击。
-        self.cdp.click_element_by_script(self._download_record_tab_script("内核"))
+        # 下载记录里的内核 tab 是自绘 tab，不是 Element Plus tab，需要限定在 #DownloadLog 内点击。
+        self.cdp.click_element_by_script(self._download_record_tab_script(self.DOWNLOAD_RECORD_KERNEL_TAB_TEXTS))
         self._wait_for_download_record_kernel_tab()
 
     def download_latest_kernel(self, major_version: str) -> str:
@@ -174,7 +179,19 @@ class PersonalSettingsPage(BasePage):
         timeout_seconds_value = timeout_seconds_value or timeout_seconds(self.config, "page_seconds", 10)
         script = """
         () => {
-            const activeTab = document.querySelector("#tab-basicSetting.is-active");
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const activeTab = document.querySelector("#tab-basicSetting.is-active")
+                || Array.from(document.querySelectorAll(".env-segmented-tabs__item.is-active, [role='tab'].is-active"))
+                    .filter(visible)
+                    .find((el) => clean(el.innerText || el.textContent) === "基础设置");
             const bodyText = document.body.innerText || "";
             return Boolean(activeTab && bodyText.includes("环境缓存目录"));
         }
@@ -221,16 +238,48 @@ class PersonalSettingsPage(BasePage):
             raise RuntimeError(f"visible text was not found: {text}")
         self.cdp.click_at(float(rect["x"]) + float(rect["width"]) / 2, float(rect["y"]) + float(rect["height"]) / 2)
 
-    def _download_record_tab_script(self, text: str) -> str:
+    def _personal_settings_tab_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {text!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const candidates = Array.from(document.querySelectorAll(
+                ".env-segmented-tabs__item, #tab-basicSetting, [role='tab'], button"
+            ))
+                .filter((el) => visible(el) && clean(el.innerText || el.textContent) === expectedText)
+                .map((el) => {{
+                    const rect = el.getBoundingClientRect();
+                    return {{
+                        el,
+                        exactClass: String(el.className || "").includes("env-segmented-tabs__item") ? 0 : 1,
+                        area: rect.width * rect.height,
+                    }};
+                }})
+                .sort((left, right) => left.exactClass - right.exactClass || left.area - right.area);
+            return candidates[0]?.el || null;
+        }}
+        """
+
+    def _download_record_tab_script(self, texts: tuple[str, ...]) -> str:
         return f"""
         () => {{
             const root = document.querySelector("#DownloadLog");
             if (!root) return null;
+            const expectedTexts = {list(texts)!r};
             return Array.from(root.querySelectorAll("p,span,button,div"))
                 .find((el) => {{
                     const rect = el.getBoundingClientRect();
+                    const text = (el.innerText || el.textContent || "").trim();
                     return rect.width > 0 && rect.height > 0
-                        && (el.innerText || el.textContent || "").trim() === {text!r};
+                        && expectedTexts.includes(text);
                 }}) || null;
         }}
         """
@@ -238,17 +287,17 @@ class PersonalSettingsPage(BasePage):
     def _wait_for_download_record_kernel_tab(self) -> None:
         deadline = time.time() + timeout_seconds(self.config, "page_seconds", 10)
         while time.time() < deadline:
-            active = self.cdp.evaluate(
-                """
+            script = """
                 () => {
                     const root = document.querySelector("#DownloadLog");
                     if (!root) return false;
-                    const tab = Array.from(root.querySelectorAll("p"))
-                        .find((el) => (el.innerText || el.textContent || "").trim() === "内核");
+                    const expectedTexts = __EXPECTED_TEXTS__;
+                    const tab = Array.from(root.querySelectorAll("p,span,button,div"))
+                        .find((el) => expectedTexts.includes((el.innerText || el.textContent || "").trim()));
                     return Boolean(tab && String(tab.className || "").includes("tw-text-black"));
                 }
-                """
-            )
+                """.replace("__EXPECTED_TEXTS__", repr(list(self.DOWNLOAD_RECORD_KERNEL_TAB_TEXTS)))
+            active = self.cdp.evaluate(script)
             if active:
                 return
             time.sleep(0.2)

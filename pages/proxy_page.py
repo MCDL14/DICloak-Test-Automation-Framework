@@ -24,34 +24,34 @@ class ProxyPage(BasePage):
             self.return_from_batch_create()
         self._wait_for_proxy_list()
 
-    def proxy_ids_by_host_port(self, host: str, port: str) -> set[str]:
+    def proxy_serials_by_host_port(self, host: str, port: str) -> set[str]:
         return {
-            str(row.get("id", "")).strip()
+            str(row.get("serial", "")).strip()
             for row in self.proxy_rows()
-            if row.get("host") == str(host).strip() and row.get("port") == str(port).strip() and row.get("id")
+            if row.get("host") == str(host).strip() and row.get("port") == str(port).strip() and row.get("serial")
         }
 
-    def proxy_ids_by_type_host_port(self, proxy_type: str, host: str, port: str) -> set[str]:
+    def proxy_serials_by_type_host_port(self, proxy_type: str, host: str, port: str) -> set[str]:
         clean_type = str(proxy_type).strip().upper()
         clean_host = str(host).strip()
         clean_port = str(port).strip()
         return {
-            str(row.get("id", "")).strip()
+            str(row.get("serial", "")).strip()
             for row in self.proxy_rows()
             if row.get("type") == clean_type
             and row.get("host") == clean_host
             and row.get("port") == clean_port
-            and row.get("id")
+            and row.get("serial")
         }
 
-    def proxy_row_by_id(self, proxy_id: str) -> dict[str, str]:
-        clean_id = str(proxy_id).strip()
-        if not clean_id:
+    def proxy_row_by_serial(self, proxy_serial: str) -> dict[str, str]:
+        clean_serial = str(proxy_serial).strip()
+        if not clean_serial:
             return {}
-        return next((row for row in self.proxy_rows() if row.get("id") == clean_id), {})
+        return next((row for row in self.proxy_rows() if row.get("serial") == clean_serial), {})
 
-    def proxy_exists_by_type_host_port_id(self, proxy_type: str, host: str, port: str, proxy_id: str) -> bool:
-        row = self.proxy_row_by_id(proxy_id)
+    def proxy_exists_by_type_host_port_serial(self, proxy_type: str, host: str, port: str, proxy_serial: str) -> bool:
+        row = self.proxy_row_by_serial(proxy_serial)
         return bool(
             row
             and row.get("type") == str(proxy_type).strip().upper()
@@ -69,7 +69,7 @@ class ProxyPage(BasePage):
                 continue
             normalized.append(
                 {
-                    "id": str(row.get("id", "") or "").strip(),
+                    "serial": str(row.get("serial", "") or "").strip(),
                     "type": str(row.get("type", "") or "").strip().upper(),
                     "host": str(row.get("host", "") or "").strip(),
                     "port": str(row.get("port", "") or "").strip(),
@@ -320,17 +320,50 @@ class ProxyPage(BasePage):
         return str(self.cdp.evaluate(self._active_dialog_text_script()) or "").strip()
 
     def confirm_create_dialog(self) -> None:
-        self.cdp.click_element_by_script(self._create_dialog_button_script("确定"))
+        self._click_create_dialog_confirm()
         if not self._wait_create_dialog_closed():
             raise TimeoutError("create proxy dialog did not close after confirm")
         self._wait_for_proxy_list()
 
     def try_confirm_create_dialog(self, timeout_seconds: int = 5) -> bool:
-        self.cdp.click_element_by_script(self._create_dialog_button_script("确定"))
+        self._click_create_dialog_confirm()
         if not self._wait_create_dialog_closed(timeout_seconds=timeout_seconds):
             return False
         self._wait_for_proxy_list()
         return True
+
+    def confirm_create_dialog_and_wait_new_proxy(
+        self,
+        proxy_type: str,
+        host: str,
+        port: str,
+        existing_serials: set[str],
+        timeout_seconds: int | None = None,
+    ) -> str:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 15)
+        deadline = time.time() + timeout_seconds
+        self._click_create_dialog_confirm()
+        last_error: Exception | None = None
+        while time.time() < deadline:
+            try:
+                current_serials = self.proxy_serials_by_type_host_port(proxy_type, host, port)
+                new_serials = sorted(current_serials - existing_serials, key=lambda value: int(value) if value.isdigit() else value)
+                if new_serials:
+                    self._wait_create_dialog_closed(timeout_seconds=1)
+                    self._wait_for_proxy_list(timeout_seconds=3)
+                    return new_serials[-1]
+            except Exception as exc:
+                last_error = exc
+            if not self.cdp.evaluate(self._create_dialog_visible_script()):
+                try:
+                    self._wait_for_proxy_list(timeout_seconds=2)
+                except Exception as exc:
+                    last_error = exc
+            time.sleep(0.3)
+        raise TimeoutError(
+            "create proxy did not finish after confirm: "
+            f"type={proxy_type}, host={host}, port={port}, existing_serials={sorted(existing_serials)}"
+        ) from last_error
 
     def cancel_create_dialog(self) -> None:
         if not self.cdp.evaluate(self._create_dialog_visible_script()):
@@ -349,7 +382,7 @@ class ProxyPage(BasePage):
         self,
         host: str,
         port: str,
-        existing_ids: set[str],
+        existing_serials: set[str],
         timeout_seconds: int | None = None,
     ) -> str:
         clean_host = str(host).strip()
@@ -360,18 +393,18 @@ class ProxyPage(BasePage):
         while time.time() < deadline:
             last_rows = self.proxy_rows()
             for row in last_rows:
-                row_id = str(row.get("id", "")).strip()
+                serial = str(row.get("serial", "")).strip()
                 if (
-                    row_id
-                    and row_id not in existing_ids
+                    serial
+                    and serial not in existing_serials
                     and row.get("host") == clean_host
                     and row.get("port") == clean_port
                 ):
-                    return row_id
+                    return serial
             time.sleep(0.5)
         raise TimeoutError(
             "created proxy row was not found: "
-            f"host={clean_host}, port={clean_port}, existing_ids={sorted(existing_ids)}, rows={last_rows}"
+            f"host={clean_host}, port={clean_port}, existing_serials={sorted(existing_serials)}, rows={last_rows}"
         )
 
     def wait_new_proxy_visible_by_type(
@@ -379,7 +412,7 @@ class ProxyPage(BasePage):
         proxy_type: str,
         host: str,
         port: str,
-        existing_ids: set[str],
+        existing_serials: set[str],
         timeout_seconds: int | None = None,
     ) -> str:
         clean_type = str(proxy_type).strip().upper()
@@ -391,45 +424,45 @@ class ProxyPage(BasePage):
         while time.time() < deadline:
             last_rows = self.proxy_rows()
             for row in last_rows:
-                row_id = str(row.get("id", "")).strip()
+                serial = str(row.get("serial", "")).strip()
                 if (
-                    row_id
-                    and row_id not in existing_ids
+                    serial
+                    and serial not in existing_serials
                     and row.get("type") == clean_type
                     and row.get("host") == clean_host
                     and row.get("port") == clean_port
                 ):
-                    return row_id
+                    return serial
             time.sleep(0.5)
         raise TimeoutError(
             "created proxy row was not found: "
             f"type={clean_type}, host={clean_host}, port={clean_port}, "
-            f"existing_ids={sorted(existing_ids)}, rows={last_rows}"
+            f"existing_serials={sorted(existing_serials)}, rows={last_rows}"
         )
 
-    def proxy_exists_by_id(self, proxy_id: str) -> bool:
-        clean_id = str(proxy_id).strip()
-        if not clean_id:
+    def proxy_exists_by_serial(self, proxy_serial: str) -> bool:
+        clean_serial = str(proxy_serial).strip()
+        if not clean_serial:
             return False
-        return bool(self.cdp.evaluate(self._proxy_row_exists_by_id_script(clean_id)))
+        return bool(self.cdp.evaluate(self._proxy_row_exists_by_serial_script(clean_serial)))
 
-    def detect_proxy_in_row(self, proxy_id: str) -> str:
-        clean_id = str(proxy_id).strip()
-        if not clean_id:
-            raise ValueError("proxy id is empty")
-        before_text = self.row_detect_result(clean_id)
-        self.cdp.click_element_by_script(self._proxy_row_operation_button_by_position_script(clean_id, "first"))
-        detecting_cell_index = self.wait_row_detecting_visible_or_result_changed(clean_id, before_text)
-        self.wait_row_detecting_hidden(clean_id)
-        return self.row_detect_result(clean_id, cell_index=detecting_cell_index)
+    def detect_proxy_in_row(self, proxy_serial: str) -> str:
+        clean_serial = str(proxy_serial).strip()
+        if not clean_serial:
+            raise ValueError("proxy serial is empty")
+        before_text = self.row_detect_result(clean_serial)
+        self.cdp.click_element_by_script(self._proxy_row_operation_button_by_position_script(clean_serial, "first"))
+        detecting_cell_index = self.wait_row_detecting_visible_or_result_changed(clean_serial, before_text)
+        self.wait_row_detecting_hidden(clean_serial)
+        return self.row_detect_result(clean_serial, cell_index=detecting_cell_index)
 
     def wait_row_detecting_visible_or_result_changed(
         self,
-        proxy_id: str,
+        proxy_serial: str,
         before_text: str,
         timeout_seconds: int | None = None,
     ) -> int | None:
-        clean_id = str(proxy_id).strip()
+        clean_serial = str(proxy_serial).strip()
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
         deadline = time.time() + timeout_seconds
         before_clean = str(before_text or "").strip()
@@ -437,49 +470,49 @@ class ProxyPage(BasePage):
         last_text = ""
         last_row_text = ""
         while time.time() < deadline:
-            current_index = self.cdp.evaluate(self._proxy_row_cell_index_contains_text_script(clean_id, "检测中"))
+            current_index = self.cdp.evaluate(self._proxy_row_cell_index_contains_text_script(clean_serial, "检测中"))
             if isinstance(current_index, int) and current_index >= 0:
                 return current_index
             last_index = current_index if isinstance(current_index, int) else None
-            current_text = self.row_detect_result(clean_id)
+            current_text = self.row_detect_result(clean_serial)
             last_text = current_text
-            last_row_text = self.row_text_by_id(clean_id)
+            last_row_text = self.row_text_by_serial(clean_serial)
             if current_text and current_text != before_clean:
                 return None
             time.sleep(0.2)
         raise TimeoutError(
             "proxy row detect status did not appear or change: "
-            f"id={clean_id}, before={before_clean}, last_index={last_index}, "
+            f"serial={clean_serial}, before={before_clean}, last_index={last_index}, "
             f"last_text={self._compact_debug_text(last_text)!r}, "
             f"row_text={self._compact_debug_text(last_row_text)!r}"
         )
 
-    def wait_row_detecting_hidden(self, proxy_id: str, timeout_seconds: int | None = None) -> int | None:
-        clean_id = str(proxy_id).strip()
+    def wait_row_detecting_hidden(self, proxy_serial: str, timeout_seconds: int | None = None) -> int | None:
+        clean_serial = str(proxy_serial).strip()
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "proxy_detect_seconds", 45)
         deadline = time.time() + timeout_seconds
         detecting_cell_index: int | None = None
         last_row_text = ""
         while time.time() < deadline:
-            current_index = self.cdp.evaluate(self._proxy_row_cell_index_contains_text_script(clean_id, "检测中"))
+            current_index = self.cdp.evaluate(self._proxy_row_cell_index_contains_text_script(clean_serial, "检测中"))
             if isinstance(current_index, int) and current_index >= 0:
                 detecting_cell_index = current_index
-            last_row_text = self.row_text_by_id(clean_id)
-            if not self.cdp.evaluate(self._proxy_row_contains_text_script(clean_id, "检测中")):
+            last_row_text = self.row_text_by_serial(clean_serial)
+            if not self.cdp.evaluate(self._proxy_row_contains_text_script(clean_serial, "检测中")):
                 return detecting_cell_index
             time.sleep(0.5)
         raise TimeoutError(
             "proxy row detect status did not disappear: "
-            f"id={clean_id}, detecting_cell_index={detecting_cell_index}, "
+            f"serial={clean_serial}, detecting_cell_index={detecting_cell_index}, "
             f"row_text={self._compact_debug_text(last_row_text)!r}"
         )
 
-    def row_detect_result(self, proxy_id: str, cell_index: int | None = None) -> str:
-        clean_id = str(proxy_id).strip()
+    def row_detect_result(self, proxy_serial: str, cell_index: int | None = None) -> str:
+        clean_serial = str(proxy_serial).strip()
         result_text = ""
         if cell_index is not None:
-            result_text = str(self.cdp.evaluate(self._proxy_row_cell_text_by_index_script(clean_id, cell_index)) or "").strip()
-        row_text = str(self.cdp.evaluate(self._proxy_row_text_by_id_script(clean_id)) or "").strip()
+            result_text = str(self.cdp.evaluate(self._proxy_row_cell_text_by_index_script(clean_serial, cell_index)) or "").strip()
+        row_text = str(self.cdp.evaluate(self._proxy_row_text_by_serial_script(clean_serial)) or "").strip()
         text = result_text or row_text
         if self.FAILURE_TEXT in text:
             return self.FAILURE_TEXT
@@ -488,11 +521,11 @@ class ProxyPage(BasePage):
                 return success_text
         return text
 
-    def row_text_by_id(self, proxy_id: str) -> str:
-        clean_id = str(proxy_id).strip()
-        if not clean_id:
+    def row_text_by_serial(self, proxy_serial: str) -> str:
+        clean_serial = str(proxy_serial).strip()
+        if not clean_serial:
             return ""
-        return str(self.cdp.evaluate(self._proxy_row_text_by_id_script(clean_id)) or "").strip()
+        return str(self.cdp.evaluate(self._proxy_row_text_by_serial_script(clean_serial)) or "").strip()
 
     @staticmethod
     def _compact_debug_text(value: object, limit: int = 500) -> str:
@@ -509,15 +542,15 @@ class ProxyPage(BasePage):
                 compact[key] = cls._compact_debug_text(compact.get(key), limit=600)
         return compact
 
-    def delete_proxy_by_id(self, proxy_id: str) -> None:
-        clean_id = str(proxy_id).strip()
-        if not clean_id:
+    def delete_proxy_by_serial(self, proxy_serial: str) -> None:
+        clean_serial = str(proxy_serial).strip()
+        if not clean_serial:
             return
-        if not self.proxy_exists_by_id(clean_id):
+        if not self.proxy_exists_by_serial(clean_serial):
             return
-        self.cdp.click_element_by_script(self._proxy_row_operation_button_by_position_script(clean_id, "last"))
+        self.cdp.click_element_by_script(self._proxy_row_operation_button_by_position_script(clean_serial, "last"))
         self.confirm_secondary_dialog()
-        self.wait_proxy_absent(clean_id)
+        self.wait_proxy_absent(clean_serial)
 
     def clear_proxy_selection(self) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "search_result_seconds", 10)
@@ -529,14 +562,14 @@ class ProxyPage(BasePage):
             time.sleep(0.2)
         raise TimeoutError(f"proxy selection did not clear: selected_count={self.cdp.evaluate(self._proxy_selected_count_script())}")
 
-    def select_proxy_rows_by_ids(self, proxy_ids: set[str]) -> None:
-        clean_ids = {str(proxy_id).strip() for proxy_id in proxy_ids if str(proxy_id).strip()}
-        if not clean_ids:
+    def select_proxy_rows_by_serials(self, proxy_serials: set[str]) -> None:
+        clean_serials = {str(proxy_serial).strip() for proxy_serial in proxy_serials if str(proxy_serial).strip()}
+        if not clean_serials:
             return
         self.clear_proxy_selection()
-        for proxy_id in clean_ids:
-            self.cdp.click_element_by_script(self._proxy_row_selection_checkbox_script(proxy_id))
-        self.wait_proxy_selected_count(len(clean_ids))
+        for proxy_serial in clean_serials:
+            self.cdp.click_element_by_script(self._proxy_row_selection_checkbox_script(proxy_serial))
+        self.wait_proxy_selected_count(len(clean_serials))
 
     def wait_proxy_selected_count(self, expected_count: int, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
@@ -551,15 +584,15 @@ class ProxyPage(BasePage):
             time.sleep(0.2)
         raise TimeoutError(f"proxy selected count mismatch: expected={expected_count}, actual={last_count}")
 
-    def bulk_delete_selected_proxies(self, proxy_ids: set[str]) -> None:
-        clean_ids = {str(proxy_id).strip() for proxy_id in proxy_ids if str(proxy_id).strip()}
-        if not clean_ids:
+    def bulk_delete_selected_proxies(self, proxy_serials: set[str]) -> None:
+        clean_serials = {str(proxy_serial).strip() for proxy_serial in proxy_serials if str(proxy_serial).strip()}
+        if not clean_serials:
             return
-        self.select_proxy_rows_by_ids(clean_ids)
+        self.select_proxy_rows_by_serials(clean_serials)
         self.click_proxy_bulk_action(("删除",))
         self.confirm_secondary_dialog(("确定删除", "确认删除", "确定", "确认"))
-        for proxy_id in clean_ids:
-            self.wait_proxy_absent(proxy_id)
+        for proxy_serial in clean_serials:
+            self.wait_proxy_absent(proxy_serial)
         self.wait_proxy_selected_count(0)
 
     def click_proxy_bulk_action(self, texts: tuple[str, ...]) -> None:
@@ -573,46 +606,54 @@ class ProxyPage(BasePage):
                 last_error = exc
         raise TimeoutError(f"proxy bulk action was not found: {texts}") from last_error
 
-    def start_bulk_detect_selected_proxies(self, proxy_ids: set[str]) -> dict[str, str]:
-        clean_ids = {str(proxy_id).strip() for proxy_id in proxy_ids if str(proxy_id).strip()}
-        if not clean_ids:
+    def start_bulk_detect_selected_proxies(self, proxy_serials: set[str]) -> dict[str, str]:
+        clean_serials = {str(proxy_serial).strip() for proxy_serial in proxy_serials if str(proxy_serial).strip()}
+        if not clean_serials:
             return {}
-        before_results = {proxy_id: self.row_detect_result(proxy_id) for proxy_id in clean_ids}
-        self.select_proxy_rows_by_ids(clean_ids)
+        before_results = {proxy_serial: self.row_detect_result(proxy_serial) for proxy_serial in clean_serials}
+        self.select_proxy_rows_by_serials(clean_serials)
         self.click_proxy_bulk_action(("批量检测", "检测代理", "检测"))
         return before_results
 
-    def wait_proxy_row_detection_finished(self, proxy_id: str, before_text: str) -> str:
-        clean_id = str(proxy_id).strip()
-        detecting_cell_index = self.wait_row_detecting_visible_or_result_changed(clean_id, before_text)
-        hidden_cell_index = self.wait_row_detecting_hidden(clean_id)
+    def wait_proxy_row_detection_finished(self, proxy_serial: str, before_text: str) -> str:
+        clean_serial = str(proxy_serial).strip()
+        detecting_cell_index = self.wait_row_detecting_visible_or_result_changed(clean_serial, before_text)
+        hidden_cell_index = self.wait_row_detecting_hidden(clean_serial)
         return self.row_detect_result(
-            clean_id,
+            clean_serial,
             cell_index=detecting_cell_index if detecting_cell_index is not None else hidden_cell_index,
         )
 
-    def wait_proxy_absent(self, proxy_id: str, timeout_seconds: int | None = None) -> None:
-        clean_id = str(proxy_id).strip()
+    def wait_proxy_absent(self, proxy_serial: str, timeout_seconds: int | None = None) -> None:
+        clean_serial = str(proxy_serial).strip()
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
-            if not self.proxy_exists_by_id(clean_id):
+            if not self.proxy_exists_by_serial(clean_serial):
                 return
             time.sleep(0.5)
-        raise TimeoutError(f"proxy row still exists after delete: id={clean_id}")
+        raise TimeoutError(f"proxy row still exists after delete: serial={clean_serial}")
 
-    def delete_newest_proxy_by_host_port_excluding(self, host: str, port: str, excluded_ids: set[str]) -> None:
+    def delete_newest_proxy_by_host_port_excluding(
+        self,
+        host: str,
+        port: str,
+        excluded_serials: set[str],
+        proxy_type: str = "",
+    ) -> None:
+        expected_type = str(proxy_type or "").strip().upper()
         candidates = [
             row
             for row in self.proxy_rows()
             if row.get("host") == str(host).strip()
             and row.get("port") == str(port).strip()
-            and row.get("id")
-            and row.get("id") not in excluded_ids
+            and (not expected_type or str(row.get("type") or "").strip().upper() == expected_type)
+            and row.get("serial")
+            and row.get("serial") not in excluded_serials
         ]
         for row in candidates:
             try:
-                self.delete_proxy_by_id(str(row["id"]))
+                self.delete_proxy_by_serial(str(row["serial"]))
             except Exception:
                 continue
 
@@ -634,6 +675,21 @@ class ProxyPage(BasePage):
             except Exception as exc:
                 last_error = exc
         raise TimeoutError(f"secondary confirmation button was not found: {preferred_texts}") from last_error
+
+    def _click_create_dialog_confirm(self) -> None:
+        last_error: Exception | None = None
+        for _ in range(3):
+            if not self.cdp.evaluate(self._create_dialog_visible_script()):
+                return
+            try:
+                self.cdp.click_element_by_script(self._create_dialog_button_script("确定"), timeout=3000)
+                return
+            except Exception as exc:
+                last_error = exc
+                if not self.cdp.evaluate(self._create_dialog_visible_script()):
+                    return
+                time.sleep(0.3)
+        raise TimeoutError("create proxy dialog confirm button was not clickable") from last_error
 
     def _wait_for_proxy_list(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -1318,10 +1374,8 @@ class ProxyPage(BasePage):
             }};
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             const parseProxyCell = (text) => {{
-                const idMatch = text.match(/ID:\\s*(\\d+)/);
                 const proxyMatch = text.match(/([A-Z0-9]+):\\/\\/([^:\\s]+):(\\d+)(?::([^:\\s]+):([^\\s]+))?/i);
                 return {{
-                    id: idMatch ? idMatch[1] : "",
                     type: proxyMatch ? proxyMatch[1].toUpperCase() : "",
                     host: proxyMatch ? proxyMatch[2] : "",
                     port: proxyMatch ? proxyMatch[3] : "",
@@ -1329,33 +1383,30 @@ class ProxyPage(BasePage):
                     password: proxyMatch && proxyMatch[5] ? proxyMatch[5] : "",
                 }};
             }};
-            const parse = (text) => {{
-                const idMatch = text.match(/ID:\\s*(\\d+)/);
-                const proxyMatch = text.match(/([A-Z0-9]+):\\/\\/([^:\\s]+):(\\d+)/i);
-                return {{
-                    id: idMatch ? idMatch[1] : "",
-                    type: proxyMatch ? proxyMatch[1].toUpperCase() : "",
-                    host: proxyMatch ? proxyMatch[2] : "",
-                    port: proxyMatch ? proxyMatch[3] : "",
-                    account: "",
-                    ip_protocol: "",
-                    password: "",
-                    outbound_ip: "",
-                    remark: "",
-                    text,
-                }};
-            }};
             return Array.from(document.querySelectorAll({self.locator("table_row")!r}))
                 .filter(visible)
                 .map((row) => {{
-                    const cells = Array.from(row.querySelectorAll({self.locator("table_cell")!r}))
-                        .filter(visible)
-                        .map((cell) => clean(cell.innerText || cell.textContent));
-                    const parsed = parse(clean(row.innerText || row.textContent));
+                    const visibleCells = Array.from(row.querySelectorAll({self.locator("table_cell")!r}))
+                        .filter(visible);
+                    const cells = visibleCells.map((cell) => clean(cell.innerText || cell.textContent));
+                    const serial = cells.find((cell) => /^\\d+$/.test(cell)) || "";
+                    const rowText = clean(row.innerText || row.textContent);
+                    const parsed = {{
+                        serial,
+                        type: "",
+                        host: "",
+                        port: "",
+                        account: "",
+                        ip_protocol: "",
+                        password: "",
+                        outbound_ip: "",
+                        remark: "",
+                        text: rowText,
+                    }};
                     if (cells.length >= 8) {{
-                        const proxyCell = cells.find((cell) => /[A-Z0-9]+:\\/\\//i.test(cell)) || "";
+                        const proxyCellIndex = cells.findIndex((cell) => /[A-Z0-9]+:\\/\\//i.test(cell));
+                        const proxyCell = proxyCellIndex >= 0 ? cells[proxyCellIndex] : "";
                         const proxy = parseProxyCell(proxyCell);
-                        parsed.id = parsed.id || proxy.id;
                         parsed.type = parsed.type || proxy.type;
                         parsed.host = parsed.host || proxy.host;
                         parsed.port = parsed.port || proxy.port;
@@ -1370,33 +1421,33 @@ class ProxyPage(BasePage):
         }}
         """
 
-    def _proxy_row_exists_by_id_script(self, proxy_id: str) -> str:
+    def _proxy_row_exists_by_serial_script(self, proxy_serial: str) -> str:
         return f"""
-        () => Boolean(__ROW_BY_ID__())
-        """.replace("__ROW_BY_ID__", self._proxy_row_by_id_function(proxy_id))
+        () => Boolean(__ROW_BY_SERIAL__())
+        """.replace("__ROW_BY_SERIAL__", self._proxy_row_by_serial_function(proxy_serial))
 
-    def _proxy_row_text_by_id_script(self, proxy_id: str) -> str:
+    def _proxy_row_text_by_serial_script(self, proxy_serial: str) -> str:
         return f"""
         () => {{
-            const row = __ROW_BY_ID__();
+            const row = __ROW_BY_SERIAL__();
             return row ? String(row.innerText || row.textContent || "") : "";
         }}
-        """.replace("__ROW_BY_ID__", self._proxy_row_by_id_function(proxy_id))
+        """.replace("__ROW_BY_SERIAL__", self._proxy_row_by_serial_function(proxy_serial))
 
-    def _proxy_row_contains_text_script(self, proxy_id: str, text: str) -> str:
+    def _proxy_row_contains_text_script(self, proxy_serial: str, text: str) -> str:
         return f"""
         () => {{
             const expectedText = {text!r};
-            const row = __ROW_BY_ID__();
+            const row = __ROW_BY_SERIAL__();
             return Boolean(row && (row.innerText || row.textContent || "").includes(expectedText));
         }}
-        """.replace("__ROW_BY_ID__", self._proxy_row_by_id_function(proxy_id))
+        """.replace("__ROW_BY_SERIAL__", self._proxy_row_by_serial_function(proxy_serial))
 
-    def _proxy_row_cell_index_contains_text_script(self, proxy_id: str, text: str) -> str:
+    def _proxy_row_cell_index_contains_text_script(self, proxy_serial: str, text: str) -> str:
         return f"""
         () => {{
             const expectedText = {text!r};
-            const row = __ROW_BY_ID__();
+            const row = __ROW_BY_SERIAL__();
             if (!row) return -1;
             const visible = (el) => {{
                 const style = window.getComputedStyle(el);
@@ -1409,12 +1460,12 @@ class ProxyPage(BasePage):
             const cells = Array.from(row.querySelectorAll({self.locator("table_cell")!r})).filter(visible);
             return cells.findIndex((cell) => (cell.innerText || cell.textContent || "").includes(expectedText));
         }}
-        """.replace("__ROW_BY_ID__", self._proxy_row_by_id_function(proxy_id))
+        """.replace("__ROW_BY_SERIAL__", self._proxy_row_by_serial_function(proxy_serial))
 
-    def _proxy_row_cell_text_by_index_script(self, proxy_id: str, cell_index: int) -> str:
+    def _proxy_row_cell_text_by_index_script(self, proxy_serial: str, cell_index: int) -> str:
         return f"""
         () => {{
-            const row = __ROW_BY_ID__();
+            const row = __ROW_BY_SERIAL__();
             if (!row) return "";
             const cellIndex = {int(cell_index)};
             const visible = (el) => {{
@@ -1429,14 +1480,14 @@ class ProxyPage(BasePage):
             const cell = cells[cellIndex] || null;
             return cell ? String(cell.innerText || cell.textContent || "") : "";
         }}
-        """.replace("__ROW_BY_ID__", self._proxy_row_by_id_function(proxy_id))
+        """.replace("__ROW_BY_SERIAL__", self._proxy_row_by_serial_function(proxy_serial))
 
-    def _proxy_row_operation_button_by_position_script(self, proxy_id: str, position: str) -> str:
+    def _proxy_row_operation_button_by_position_script(self, proxy_serial: str, position: str) -> str:
         if position not in {"first", "last"}:
             raise ValueError(f"unsupported proxy row operation position: {position}")
         return f"""
         () => {{
-            const row = __ROW_BY_ID__();
+            const row = __ROW_BY_SERIAL__();
             if (!row) return null;
             const position = {position!r};
             const visible = (el) => {{
@@ -1465,7 +1516,7 @@ class ProxyPage(BasePage):
             if (!candidates.length) return null;
             return position === "first" ? candidates[0].el : candidates[candidates.length - 1].el;
         }}
-        """.replace("__ROW_BY_ID__", self._proxy_row_by_id_function(proxy_id))
+        """.replace("__ROW_BY_SERIAL__", self._proxy_row_by_serial_function(proxy_serial))
 
     def _clear_proxy_selection_script(self) -> str:
         return f"""
@@ -1490,10 +1541,10 @@ class ProxyPage(BasePage):
         }}
         """
 
-    def _proxy_row_selection_checkbox_script(self, proxy_id: str) -> str:
+    def _proxy_row_selection_checkbox_script(self, proxy_serial: str) -> str:
         return f"""
         () => {{
-            const row = __ROW_BY_ID__();
+            const row = __ROW_BY_SERIAL__();
             if (!row) return null;
             const visible = (el) => {{
                 const style = window.getComputedStyle(el);
@@ -1508,7 +1559,7 @@ class ProxyPage(BasePage):
                 .map((el) => el.closest(".el-checkbox") || el);
             return candidates[0] || null;
         }}
-        """.replace("__ROW_BY_ID__", self._proxy_row_by_id_function(proxy_id))
+        """.replace("__ROW_BY_SERIAL__", self._proxy_row_by_serial_function(proxy_serial))
 
     def _proxy_selected_count_script(self) -> str:
         return f"""
@@ -1557,10 +1608,10 @@ class ProxyPage(BasePage):
         }}
         """
 
-    def _proxy_row_by_id_function(self, proxy_id: str) -> str:
+    def _proxy_row_by_serial_function(self, proxy_serial: str) -> str:
         return f"""
         (() => {{
-            const expectedId = {str(proxy_id).strip()!r};
+            const expectedSerial = {str(proxy_serial).strip()!r};
             const visible = (el) => {{
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -1569,9 +1620,16 @@ class ProxyPage(BasePage):
                     && rect.width > 0
                     && rect.height > 0;
             }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             return Array.from(document.querySelectorAll({self.locator("table_row")!r}))
                 .filter(visible)
-                .find((row) => (row.innerText || row.textContent || "").includes(`ID: ${{expectedId}}`))
+                .find((row) => {{
+                    const cells = Array.from(row.querySelectorAll({self.locator("table_cell")!r})).filter(visible);
+                    const serialText = cells
+                        .map((cell) => clean(cell.innerText || cell.textContent || ""))
+                        .find((text) => /^\\d+$/.test(text)) || "";
+                    return serialText === expectedSerial;
+                }})
                 || null;
         }})
         """

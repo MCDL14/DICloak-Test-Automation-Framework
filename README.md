@@ -121,6 +121,8 @@ Mac 当前已验证：
 - `python run.py --config config/config.macos.yaml --level P0` 通过，结果 `total=59 passed=58 failed=0 errors=0 skipped=1 flaky=1`。
 - UI 远程节点模式已完成“同步当前代码”后执行 `P0 全量` 验证，结果 `total=59 passed=57 failed=0 errors=1 skipped=1 flaky=0`；唯一错误为代理创建弹窗确认后未关闭，保留为 Mac 远端代理业务/环境问题继续排查。
 
+以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 62 条，最新状态见“最近验证记录”。
+
 Mac 当前跳过项：
 
 - `test_disable_packet_capture_software`：依赖 Windows `.exe` 工具和 `taskkill`，Mac 上按平台能力跳过。
@@ -360,18 +362,20 @@ CDP 9222: none
 - `test_02_disable_browser_devtools.py`：禁止打开浏览器开发者工具。
 - `test_03_disable_extension_management.py`：禁止管理/移除扩展，以及从本地安装扩展至浏览器。
 - `test_04_disable_member_access_google_extension_pages.py`：禁止成员访问谷歌扩展商店和扩展设置页面。
-- `test_05_block_specific_websites_google_and_baidu.py`：禁止访问指定网址-快捷勾选谷歌应用商店、百度，并通过本地 HTTP 探针校验允许网址仍可访问，降低外网波动影响。
-- `test_06_allow_specific_website_bilibili.py`：允许访问指定网址，使用本地 HTTP 探针作为允许网址，并校验谷歌应用商店、百度仍被拦截。
+- `test_05_block_specific_websites_google_and_baidu.py`：禁止访问指定网址-快捷勾选 Chrome 应用商店、百度，并通过本地 HTTP 探针校验允许网址仍可访问，降低外网波动影响。
+- `test_06_allow_specific_website_bilibili.py`：允许访问指定网址，使用本地 HTTP 探针作为允许网址，并校验 Chrome 应用商店、百度仍被拦截。
 - `test_07_disable_packet_capture_software.py`：禁用抓包软件，校验抓包进程存在时禁止打开环境，关闭抓包软件后环境可正常打开。
 - `test_08_bookmark_setting_overwrite.py`：书签设置-覆盖，校验上传书签文件覆盖内核现有书签。
 - `test_09_bookmark_setting_append.py`：书签设置-追加，校验上传书签文件追加到内核现有书签，并覆盖清空书签。
-- `test_10_environment_field_display_limit.py`：环境字段显示限制，校验环境列表只展示指定字段并恢复字段设置能力。
+- `test_10_environment_field_display_limit.py`：环境列表字段权限，校验环境列表只展示指定字段并恢复列表字段设置能力。
 - `test_11_environment_list_pagination_setting.py`：环境列表分页设置，校验固定分页条数后隐藏分页选择器，并可恢复默认分页。
 - `test_12_environment_list_sort_limit.py`：环境列表排序设置，校验全局固定排序后隐藏列表排序按钮，并可恢复手动排序。
 
 全局设置模块 2026-05-15 回归曾出现前 4 条用例异常，已定位并修复：复选框脚本中 `checkboxStateSelector` 和 `checkboxInputSelector` 变量未在点击脚本内定义，导致 `ReferenceError`；同时 Chrome Web Store 页面当前会先出现“切换到 Chrome 即可安装扩展程序和主题背景”的前置阻止提示，第三条用例已兼容该稳定阻止证据。最新整模块验证通过：
 
 - `python run.py --config config/config.yaml --module global_settings --attach-existing-app`：`total=12 passed=12 failed=0 errors=0 skipped=0 flaky=0`。
+
+全局设置模块已兼容新版文案和元素入口：`禁止打开浏览器开发者工具` 支持新旧长短文案，网站限制快捷项支持 `Chrome 应用商店` / `谷歌应用商店`，环境列表字段权限支持 `环境列表字段权限` / `环境字段显示限制` 和 `列表字段` / `列表字段设置` 弹窗标题。`test_07_disable_packet_capture_software.py` 仍依赖 Windows 抓包工具能以当前权限启动；若工具本身需要管理员权限，需以管理员身份运行自动化进程或调整该用例的环境前置策略。
 
 当前已开始编写并验证环境分组管理模块 6 条 P0 用例，文件位于 `tests/p0/environment_group_management/`：
 
@@ -383,6 +387,8 @@ CDP 9222: none
 - `test_06_edit_group_remark.py`：修改环境分组备注，记录首个可编辑分组的备注和 ID，修改为 `自动化-修改环境分组备注` 后按 ID 校验，再还原原备注并按 ID 校验。
 
 环境分组模块的通用元素已统一维护在 `locators/environment_group_locators.yaml`，包括菜单候选、弹层、表单项、筛选模式切换图标、搜索/清除按钮、下拉项、表格行/单元格、行内编辑入口、行内操作候选和授权成员悬浮窗等；页面对象只保留按业务文本、分组 ID、列内容判断的动态逻辑。
+
+新版环境分组列表不稳定展示分组 ID 时，`EnvironmentGroupPage` 会在 Page Object 内生成内部稳定行 key：优先使用真实 ID，缺失时使用创建时间，最后才回退到当前可见行序号。该 key 只用于页面对象内部完成行匹配、编辑和清理，测试用例仍只表达业务步骤和断言。
 
 当前已开始编写并验证成员管理模块 15 条 P0 用例，文件位于 `tests/p0/member_management/`：
 
@@ -406,20 +412,31 @@ CDP 9222: none
 
 四条成员 open API 用例在异常路径增加了 `api_case_recovery.py` 兜底恢复：用例出现问题后会 best-effort 调用接口恢复自动化账号 `status=ENABLED`、`disuse_enable=false`，再尝试重新登录配置中的自动化账号、确认自动化团队并回到成员列表。恢复失败不会覆盖原始用例失败原因，但会写入 warning 日志，方便排查现场。
 
+成员管理新版列表不再稳定展示成员 ID 时，`MemberPage` 会通过当前 APP 登录态读取成员列表接口数据，并结合可见行的姓名、备注、创建时间匹配真实成员 ID。批量编辑、导出、筛选和编辑成员等用例继续按成员 ID 做精确行操作，复杂 DOM 查询和接口补全逻辑都封装在 Page Object 内。
+
 当前已新增代理管理模块 4 条 P0 用例，文件位于 `tests/p0/proxy_management/`：
 
-- `test_01_create_custom_proxy.py`：创建自定义代理，进入代理管理页前先开启 Windows 系统代理，系统代理主机和端口由 `config.yaml` 顶层 `windows_system_proxy.host/port` 配置，默认 `127.0.0.1:7897`，结束后关闭系统代理；进入代理管理页后创建 HTTP 自定义代理，填写主机、端口、账号、密码，并显式确保“代理类型”为 `HTTP`；在创建弹窗中点击“检测代理”，等待“连接测试成功”或“连接失败”；保存后按新代理 ID、主机、端口和代理类型一起校验列表创建成功，点击行内第一个操作按钮重新检测并从“检测中”所在单元格读取结果，最后点击行内最后一个操作按钮删除，并按新代理 ID、主机、端口和代理类型一起校验删除成功。若弹窗或列表检测结果为“连接失败”，用例会延迟断言失败，同时继续执行清理逻辑。账号和密码优先从本地 `config/test_data.yaml` 或环境变量 `DICLOAK_PROXY_CUSTOM_ACCOUNT`、`DICLOAK_PROXY_CUSTOM_PASSWORD` 读取，不写入仓库模板。
-- `test_02_batch_create_proxy.py`：批量创建代理，进入代理管理页点击“批量创建”，先输入单条 `HTTP://192.168.20.33:7897:test:M12345678{批量创建代理}` 并在下方预览表按代理类型、代理主机、代理端口、代理账号、代理密码和代理备注逐项软断言；Windows 平台启用配置中的系统代理 `127.0.0.1:7897` 后点击“检测代理”，等待出口 IP 列检测结束并软断言存在实际出口 IP，随后恢复系统代理；再输入带第 3 行错误的多行数据，软断言出现“第3行格式有误”；最后输入有效多行数据，点击“确定”，按预期成功 3 个、重复 2 个校验结果弹窗，确认后在列表中按新代理 ID、类型、主机和端口校验创建结果，勾选本次创建的 3 条代理，通过列表上方批量操作栏点击“删除”并在二次确认弹窗点击“确定删除”，删除后再次校验 3 条代理均不存在。该用例使用软断言收集问题，业务流程和清理不会因中途断言失败提前中断。
-- `test_03_create_nodemaven_proxy.py`：创建 NodeMaven 动态代理，进入代理管理页点击“创建代理”，选择 `NodeMaven (动态代理)`，填写主机、端口、账号、密码，选择国家/地区“美国”并填写备注；Windows 平台启用配置中的系统代理 `127.0.0.1:7897` 后在创建弹窗点击“检测代理”，等待“连接测试成功/连接失败”，检测成功时软断言弹窗详情包含 `United States(US)`；点击“确定”后按新代理 ID、类型、主机、端口和备注校验列表创建结果，点击该行操作列第一个按钮重新检测，检测成功时软断言出口 IP 列包含 `US-United States`；删除代理前先显式关闭系统代理，再删除该代理并校验删除成功，最后在兜底清理中恢复用例开始前的系统代理快照。该用例的账号和密码优先从本地 `config/test_data.yaml` 的 `test_data.proxy_nodemaven` 或环境变量 `DICLOAK_PROXY_NODEMAVEN_ACCOUNT`、`DICLOAK_PROXY_NODEMAVEN_PASSWORD` 读取。
-- `test_04_batch_create_and_bulk_detect_proxy.py`：批量创建并批量检测代理，进入代理管理页点击“批量创建”，输入 3 条 `HTTP` 代理：`192.168.20.33:7897`、`127.0.0.1:7897` 和 `gate.nodemaven.com:8080`，备注均为“批量检测代理”；NodeMaven 网关账号和密码从本地 `test_data.proxy_nodemaven` 或 `DICLOAK_PROXY_NODEMAVEN_ACCOUNT`、`DICLOAK_PROXY_NODEMAVEN_PASSWORD` 注入，不写入仓库。用例提交批量创建后校验结果弹窗 `成功 3 个、重复 0 个`，在列表中按新代理 ID 校验三条代理创建成功和可见字段正确，勾选这三条代理后点击列表上方“批量检测”，逐行等待检测结束并软断言连接成功，最后批量删除并校验三条代理均不存在。
+- `test_01_create_custom_proxy.py`：创建自定义代理，进入代理管理页前先开启 Windows 系统代理，系统代理主机和端口由 `config.yaml` 顶层 `windows_system_proxy.host/port` 配置，默认 `127.0.0.1:7897`，结束后恢复系统代理；进入代理管理页后创建 HTTP 自定义代理，填写主机、端口、账号、密码，并显式确保“代理类型”为 `HTTP`；在创建弹窗中点击“检测代理”，等待“连接测试成功”或“连接失败”；保存后按新代理序号、主机、端口和代理类型一起校验列表创建成功，点击行内第一个操作按钮重新检测并从“检测中”所在单元格读取结果，最后点击行内最后一个操作按钮删除，并按新代理序号、主机、端口和代理类型一起校验删除成功。若弹窗或列表检测结果为“连接失败”，用例会延迟断言失败，同时继续执行清理逻辑。账号和密码优先从本地 `config/test_data.yaml` 或环境变量 `DICLOAK_PROXY_CUSTOM_ACCOUNT`、`DICLOAK_PROXY_CUSTOM_PASSWORD` 读取，不写入仓库模板。
+- `test_02_batch_create_proxy.py`：批量创建代理，进入代理管理页点击“批量创建”，先输入单条 `HTTP://192.168.20.33:7897:test:M12345678{批量创建代理}` 并在下方预览表按代理类型、代理主机、代理端口、代理账号、代理密码和代理备注逐项软断言；Windows 平台启用配置中的系统代理 `127.0.0.1:7897` 后点击“检测代理”，等待出口 IP 列检测结束并软断言存在实际出口 IP，随后恢复系统代理；再输入带第 3 行错误的多行数据，软断言出现“第3行格式有误”；最后输入有效多行数据，点击“确定”，按预期成功 3 个、重复 2 个校验结果弹窗，确认后在列表中按新代理序号、类型、主机和端口校验创建结果，勾选本次创建的 3 条代理，通过列表上方批量操作栏点击“删除”并在二次确认弹窗点击“确定删除”，删除后再次校验 3 条代理均不存在。该用例使用软断言收集问题，业务流程和清理不会因中途断言失败提前中断。
+- `test_03_create_nodemaven_proxy.py`：创建 NodeMaven 动态代理，进入代理管理页点击“创建代理”，选择 `NodeMaven (动态代理)`，填写主机、端口、账号、密码，选择国家/地区“美国”并填写备注；Windows 平台启用配置中的系统代理 `127.0.0.1:7897` 后在创建弹窗点击“检测代理”，等待“连接测试成功/连接失败”，检测成功时软断言弹窗详情包含 `United States(US)`；点击“确定”后按新代理序号、类型、主机、端口和备注校验列表创建结果，点击该行操作列第一个按钮重新检测，检测成功时软断言出口 IP 列包含 `US-United States`；删除代理前先显式关闭系统代理，再删除该代理并校验删除成功，最后在兜底清理中恢复用例开始前的系统代理快照。该用例的账号和密码优先从本地 `config/test_data.yaml` 的 `test_data.proxy_nodemaven` 或环境变量 `DICLOAK_PROXY_NODEMAVEN_ACCOUNT`、`DICLOAK_PROXY_NODEMAVEN_PASSWORD` 读取。
+- `test_04_batch_create_and_bulk_detect_proxy.py`：批量创建并批量检测代理，进入代理管理页点击“批量创建”，输入 3 条 `HTTP` 代理：`192.168.20.33:7897`、`127.0.0.1:7897` 和 `gate.nodemaven.com:8080`，备注均为“批量检测代理”；NodeMaven 网关账号和密码从本地 `test_data.proxy_nodemaven` 或 `DICLOAK_PROXY_NODEMAVEN_ACCOUNT`、`DICLOAK_PROXY_NODEMAVEN_PASSWORD` 注入，不写入仓库。用例提交批量创建后校验结果弹窗 `成功 3 个、重复 0 个`，在列表中按新代理序号校验三条代理创建成功和可见字段正确，勾选这三条代理后点击列表上方“批量检测”，逐行等待检测结束并软断言连接成功，最后批量删除并校验三条代理均不存在。
 
 代理检测等待说明：创建代理弹窗会先确认真实检测已启动，例如“检测代理”按钮 disabled/loading、弹窗 loading、文案变化或最终结果已出现，再等待“连接测试成功/连接失败”；批量检测和列表行内检测继续基于按钮禁用、出口 IP 列变化和“检测中”状态等待。超时时会输出最后一次按钮状态、loading 状态、出口 IP 文案或当前行文本，便于区分代理连通性问题、APP 未发起检测和列表渲染/保存问题。
 
+代理管理新版列表不直接展示代理 ID，`ProxyPage` 已改为读取表格“序号”作为行 key，用于创建后等待、行内检测、勾选、批量删除和删除后消失校验。代理检测类用例仍依赖配置中的本机系统代理 `windows_system_proxy.host/port` 可用；若 `127.0.0.1:7897` 未监听，检测失败或列表加载失败属于环境前置问题，不归类为元素定位失败。
+
 最近验证记录：
 
-- `python run.py --config config/config.yaml --module test_04_batch_create_and_bulk_detect_proxy.py`：2026-06-25 新增代理管理“批量创建代理后批量检测”用例后通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；日志确认三条代理创建成功，列表上方“批量检测”后三条代理均返回 `连接成功`，随后按新代理 ID 批量删除并校验不存在。
+- `python run.py --config config/config.yaml --module environment_group_management --attach-existing-app`：2026-07-01 环境分组新版无 ID 行 key 兼容后通过，`total=6 passed=6 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module environment_management --attach-existing-app`：2026-07-01 环境管理元素修复后模块通过，`total=25 passed=25 failed=0 errors=0 skipped=0 flaky=1`。
+- `python run.py --config config/config.yaml --module member_management --attach-existing-app`：2026-07-01 成员管理真实 ID 匹配修复后通过，`total=15 passed=15 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --attach-existing-app`：2026-07-01 P0 全量结果 `total=62 passed=57 failed=1 errors=4 skipped=0 flaky=1`；剩余问题已归类为抓包工具管理员权限、`127.0.0.1:7897` 本地代理不可用和 NodeMaven/IP 查询环境波动，未发现新的元素定位失败。
+- `python run.py --config config/config.yaml --module test_10_environment_field_display_limit.py --attach-existing-app`：2026-06-30 兼容全局设置“环境列表字段权限”和环境列表“列表字段”新文案后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_04_create_134_kernel_environment.py --attach-existing-app`：2026-06-30 兼容创建环境抽屉内层“指纹设置”（旧版“更多指纹”）入口后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_02_batch_create_proxy.py --attach-existing-app`：2026-06-30 代理列表新版不直接展示 ID 后改为按表格序号定位、选择和批量删除，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_04_batch_create_and_bulk_detect_proxy.py`：2026-06-25 新增代理管理“批量创建代理后批量检测”用例后通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；日志确认三条代理创建成功，列表上方“批量检测”后三条代理均返回 `连接成功`，随后按新代理序号批量删除并校验不存在。
 - `python run.py --config config/config.yaml --module test_02_batch_create_proxy.py --attach-existing-app`：2026-06-24 优化代理检测等待诊断后复跑通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；批量检测仍按真实按钮禁用/出口 IP 列变化结束，未增加硬等待。
-- `python run.py --config config/config.yaml --module test_03_create_nodemaven_proxy.py --attach-existing-app`：2026-06-24 优化代理检测等待诊断后复跑通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；日志确认创建弹窗检测返回 `连接测试成功` 且详情包含 `国家/地区: United States(US)`，列表行内检测返回 `连接成功` 且出口 IP 列包含 `US-United States`，删除代理前先出现 `System proxy disable before NodeMaven delete`，随后按新代理 ID 删除并校验不存在。
+- `python run.py --config config/config.yaml --module test_03_create_nodemaven_proxy.py --attach-existing-app`：2026-06-24 优化代理检测等待诊断后复跑通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；日志确认创建弹窗检测返回 `连接测试成功` 且详情包含 `国家/地区: United States(US)`，列表行内检测返回 `连接成功` 且出口 IP 列包含 `US-United States`，删除代理前先出现 `System proxy disable before NodeMaven delete`，随后按当时的新代理 ID 删除并校验不存在；新版列表当前已改为按表格序号行 key。
 - `python run.py --config config/config.yaml --module test_13_sort_environment_serial.py --attach-existing-app`：2026-06-08 兼容环境列表表头由“环境序号/环境名称/环境分组”调整为“序号/名称/分组”后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_14_move_remark_column.py --attach-existing-app`：2026-06-08 兼容列表字段设置中“序号/名称/分组”短文案后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_10_environment_field_display_limit.py --attach-existing-app`：2026-06-08 兼容全局设置环境字段显示限制中的环境字段短文案后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
@@ -440,7 +457,7 @@ CDP 9222: none
 - `python run.py --config config/config.yaml --module test_07_filter_member_remark.py --attach-existing-app`：新增“成员备注筛选”用例后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_08_filter_member_login_account_email.py --attach-existing-app`：新增“登录账号、邮箱筛选”用例后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_01_create_external_member.py --attach-existing-app`：修复成员列表入口会因“团队管理”折叠而找不到“成员列表”后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
-- `python run.py --config config/config.yaml --module member_management --attach-existing-app`：成员管理 11 条用例通过，`total=11 passed=11 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module member_management --attach-existing-app`：成员管理早期 11 条用例通过，`total=11 passed=11 failed=0 errors=0 skipped=0 flaky=0`；当前成员管理完整模块已扩展到 15 条，最新结果见 2026-07-01 记录。
 - `python run.py --config config/config.yaml --module test_11_no_edit_permission_member.py --attach-existing-app`：新增"无编辑权限成员环境操作校验"用例通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_12_api_disable_external_member.py --attach-existing-app`：新增“API编辑外部成员-停用成员”用例通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_13_api_disuse_external_member.py --attach-existing-app`：新增“API编辑外部成员-到期停用成员”用例通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，耗时约 23.38s；临时探测确认页面内刷新图标不会稳定触发到期停用强制退出弹窗，页面级刷新可触发。
@@ -451,7 +468,7 @@ CDP 9222: none
 - `git diff --check`：2026-06-09 新增代理管理“创建自定义代理”用例后通过，仅提示 `config/test_data.example.yaml`、`core/config.py` 工作区 LF/CRLF 转换。
 - `python run.py --config config/config.yaml --module test_01_create_custom_proxy.py --attach-existing-app`：2026-06-09 将 ping/F5 预检改为开启配置中的 Windows 系统代理后通过，默认配置为 `127.0.0.1:7897`；日志确认用例开始时开启系统代理、结束时关闭系统代理，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_01_create_custom_proxy.py --attach-existing-app`：2026-06-09 代理管理“创建自定义代理”补充 HTTP 类型选择和类型校验后通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；日志确认创建行 `type=HTTP`、执行行内检测、删除单条新代理，运行后注册表确认 `ProxyEnable=0`。
-- `python -c "from streamlit_runner import discover_cases; cases=discover_cases(); print(len(cases))"`：新增代理管理用例后发现 59 条 P0 用例。
-- `python run.py --config config/config.yaml --attach-existing-app`：全量 P0 运行通过，`total=54 passed=54 failed=0 errors=0 skipped=0 flaky=0`（2026-05-29 两次验证）。
+- `python -c "from streamlit_runner import discover_cases; cases=discover_cases(); print(len(cases))"`：新增代理管理用例后的早期发现数量为 59 条；当前 P0 可发现数量为 62 条。
+- `python run.py --config config/config.yaml --attach-existing-app`：早期全量 P0 运行通过，`total=54 passed=54 failed=0 errors=0 skipped=0 flaky=0`（2026-05-29 两次验证）；当前全量状态见 2026-07-01 记录。
 
 已预留扩展管理等模块目录，后续新增用例时按业务模块放入对应目录。

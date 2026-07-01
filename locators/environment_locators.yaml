@@ -83,11 +83,11 @@ environment_name_input:
 fingerprint_settings_header:
   selector: ".el-drawer .el-collapse-item__header:has-text('指纹设置')"
 
-# “指纹设置”面板里的“更多指纹”展开入口。它是 div 结构，需要点击带 tw-cursor-pointer 的容器。
+# “指纹设置”面板里的内层指纹设置展开入口；旧版文案为“更多指纹”。它是 div 结构，需要点击带 tw-cursor-pointer 的容器。
 more_fingerprint_button:
-  selector: ".el-drawer .tw-cursor-pointer:has-text('更多指纹')"
+  selector: ".el-drawer .tw-cursor-pointer:has-text('指纹设置'), .el-drawer .tw-cursor-pointer:has-text('更多指纹')"
 
-# “更多指纹”展开后的“浏览器内核”下拉框。实际点击时通过 label=浏览器内核 找到同一 form-item 内的 el-select。
+# 内层指纹设置展开后的“浏览器内核”下拉框。实际点击时通过 label=浏览器内核 找到同一 form-item 内的 el-select。
 browser_kernel_select:
   selector: ".el-drawer .el-form-item:has(label:has-text('浏览器内核')) .el-select__wrapper"
 

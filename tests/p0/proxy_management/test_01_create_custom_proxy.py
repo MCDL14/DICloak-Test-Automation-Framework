@@ -44,13 +44,13 @@ class TestCreateCustomProxy(unittest.TestCase):
         password = proxy_data["password"]
         protocol = "HTTP"
         original_system_proxy_settings = None
-        created_proxy_id = ""
+        created_proxy_serial = ""
         failures: list[str] = []
 
         try:
             original_system_proxy_settings = self._enable_system_proxy_if_supported()
             proxy_page.open_list()
-            existing_ids = proxy_page.proxy_ids_by_type_host_port(protocol, host, port)
+            existing_serials = proxy_page.proxy_serials_by_type_host_port(protocol, host, port)
 
             proxy_page.open_create_dialog()
             proxy_page.ensure_create_dialog_proxy_type(protocol)
@@ -59,21 +59,18 @@ class TestCreateCustomProxy(unittest.TestCase):
             dialog_result = proxy_page.detect_proxy_in_create_dialog()
             if dialog_result == ProxyPage.FAILURE_TEXT:
                 failures.append("创建弹窗检测代理结果为连接失败")
+            created_proxy_serial = proxy_page.confirm_create_dialog_and_wait_new_proxy(
+                protocol,
+                host,
+                port,
+                existing_serials,
+            )
 
-            if dialog_result == ProxyPage.FAILURE_TEXT:
-                if proxy_page.try_confirm_create_dialog(timeout_seconds=5):
-                    created_proxy_id = proxy_page.wait_new_proxy_visible_by_type(protocol, host, port, existing_ids)
-                else:
-                    proxy_page.cancel_create_dialog()
-            else:
-                proxy_page.confirm_create_dialog()
-                created_proxy_id = proxy_page.wait_new_proxy_visible_by_type(protocol, host, port, existing_ids)
-
-            if created_proxy_id:
-                created_row = proxy_page.proxy_row_by_id(created_proxy_id)
+            if created_proxy_serial:
+                created_row = proxy_page.proxy_row_by_serial(created_proxy_serial)
                 self.logger.info(
-                    "Proxy custom created id=%s type=%s host=%s port=%s",
-                    created_proxy_id,
+                    "Proxy custom created serial=%s type=%s host=%s port=%s",
+                    created_proxy_serial,
                     created_row.get("type"),
                     host,
                     port,
@@ -83,27 +80,27 @@ class TestCreateCustomProxy(unittest.TestCase):
                     f"created custom proxy type mismatch: expected={protocol}, row={created_row}",
                 )
 
-                self.logger.info("Proxy custom row detect start id=%s", created_proxy_id)
-                row_result = proxy_page.detect_proxy_in_row(created_proxy_id)
-                self.logger.info("Proxy custom row detect result id=%s result=%s", created_proxy_id, row_result)
+                self.logger.info("Proxy custom row detect start serial=%s", created_proxy_serial)
+                row_result = proxy_page.detect_proxy_in_row(created_proxy_serial)
+                self.logger.info("Proxy custom row detect result serial=%s result=%s", created_proxy_serial, row_result)
                 if row_result == ProxyPage.FAILURE_TEXT:
                     failures.append("代理列表行内检测结果为连接失败")
 
-                deleted_proxy_id = created_proxy_id
-                self.logger.info("Proxy custom delete start id=%s", deleted_proxy_id)
-                proxy_page.delete_proxy_by_id(created_proxy_id)
-                created_proxy_id = ""
-                self.logger.info("Proxy custom delete finished id=%s", deleted_proxy_id)
+                deleted_proxy_serial = created_proxy_serial
+                self.logger.info("Proxy custom delete start serial=%s", deleted_proxy_serial)
+                proxy_page.delete_proxy_by_serial(created_proxy_serial)
+                created_proxy_serial = ""
+                self.logger.info("Proxy custom delete finished serial=%s", deleted_proxy_serial)
                 assert_true(
-                    not proxy_page.proxy_exists_by_type_host_port_id(protocol, host, port, deleted_proxy_id),
+                    not proxy_page.proxy_exists_by_type_host_port_serial(protocol, host, port, deleted_proxy_serial),
                     "代理删除后仍存在于列表",
                 )
         finally:
             try:
-                if "existing_ids" in locals():
-                    if created_proxy_id:
-                        self.logger.info("Proxy custom cleanup delete remaining id=%s", created_proxy_id)
-                        proxy_page.delete_proxy_by_id(created_proxy_id)
+                if "existing_serials" in locals():
+                    if created_proxy_serial:
+                        self.logger.info("Proxy custom cleanup delete remaining serial=%s", created_proxy_serial)
+                        proxy_page.delete_proxy_by_serial(created_proxy_serial)
             except Exception as exc:
                 failures.append(f"代理清理失败: {exc}")
             try:

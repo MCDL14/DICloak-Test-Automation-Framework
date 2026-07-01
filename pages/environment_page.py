@@ -12,6 +12,8 @@ from pages.base_page import BasePage
 
 class EnvironmentPage(BasePage):
     locator_file = "environment_locators.yaml"
+    COLUMN_SETTINGS_DIALOG_TITLES = ("列表字段", "列表字段设置")
+    MORE_FINGERPRINT_LABELS = ("指纹设置", "更多指纹")
     _ENVIRONMENT_HEADER_ALIASES = {
         "环境序号": ("环境序号", "序号"),
         "环境名称": ("环境名称", "名称"),
@@ -2366,6 +2368,7 @@ class EnvironmentPage(BasePage):
         return f"""
         () => {{
             const expectedText = {field_text!r};
+            const dialogTitles = {list(self.COLUMN_SETTINGS_DIALOG_TITLES)!r};
             const normalizeField = (value) => {{
                 const text = String(value || "").replace(/\\s+/g, "").trim();
                 const aliases = {{
@@ -2386,7 +2389,7 @@ class EnvironmentPage(BasePage):
                 return rect.width > 0 && rect.height > 0;
             }};
             const dialogs = Array.from(document.querySelectorAll(".el-dialog"))
-                .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
+                .filter((dialog) => visible(dialog) && dialogTitles.some((title) => (dialog.innerText || "").includes(title)));
             for (const dialog of dialogs.reverse()) {{
                 const item = Array.from(dialog.querySelectorAll(".sortable"))
                     .find((el) => visible(el) && normalizeField(el.innerText || el.textContent) === expectedCanonical);
@@ -2400,6 +2403,7 @@ class EnvironmentPage(BasePage):
         return f"""
         () => {{
             const expectedText = {field_text!r};
+            const dialogTitles = {list(self.COLUMN_SETTINGS_DIALOG_TITLES)!r};
             const normalizeField = (value) => {{
                 const text = String(value || "").replace(/\\s+/g, "").trim();
                 const aliases = {{
@@ -2420,7 +2424,7 @@ class EnvironmentPage(BasePage):
                 return rect.width > 0 && rect.height > 0;
             }};
             const dialogs = Array.from(document.querySelectorAll(".el-dialog"))
-                .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
+                .filter((dialog) => visible(dialog) && dialogTitles.some((title) => (dialog.innerText || "").includes(title)));
             for (const dialog of dialogs.reverse()) {{
                 const item = Array.from(dialog.querySelectorAll(".sortable"))
                     .find((el) => visible(el) && normalizeField(el.innerText || el.textContent) === expectedCanonical);
@@ -2946,8 +2950,14 @@ class EnvironmentPage(BasePage):
         () => {{
             const expectedText = {text!r};
             const visible = (el) => {{
+                const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
-                return rect.width > 0 && rect.height > 0;
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.left < window.innerWidth
+                    && rect.right > 0;
             }};
             const drawers = Array.from(document.querySelectorAll(".el-drawer"))
                 .filter(visible);
@@ -2970,9 +2980,16 @@ class EnvironmentPage(BasePage):
             self.cdp.evaluate(
                 """
                 () => {
+                    const moreFingerprintLabels = __MORE_FINGERPRINT_LABELS__;
                     const visible = (el) => {
+                        const style = window.getComputedStyle(el);
                         const rect = el.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0;
+                        return style.display !== "none"
+                            && style.visibility !== "hidden"
+                            && rect.width > 0
+                            && rect.height > 0
+                            && rect.left < window.innerWidth
+                            && rect.right > 0;
                     };
                     const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
                     for (const drawer of drawers.reverse()) {
@@ -2985,34 +3002,48 @@ class EnvironmentPage(BasePage):
                                 return false;
                             }
                             const content = item.querySelector(".el-collapse-item__content");
-                            return Boolean(content && visible(content) && (content.innerText || "").includes("更多指纹"));
+                            const contentText = content ? (content.innerText || content.textContent || "") : "";
+                            return Boolean(
+                                content
+                                && visible(content)
+                                && moreFingerprintLabels.some((label) => contentText.includes(label))
+                            );
                         }
                     }
                     return false;
                 }
-                """
+                """.replace("__MORE_FINGERPRINT_LABELS__", repr(list(self.MORE_FINGERPRINT_LABELS)))
             )
         )
 
     def _more_fingerprint_button_script(self) -> str:
         return """
         () => {
+            const moreFingerprintLabels = __MORE_FINGERPRINT_LABELS__;
             const visible = (el) => {
+                const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
-                return rect.width > 0 && rect.height > 0;
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.left < window.innerWidth
+                    && rect.right > 0;
             };
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
             for (const drawer of drawers.reverse()) {
                 const activeFingerprintItems = Array.from(drawer.querySelectorAll(".el-collapse-item.is-active"))
                     .filter((item) => {
                         const header = item.querySelector(".el-collapse-item__header");
-                        return header && (header.innerText || header.textContent || "").trim() === "指纹设置";
+                        return header && clean(header.innerText || header.textContent) === "指纹设置";
                     });
                 for (const item of activeFingerprintItems) {
-                    const button = Array.from(item.querySelectorAll(".tw-cursor-pointer, div, span"))
+                    const content = item.querySelector(".el-collapse-item__content") || item;
+                    const button = Array.from(content.querySelectorAll(".tw-cursor-pointer"))
                         .find((el) =>
                             visible(el)
-                            && (el.innerText || el.textContent || "").trim() === "更多指纹"
+                            && moreFingerprintLabels.includes(clean(el.innerText || el.textContent))
                             && String(el.className || "").includes("tw-cursor-pointer")
                         );
                     if (button) return button;
@@ -3020,14 +3051,14 @@ class EnvironmentPage(BasePage):
                 const button = Array.from(drawer.querySelectorAll(".tw-cursor-pointer"))
                     .find((el) =>
                         visible(el)
-                        && (el.innerText || el.textContent || "").trim() === "更多指纹"
+                        && moreFingerprintLabels.includes(clean(el.innerText || el.textContent))
                         && String(el.className || "").includes("tw-cursor-pointer")
                     );
                 if (button) return button;
             }
             return null;
         }
-        """
+        """.replace("__MORE_FINGERPRINT_LABELS__", repr(list(self.MORE_FINGERPRINT_LABELS)))
 
     def _browser_kernel_select_visible(self) -> bool:
         return bool(
@@ -4874,14 +4905,15 @@ class EnvironmentPage(BasePage):
             visible = self.cdp.evaluate(
                 """
                 () => {
+                    const dialogTitles = __DIALOG_TITLES__;
                     const visible = (el) => {
                         const rect = el.getBoundingClientRect();
                         return rect.width > 0 && rect.height > 0;
                     };
                     return Array.from(document.querySelectorAll(".el-dialog"))
-                        .some((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
+                        .some((dialog) => visible(dialog) && dialogTitles.some((title) => (dialog.innerText || "").includes(title)));
                 }
-                """
+                """.replace("__DIALOG_TITLES__", repr(list(self.COLUMN_SETTINGS_DIALOG_TITLES)))
             )
             if visible:
                 return
@@ -4919,12 +4951,13 @@ class EnvironmentPage(BasePage):
         value = self.cdp.evaluate(
             """
             () => {
+                const dialogTitles = __DIALOG_TITLES__;
                 const visible = (el) => {
                     const rect = el.getBoundingClientRect();
                     return rect.width > 0 && rect.height > 0;
                 };
                 const dialogs = Array.from(document.querySelectorAll(".el-dialog"))
-                    .filter((dialog) => visible(dialog) && (dialog.innerText || "").includes("列表字段设置"));
+                    .filter((dialog) => visible(dialog) && dialogTitles.some((title) => (dialog.innerText || "").includes(title)));
                 const dialog = dialogs[dialogs.length - 1];
                 if (!dialog) return [];
                 return Array.from(dialog.querySelectorAll(".sortable"))
@@ -4932,7 +4965,7 @@ class EnvironmentPage(BasePage):
                     .map((item) => (item.innerText || item.textContent || "").trim())
                     .filter(Boolean);
             }
-            """
+            """.replace("__DIALOG_TITLES__", repr(list(self.COLUMN_SETTINGS_DIALOG_TITLES)))
         )
         if not isinstance(value, list):
             return []

@@ -32,15 +32,15 @@ class TestBatchCreateAndBulkDetectProxy(unittest.TestCase):
         proxy_page = ProxyPage(cdp_driver=self.cdp, config=self.config)
         proxy_data = self._proxy_data()
         expected_rows = proxy_data["expected_rows"]
-        created_proxy_ids: set[str] = set()
-        existing_ids_by_target: dict[tuple[str, str, str], set[str]] = {}
+        created_proxy_serials: set[str] = set()
+        existing_serials_by_target: dict[tuple[str, str, str], set[str]] = {}
         failures: list[str] = []
 
         try:
             proxy_page.open_list()
             for expected in expected_rows:
                 key = (expected["type"], expected["host"], expected["port"])
-                existing_ids_by_target[key] = proxy_page.proxy_ids_by_type_host_port(*key)
+                existing_serials_by_target[key] = proxy_page.proxy_serials_by_type_host_port(*key)
 
             proxy_page.open_batch_create_page()
             proxy_page.fill_batch_proxy_text(proxy_data["batch_text"])
@@ -62,64 +62,65 @@ class TestBatchCreateAndBulkDetectProxy(unittest.TestCase):
             )
             proxy_page.confirm_batch_result_dialog()
 
-            seen_ids_by_target: dict[tuple[str, str, str], set[str]] = {}
+            seen_serials_by_target: dict[tuple[str, str, str], set[str]] = {}
             for expected in expected_rows:
                 key = (expected["type"], expected["host"], expected["port"])
-                excluded_ids = set(existing_ids_by_target.get(key, set()))
-                excluded_ids.update(seen_ids_by_target.get(key, set()))
-                row_id = proxy_page.wait_new_proxy_visible_by_type(
+                excluded_serials = set(existing_serials_by_target.get(key, set()))
+                excluded_serials.update(seen_serials_by_target.get(key, set()))
+                row_serial = proxy_page.wait_new_proxy_visible_by_type(
                     expected["type"],
                     expected["host"],
                     expected["port"],
-                    excluded_ids,
+                    excluded_serials,
                 )
-                created_proxy_ids.add(row_id)
-                seen_ids_by_target.setdefault(key, set()).add(row_id)
-                row = proxy_page.proxy_row_by_id(row_id)
-                self._soft_check_created_row(failures, row, expected, row_id)
+                created_proxy_serials.add(row_serial)
+                seen_serials_by_target.setdefault(key, set()).add(row_serial)
+                row = proxy_page.proxy_row_by_serial(row_serial)
+                self._soft_check_created_row(failures, row, expected, row_serial)
 
-            before_results = proxy_page.start_bulk_detect_selected_proxies(created_proxy_ids)
-            for proxy_id in sorted(created_proxy_ids):
+            before_results = proxy_page.start_bulk_detect_selected_proxies(created_proxy_serials)
+            for proxy_serial in sorted(created_proxy_serials):
                 try:
-                    result_text = proxy_page.wait_proxy_row_detection_finished(proxy_id, before_results.get(proxy_id, ""))
-                    row_text = proxy_page.row_text_by_id(proxy_id)
-                    self.logger.info("Proxy bulk detect row result id=%s result=%s text=%s", proxy_id, result_text, row_text)
+                    result_text = proxy_page.wait_proxy_row_detection_finished(proxy_serial, before_results.get(proxy_serial, ""))
+                    row_text = proxy_page.row_text_by_serial(proxy_serial)
+                    self.logger.info("Proxy bulk detect row result serial=%s result=%s text=%s", proxy_serial, result_text, row_text)
                     self._soft_check(
                         failures,
                         self._is_success_result(result_text),
-                        f"批量检测代理未连接成功: id={proxy_id}, result={result_text!r}, row_text={row_text!r}",
+                        f"批量检测代理未连接成功: serial={proxy_serial}, result={result_text!r}, row_text={row_text!r}",
                     )
                 except Exception as exc:
-                    failures.append(f"批量检测代理等待失败: id={proxy_id}, error={exc}")
-                    self.logger.warning("Proxy bulk detect wait failed id=%s error=%s", proxy_id, exc)
+                    failures.append(f"批量检测代理等待失败: serial={proxy_serial}, error={exc}")
+                    self.logger.warning("Proxy bulk detect wait failed serial=%s error=%s", proxy_serial, exc)
 
-            self.logger.info("Proxy batch detect cleanup bulk delete ids=%s", sorted(created_proxy_ids))
-            proxy_page.bulk_delete_selected_proxies(created_proxy_ids)
-            for proxy_id in list(created_proxy_ids):
+            self.logger.info("Proxy batch detect cleanup bulk delete serials=%s", sorted(created_proxy_serials))
+            proxy_page.bulk_delete_selected_proxies(created_proxy_serials)
+            for proxy_serial in list(created_proxy_serials):
                 self._soft_check(
                     failures,
-                    not proxy_page.proxy_exists_by_id(proxy_id),
-                    f"批量检测用例删除后代理仍存在: id={proxy_id}",
+                    not proxy_page.proxy_exists_by_serial(proxy_serial),
+                    f"批量检测用例删除后代理仍存在: serial={proxy_serial}",
                 )
-                created_proxy_ids.discard(proxy_id)
+                created_proxy_serials.discard(proxy_serial)
         finally:
             try:
                 proxy_page.return_from_batch_create()
             except Exception:
                 pass
-            for proxy_id in list(created_proxy_ids):
+            for proxy_serial in list(created_proxy_serials):
                 try:
-                    proxy_page.delete_proxy_by_id(proxy_id)
-                    created_proxy_ids.discard(proxy_id)
+                    proxy_page.delete_proxy_by_serial(proxy_serial)
+                    created_proxy_serials.discard(proxy_serial)
                 except Exception as exc:
-                    failures.append(f"批量检测用例清理失败 id={proxy_id}: {exc}")
+                    failures.append(f"批量检测用例清理失败 serial={proxy_serial}: {exc}")
             for expected in expected_rows:
                 key = (expected["type"], expected["host"], expected["port"])
                 try:
                     proxy_page.delete_newest_proxy_by_host_port_excluding(
                         expected["host"],
                         expected["port"],
-                        existing_ids_by_target.get(key, set()),
+                        existing_serials_by_target.get(key, set()),
+                        expected["type"],
                     )
                 except Exception as exc:
                     failures.append(f"批量检测用例兜底清理失败 {expected['host']}:{expected['port']}: {exc}")
@@ -200,12 +201,12 @@ class TestBatchCreateAndBulkDetectProxy(unittest.TestCase):
         failures: list[str],
         row: dict[str, str],
         expected: dict[str, str],
-        row_id: str,
+        row_serial: str,
     ) -> None:
         self._soft_check(
             failures,
             bool(row),
-            f"批量检测代理未在列表中找到: id={row_id}, expected={expected}",
+            f"批量检测代理未在列表中找到: serial={row_serial}, expected={expected}",
         )
         if not row:
             return

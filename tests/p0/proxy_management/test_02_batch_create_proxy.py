@@ -38,9 +38,9 @@ class TestBatchCreateProxy(unittest.TestCase):
         proxy_page = ProxyPage(cdp_driver=self.cdp, config=self.config)
         failures: list[str] = []
         original_system_proxy_settings = None
-        created_proxy_ids: set[str] = set()
-        prerequisite_proxy_ids: set[str] = set()
-        existing_ids_by_target: dict[tuple[str, str], set[str]] = {}
+        created_proxy_serials: set[str] = set()
+        prerequisite_proxy_serials: set[str] = set()
+        existing_serials_by_target: dict[tuple[str, str], set[str]] = {}
 
         single_line = "HTTP://192.168.20.33:7897:test:M12345678{批量创建代理}"
         invalid_batch_text = "\n".join(
@@ -102,16 +102,16 @@ class TestBatchCreateProxy(unittest.TestCase):
         try:
             proxy_page.open_list()
             for target in expected_duplicate_rows:
-                prerequisite_proxy_id = self._ensure_duplicate_prerequisite(proxy_page, target)
-                if prerequisite_proxy_id:
-                    prerequisite_proxy_ids.add(prerequisite_proxy_id)
+                prerequisite_proxy_serial = self._ensure_duplicate_prerequisite(proxy_page, target)
+                if prerequisite_proxy_serial:
+                    prerequisite_proxy_serials.add(prerequisite_proxy_serial)
 
             for target in expected_created_rows:
                 key = (target["host"], target["port"])
-                existing_ids_by_target[key] = proxy_page.proxy_ids_by_host_port(*key)
+                existing_serials_by_target[key] = proxy_page.proxy_serials_by_host_port(*key)
             for target in expected_duplicate_rows:
                 key = (target["host"], target["port"])
-                existing_ids_by_target[key] = proxy_page.proxy_ids_by_host_port(*key)
+                existing_serials_by_target[key] = proxy_page.proxy_serials_by_host_port(*key)
 
             proxy_page.open_batch_create_page()
             proxy_page.fill_batch_proxy_text(single_line)
@@ -156,40 +156,40 @@ class TestBatchCreateProxy(unittest.TestCase):
             )
             proxy_page.confirm_batch_result_dialog()
 
-            seen_ids_by_target: dict[tuple[str, str], set[str]] = {}
+            seen_serials_by_target: dict[tuple[str, str], set[str]] = {}
             for expected in expected_created_rows:
                 key = (expected["host"], expected["port"])
-                excluded_ids = set(existing_ids_by_target.get(key, set()))
-                excluded_ids.update(seen_ids_by_target.get(key, set()))
-                row_id = proxy_page.wait_new_proxy_visible_by_type(
+                excluded_serials = set(existing_serials_by_target.get(key, set()))
+                excluded_serials.update(seen_serials_by_target.get(key, set()))
+                row_serial = proxy_page.wait_new_proxy_visible_by_type(
                     expected["type"],
                     expected["host"],
                     expected["port"],
-                    excluded_ids,
+                    excluded_serials,
                 )
-                created_proxy_ids.add(row_id)
-                seen_ids_by_target.setdefault(key, set()).add(row_id)
-                row = proxy_page.proxy_row_by_id(row_id)
-                self._soft_check_created_row(failures, row, expected, row_id)
+                created_proxy_serials.add(row_serial)
+                seen_serials_by_target.setdefault(key, set()).add(row_serial)
+                row = proxy_page.proxy_row_by_serial(row_serial)
+                self._soft_check_created_row(failures, row, expected, row_serial)
 
             for expected in expected_duplicate_rows:
-                current_ids = proxy_page.proxy_ids_by_type_host_port(expected["type"], expected["host"], expected["port"])
-                before_ids = existing_ids_by_target.get((expected["host"], expected["port"]), set())
+                current_serials = proxy_page.proxy_serials_by_type_host_port(expected["type"], expected["host"], expected["port"])
+                before_serials = existing_serials_by_target.get((expected["host"], expected["port"]), set())
                 self._soft_check(
                     failures,
-                    current_ids == before_ids,
-                    f"批量创建重复代理出现新增记录: expected_no_new={expected}, before={before_ids}, current={current_ids}",
+                    current_serials == before_serials,
+                    f"批量创建重复代理出现新增记录: expected_no_new={expected}, before={before_serials}, current={current_serials}",
                 )
 
-            self.logger.info("Proxy batch cleanup bulk delete ids=%s", sorted(created_proxy_ids))
-            proxy_page.bulk_delete_selected_proxies(created_proxy_ids)
-            for proxy_id in list(created_proxy_ids):
+            self.logger.info("Proxy batch cleanup bulk delete serials=%s", sorted(created_proxy_serials))
+            proxy_page.bulk_delete_selected_proxies(created_proxy_serials)
+            for proxy_serial in list(created_proxy_serials):
                 self._soft_check(
                     failures,
-                    not proxy_page.proxy_exists_by_id(proxy_id),
-                    f"批量删除代理后记录仍存在: id={proxy_id}",
+                    not proxy_page.proxy_exists_by_serial(proxy_serial),
+                    f"批量删除代理后记录仍存在: serial={proxy_serial}",
                 )
-                created_proxy_ids.discard(proxy_id)
+                created_proxy_serials.discard(proxy_serial)
         finally:
             try:
                 if original_system_proxy_settings is not None:
@@ -200,27 +200,28 @@ class TestBatchCreateProxy(unittest.TestCase):
                 proxy_page.return_from_batch_create()
             except Exception:
                 pass
-            for proxy_id in list(created_proxy_ids):
+            for proxy_serial in list(created_proxy_serials):
                 try:
-                    proxy_page.delete_proxy_by_id(proxy_id)
-                    created_proxy_ids.discard(proxy_id)
+                    proxy_page.delete_proxy_by_serial(proxy_serial)
+                    created_proxy_serials.discard(proxy_serial)
                 except Exception as exc:
-                    failures.append(f"批量创建代理清理失败 id={proxy_id}: {exc}")
+                    failures.append(f"批量创建代理清理失败 serial={proxy_serial}: {exc}")
             for target in expected_created_rows:
                 try:
                     proxy_page.delete_newest_proxy_by_host_port_excluding(
                         target["host"],
                         target["port"],
-                        existing_ids_by_target.get((target["host"], target["port"]), set()),
+                        existing_serials_by_target.get((target["host"], target["port"]), set()),
+                        target["type"],
                     )
                 except Exception as exc:
                     failures.append(f"批量创建代理兜底清理失败 {target['host']}:{target['port']}: {exc}")
-            for proxy_id in list(prerequisite_proxy_ids):
+            for proxy_serial in list(prerequisite_proxy_serials):
                 try:
-                    proxy_page.delete_proxy_by_id(proxy_id)
-                    prerequisite_proxy_ids.discard(proxy_id)
+                    proxy_page.delete_proxy_by_serial(proxy_serial)
+                    prerequisite_proxy_serials.discard(proxy_serial)
                 except Exception as exc:
-                    failures.append(f"批量创建代理前置重复数据清理失败 id={proxy_id}: {exc}")
+                    failures.append(f"批量创建代理前置重复数据清理失败 serial={proxy_serial}: {exc}")
 
         assert_true(not failures, "; ".join(failures))
 
@@ -249,12 +250,12 @@ class TestBatchCreateProxy(unittest.TestCase):
         failures: list[str],
         row: dict[str, str],
         expected: dict[str, str],
-        row_id: str,
+        row_serial: str,
     ) -> None:
         self._soft_check(
             failures,
             bool(row),
-            f"批量创建代理未在列表中找到: id={row_id}, expected={expected}",
+            f"批量创建代理未在列表中找到: serial={row_serial}, expected={expected}",
         )
         if not row:
             return
@@ -285,16 +286,16 @@ class TestBatchCreateProxy(unittest.TestCase):
         return any(char.isdigit() for char in clean_value)
 
     def _ensure_duplicate_prerequisite(self, proxy_page: ProxyPage, target: dict[str, str]) -> str:
-        existing_ids = proxy_page.proxy_ids_by_type_host_port(target["type"], target["host"], target["port"])
-        if existing_ids:
+        existing_serials = proxy_page.proxy_serials_by_type_host_port(target["type"], target["host"], target["port"])
+        if existing_serials:
             return ""
         proxy_page.open_create_dialog()
         proxy_page.ensure_create_dialog_proxy_type(target["type"])
         proxy_page.fill_create_dialog(target["host"], target["port"], "", "")
         proxy_page.confirm_create_dialog()
-        proxy_id = proxy_page.wait_new_proxy_visible_by_type(target["type"], target["host"], target["port"], existing_ids)
-        self.logger.info("Proxy batch prerequisite duplicate created id=%s target=%s", proxy_id, target)
-        return proxy_id
+        proxy_serial = proxy_page.wait_new_proxy_visible_by_type(target["type"], target["host"], target["port"], existing_serials)
+        self.logger.info("Proxy batch prerequisite duplicate created serial=%s target=%s", proxy_serial, target)
+        return proxy_serial
 
     def _enable_system_proxy_if_supported(self) -> dict[str, tuple[bool, object, int | None]] | None:
         if not system_proxy_supported():

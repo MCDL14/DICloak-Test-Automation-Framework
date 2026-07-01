@@ -946,7 +946,7 @@ class EnvironmentGroupPage(BasePage):
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             }};
-            const clean = (value) => String(value || "").trim();
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             const parseNameAndId = (value) => {{
                 const normalized = clean(value).replace(/\\s+/g, " ");
                 const match = normalized.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
@@ -955,15 +955,21 @@ class EnvironmentGroupPage(BasePage):
                     id: match ? match[2] : "",
                 }};
             }};
+            const rowKey = (cells, rowIndex) => {{
+                const parsed = parseNameAndId(cells[0] || "");
+                if (parsed.id) return parsed.id;
+                const createdAt = clean(cells[4] || "");
+                return createdAt ? "created:" + createdAt : "row:" + rowIndex;
+            }};
             return Array.from(document.querySelectorAll({self.locator("table_row")!r}))
                 .filter(visible)
-                .map((row) => {{
+                .map((row, rowIndex) => {{
                     const cells = Array.from(row.querySelectorAll(__TABLE_CELL_SELECTOR__))
                         .filter(visible)
                         .map((cell) => clean(cell.innerText || cell.textContent));
                     const text = clean(row.innerText || row.textContent);
                     const parsed = parseNameAndId(cells[0] || String(text.split("\\n")[0] || "").trim());
-                    const id = parsed.id;
+                    const id = rowKey(cells, rowIndex);
                     const name = parsed.name;
                     const remark = cells[1] || "";
                     return {{ id, name, remark, text }};
@@ -985,20 +991,27 @@ class EnvironmentGroupPage(BasePage):
             }};
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             const parseNameAndId = (value) => {{
-                const match = clean(value).match(/^(.*?)\\s*ID:\\s*(\\d+)/);
+                const normalized = clean(value);
+                const match = normalized.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
                 return {{
-                    name: match ? clean(match[1]) : "",
+                    name: match ? clean(match[1]) : normalized,
                     id: match ? match[2] : "",
                 }};
             }};
+            const rowKey = (cells, rowIndex) => {{
+                const parsed = parseNameAndId(cells[0]?.innerText || cells[0]?.textContent || "");
+                if (parsed.id) return parsed.id;
+                const createdAt = clean(cells[4]?.innerText || cells[4]?.textContent || "");
+                return createdAt ? "created:" + createdAt : "row:" + rowIndex;
+            }};
             return Array.from(document.querySelectorAll({self.locator("table_row")!r}))
                 .filter(visible)
-                .map((row) => {{
+                .map((row, rowIndex) => {{
                     const cells = Array.from(row.querySelectorAll(__TABLE_CELL_SELECTOR__)).filter(visible);
                     const operationCell = cells.at(-1) || row;
                     const parsed = parseNameAndId(cells[0]?.innerText || cells[0]?.textContent || "");
                     return {{
-                        id: parsed.id,
+                        id: rowKey(cells, rowIndex),
                         name: parsed.name,
                         remark: clean(cells[1]?.innerText || cells[1]?.textContent || ""),
                         text: clean(row.innerText || row.textContent),
@@ -1021,12 +1034,26 @@ class EnvironmentGroupPage(BasePage):
                 return rect.width > 0 && rect.height > 0;
             }};
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const parseNameAndId = (value) => {{
+                const normalized = clean(value);
+                const match = normalized.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
+                return {{
+                    name: match ? clean(match[1]) : normalized,
+                    id: match ? match[2] : "",
+                }};
+            }};
+            const rowKey = (cells, rowIndex) => {{
+                const parsed = parseNameAndId(cells[0]?.innerText || cells[0]?.textContent || "");
+                if (parsed.id) return parsed.id;
+                const createdAt = clean(cells[4]?.innerText || cells[4]?.textContent || "");
+                return createdAt ? "created:" + createdAt : "row:" + rowIndex;
+            }};
             const rows = Array.from(document.querySelectorAll({self.locator("table_row")!r})).filter(visible);
-            for (const row of rows) {{
+            for (const [rowIndex, row] of rows.entries()) {{
                 const cells = Array.from(row.querySelectorAll(__TABLE_CELL_SELECTOR__)).filter(visible);
                 const firstCellText = clean(cells[0]?.innerText || cells[0]?.textContent || "");
-                const match = firstCellText.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
-                if (match && match[2] === expectedId) return clean(match[1]);
+                const parsed = parseNameAndId(firstCellText);
+                if (rowKey(cells, rowIndex) === expectedId) return parsed.name;
             }}
             return "";
         }}
@@ -1041,12 +1068,24 @@ class EnvironmentGroupPage(BasePage):
                 return rect.width > 0 && rect.height > 0;
             }};
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const parseNameAndId = (value) => {{
+                const normalized = clean(value);
+                const match = normalized.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
+                return {{
+                    name: match ? clean(match[1]) : normalized,
+                    id: match ? match[2] : "",
+                }};
+            }};
+            const rowKey = (cells, rowIndex) => {{
+                const parsed = parseNameAndId(cells[0]?.innerText || cells[0]?.textContent || "");
+                if (parsed.id) return parsed.id;
+                const createdAt = clean(cells[4]?.innerText || cells[4]?.textContent || "");
+                return createdAt ? "created:" + createdAt : "row:" + rowIndex;
+            }};
             const rows = Array.from(document.querySelectorAll({self.locator("table_row")!r})).filter(visible);
-            for (const row of rows) {{
+            for (const [rowIndex, row] of rows.entries()) {{
                 const cells = Array.from(row.querySelectorAll(__TABLE_CELL_SELECTOR__)).filter(visible);
-                const firstCellText = clean(cells[0]?.innerText || cells[0]?.textContent || "");
-                const match = firstCellText.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
-                if (match && match[2] === expectedId) return clean(cells[1]?.innerText || cells[1]?.textContent || "");
+                if (rowKey(cells, rowIndex) === expectedId) return clean(cells[1]?.innerText || cells[1]?.textContent || "");
             }}
             return "";
         }}
@@ -1065,12 +1104,24 @@ class EnvironmentGroupPage(BasePage):
                     && rect.height > 0;
             }};
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const parseNameAndId = (value) => {{
+                const normalized = clean(value);
+                const match = normalized.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
+                return {{
+                    name: match ? clean(match[1]) : normalized,
+                    id: match ? match[2] : "",
+                }};
+            }};
+            const rowKey = (cells, rowIndex) => {{
+                const parsed = parseNameAndId(cells[0]?.innerText || cells[0]?.textContent || "");
+                if (parsed.id) return parsed.id;
+                const createdAt = clean(cells[4]?.innerText || cells[4]?.textContent || "");
+                return createdAt ? "created:" + createdAt : "row:" + rowIndex;
+            }};
             const rows = Array.from(document.querySelectorAll({self.locator("table_row")!r})).filter(visible);
-            for (const row of rows) {{
+            for (const [rowIndex, row] of rows.entries()) {{
                 const cells = Array.from(row.querySelectorAll(__TABLE_CELL_SELECTOR__)).filter(visible);
-                const firstCellText = clean(cells[0]?.innerText || cells[0]?.textContent || "");
-                const match = firstCellText.match(/\\sID:\\s*(\\d+)/);
-                if (!match || match[1] !== expectedId) continue;
+                if (rowKey(cells, rowIndex) !== expectedId) continue;
                 const operationCell = cells.at(-1) || row;
                 const editIcon = Array.from(operationCell.querySelectorAll(__EDIT_ICON_SELECTOR__)).find(visible);
                 if (editIcon) return editIcon.closest("button, [role='button']") || editIcon;

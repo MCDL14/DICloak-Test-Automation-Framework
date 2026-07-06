@@ -171,10 +171,10 @@ Stop-Process -Id <OwningProcess> -Force
 远程节点模式还提供远端代码管理：
 
 - **检查远端代码**：比较远端当前 `.remote_manifest.json` 和本地当前工作区快照，判断是否会跑旧代码。
-- **同步当前代码**：通过 SFTP 把本地当前工作区发布到远端新快照目录，不依赖远端安装 Git。
+- **同步当前代码**：通过 SFTP 把本地当前工作区发布到远端新快照目录，包含本地 `config/` 和 `test_data/`，不依赖远端安装 Git。
 - **远程执行前同步当前代码**：执行用例前先同步，默认关闭，避免误同步。
 
-同步会保留远端已有 `config/*.yaml` 运行配置和 `.venv`，并排除本地真实配置、远程连接缓存、日志、截图、报告和 `remote_artifacts/`。默认发布目录为 `<project_dir>_releases`，真实规则可通过本机 `config/remote_sync.yaml` 覆盖；示例见 `config/remote_sync.example.yaml`。
+同步会带上本地 `config/` 和 `test_data/`，让远端使用当前工作区的运行配置和测试数据；仅在本地快照缺少某个 `config/*.yaml` 时才保留远端旧配置。同步仍会排除远程连接配置、连接缓存、日志、截图、报告和 `remote_artifacts/`，并保留远端 `.venv`。默认发布目录为 `<project_dir>_releases`，真实规则可通过本机 `config/remote_sync.yaml` 覆盖；示例见 `config/remote_sync.example.yaml`。
 
 远程节点模式还提供“检查远程节点”按钮。该按钮只做只读健康检查，不启动 APP、不执行用例。检查项包括：
 

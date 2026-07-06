@@ -23,6 +23,7 @@ import re
 import sys
 import threading
 import time
+import hashlib
 from collections import defaultdict
 import inspect
 from pathlib import Path
@@ -76,6 +77,11 @@ _UNITTEST_ERROR_BLOCK_RE = re.compile(
 
 _REMOTE_RUN_TYPE_OPTIONS = ("远程预检", "执行用例")
 
+
+def _stable_widget_key(prefix: str, identity: str) -> str:
+    digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{digest}"
+
 # ═══════════════════════════════════════════════════════════════════
 # 页面配置
 # ═══════════════════════════════════════════════════════════════════
@@ -106,7 +112,11 @@ module_names = sorted(by_module.keys())
 
 
 def _case_key(case_id: str) -> str:
-    return f"sel_{case_id}"
+    return _stable_widget_key("case_selected", case_id)
+
+
+def _module_action_key(action: str, module_name: str) -> str:
+    return _stable_widget_key(f"module_{action}", module_name)
 
 
 def _set_case_selected(case_list: list[dict], selected: bool) -> None:
@@ -425,13 +435,19 @@ with st.sidebar:
 
     col_a, col_b = st.columns(2)
     with col_a:
-        if st.button("✅ 全选", use_container_width=True):
-            _set_all_cases_selected(True)
-            st.rerun()
+        st.button(
+            "✅ 全选",
+            use_container_width=True,
+            on_click=_set_all_cases_selected,
+            args=(True,),
+        )
     with col_b:
-        if st.button("⬜ 取消全选", use_container_width=True):
-            _set_all_cases_selected(False)
-            st.rerun()
+        st.button(
+            "⬜ 取消全选",
+            use_container_width=True,
+            on_click=_set_all_cases_selected,
+            args=(False,),
+        )
 
     st.divider()
     st.header("运行位置")
@@ -714,13 +730,21 @@ else:
         with col_count:
             st.markdown(f"已选 {mod_selected_count}/{len(all_mod_cases)}")
         with col_select:
-            if st.button("选中模块", key=f"select_mod_{mod}", use_container_width=True):
-                _set_case_selected(all_mod_cases, True)
-                st.rerun()
+            st.button(
+                "选中模块",
+                key=_module_action_key("select", mod),
+                use_container_width=True,
+                on_click=_set_case_selected,
+                args=(all_mod_cases, True),
+            )
         with col_clear:
-            if st.button("取消模块", key=f"clear_mod_{mod}", use_container_width=True):
-                _set_case_selected(all_mod_cases, False)
-                st.rerun()
+            st.button(
+                "取消模块",
+                key=_module_action_key("clear", mod),
+                use_container_width=True,
+                on_click=_set_case_selected,
+                args=(all_mod_cases, False),
+            )
 
         with st.expander(
             f"查看用例（{len(mod_cases)} 条）",

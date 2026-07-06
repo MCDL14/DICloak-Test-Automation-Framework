@@ -201,8 +201,8 @@ python run.py --config <remote-config> --case <test_id_1> --case <test_id_2>
 远端代码同步：
 
 - “检查远端代码”会比较远端当前 `.remote_manifest.json` 和本地当前工作区快照，避免误跑旧代码。
-- “同步当前代码”会通过 SFTP 发布本地当前工作区到远端新快照目录，不依赖远端安装 Git。
-- 同步会排除本地真实配置、远程连接缓存和运行产物，保留远端已有的 `config/*.yaml` 运行配置和 `.venv`。
+- “同步当前代码”会通过 SFTP 发布本地当前工作区到远端新快照目录，包含本地 `config/` 和 `test_data/`，不依赖远端安装 Git。
+- 同步会让远端使用当前本地运行配置和测试数据；仅在本地快照缺少某个 `config/*.yaml` 时才保留远端旧配置。远程连接配置、连接缓存和运行产物仍会被排除，远端 `.venv` 会保留。
 - 如果远端 `project_dir` 是真实目录，首次同步会先把它改名为 `.backup_<release>`，再创建指向新快照的软链接；旧目录保留可回退。
 - 默认发布目录为 `<project_dir>_releases`，可在 `config/remote_hosts.yaml` 中通过 `sync_release_root` 覆盖。
 - `config/remote_sync.example.yaml` 描述同步包含/排除规则；真实 `config/remote_sync.yaml` 已加入 `.gitignore`，仅在需要本机覆盖规则时创建。
@@ -210,7 +210,7 @@ python run.py --config <remote-config> --case <test_id_1> --case <test_id_2>
 当前限制：
 
 - 远程模式选择“执行用例”时，会按执行页下方已勾选的 test id 执行；显示模块和搜索显示只影响列表可见性，不改变已勾选状态。
-- 远端虚拟环境、依赖、APP 图形会话和运行配置文件仍需提前准备好；同步代码不会安装依赖或生成真实配置。
+- 远端虚拟环境、依赖和 APP 图形会话仍需提前准备好；同步代码不会安装依赖。
 - 远程日志进入 UI 前会做基础脱敏，隐藏 `apiSecret`、`BOOT_TOKEN`、`USER_PASSWD`、`password`、`token` 等字段。
 
 远程节点能力矩阵会在“高级信息”中展示当前平台边界：

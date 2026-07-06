@@ -43,7 +43,7 @@ class _FakeClient:
 
 
 class RemoteSyncSafetyTests(unittest.TestCase):
-    def test_custom_rules_cannot_include_protected_runtime_files(self) -> None:
+    def test_custom_rules_sync_runtime_config_but_keep_remote_connection_files_protected(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             config_dir = root / "config"
@@ -62,8 +62,8 @@ class RemoteSyncSafetyTests(unittest.TestCase):
             synced_paths = {rel for rel, _ in files}
 
         self.assertIn("run.py", synced_paths)
-        self.assertNotIn("config/config.yaml", synced_paths)
-        self.assertNotIn("config/test_data.yaml", synced_paths)
+        self.assertIn("config/config.yaml", synced_paths)
+        self.assertIn("config/test_data.yaml", synced_paths)
         self.assertNotIn("config/remote_hosts.yaml", synced_paths)
         self.assertNotIn("config/remote_connection_cache.yaml", synced_paths)
         self.assertNotIn("config/remote_sync.yaml", synced_paths)

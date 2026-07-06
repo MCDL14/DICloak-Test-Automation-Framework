@@ -35,14 +35,8 @@ DEFAULT_INCLUDE_PATTERNS = (
     "pages/**",
     "tests/**",
     "ui/**",
-    "config/*.example.yaml",
-    "test_data/README.md",
-    "test_data/import/**",
-    "test_data/export/**",
-    "test_data/bookmarks/**",
-    "test_data/members/**",
-    "test_data/extensions/**",
-    "test_data/Tools/**",
+    "config/**",
+    "test_data/**",
 )
 
 PROTECTED_EXCLUDE_PATTERNS = (
@@ -50,8 +44,6 @@ PROTECTED_EXCLUDE_PATTERNS = (
     "reports/**",
     "screenshots/**",
     "remote_artifacts/**",
-    "config/config.yaml",
-    "config/test_data.yaml",
     "config/remote_hosts.yaml",
     "config/remote_sync.yaml",
     "config/remote_connection_cache.yaml",
@@ -453,6 +445,9 @@ if [ "$OLD_EXISTS" = "1" ] && [ -d "$OLD_REAL/config" ]; then
     case "$base" in
       *.example.yaml|remote_hosts.yaml|remote_sync.yaml|remote_connection_cache.yaml) continue ;;
     esac
+    if [ -f "$RELEASE_DIR/config/$base" ]; then
+      continue
+    fi
     cp "$cfg" "$RELEASE_DIR/config/"
   done
 fi

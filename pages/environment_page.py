@@ -18,6 +18,7 @@ class EnvironmentPage(BasePage):
         "环境序号": ("环境序号", "序号"),
         "环境名称": ("环境名称", "名称"),
         "环境分组": ("环境分组", "分组"),
+        "环境状态": ("环境状态", "状态"),
         "备注": ("备注",),
         "标签": ("标签",),
         "操作": ("操作",),
@@ -49,6 +50,7 @@ class EnvironmentPage(BasePage):
                     pass
             try:
                 self._wait_for_environment_list(timeout_seconds=5)
+                self._wait_for_table_not_loading(timeout_seconds=10)
                 self.clear_selected_environments()
                 return
             except Exception as exc:
@@ -62,6 +64,7 @@ class EnvironmentPage(BasePage):
         self.fill("environment_name_input", name)
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_table_not_loading()
 
     def create_environment_with_kernel(self, name: str, kernel_label: str) -> None:
         self.dismiss_blocking_overlays()
@@ -72,6 +75,7 @@ class EnvironmentPage(BasePage):
         self._select_create_environment_kernel(kernel_label)
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_table_not_loading()
 
     def create_environment_with_groups(self, name: str, group_names: list[str]) -> tuple[list[str], list[str]]:
         self.dismiss_blocking_overlays()
@@ -82,6 +86,7 @@ class EnvironmentPage(BasePage):
         expected_groups = self._unique_non_empty(initial_groups + self.create_environment_selected_groups() + group_names)
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_table_not_loading()
         return initial_groups, expected_groups
 
     def create_environment_with_exact_groups_from_default_name(self, group_names: list[str]) -> tuple[str, list[str]]:
@@ -104,6 +109,7 @@ class EnvironmentPage(BasePage):
             )
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_table_not_loading()
         return environment_name, final_groups
 
     def create_environment_with_tags(self, name: str, tag_names: list[str]) -> list[str]:
@@ -117,6 +123,7 @@ class EnvironmentPage(BasePage):
         self._wait_select_dropdown_closed()
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_table_not_loading()
         return selected_tags
 
     def batch_create_environments(self, name_prefix: str, count: int) -> None:
@@ -127,6 +134,7 @@ class EnvironmentPage(BasePage):
         self.fill("batch_create_name_prefix_input", name_prefix)
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_table_not_loading()
 
     def batch_create_environments_with_kernel(self, name_prefix: str, count: int, kernel_label: str) -> None:
         self.dismiss_blocking_overlays()
@@ -139,6 +147,7 @@ class EnvironmentPage(BasePage):
         self._select_create_environment_kernel(kernel_label)
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_table_not_loading()
 
     def batch_create_environments_with_groups(
         self,
@@ -156,6 +165,7 @@ class EnvironmentPage(BasePage):
         expected_groups = self._unique_non_empty(initial_groups + self.create_environment_selected_groups() + group_names)
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_table_not_loading()
         return initial_groups, expected_groups
 
     def batch_create_environments_with_tags(
@@ -176,6 +186,7 @@ class EnvironmentPage(BasePage):
         self._wait_select_dropdown_closed()
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_table_not_loading()
         return selected_tags
 
     def search_environment(self, name: str) -> None:
@@ -805,7 +816,7 @@ class EnvironmentPage(BasePage):
         self._wait_for_search_input_visible()
         self._fill_search_input(name)
         self.cdp.click_element_by_script(self._search_button_script())
-        time.sleep(0.5)
+        self._wait_for_table_not_loading()
 
     def open_environment(self, name: str) -> None:
         self.search_environment(name)
@@ -837,10 +848,12 @@ class EnvironmentPage(BasePage):
 
     def click_environment_more(self, name: str) -> None:
         # 行内“打开”右侧的 icon-more 按钮，必须限定在目标环境所在行内点击。
+        self._wait_for_table_not_loading()
         self.cdp.click_element_by_script(self._environment_more_button_script(name))
 
     def click_environment_more_by_serial(self, serial: str) -> None:
         # 环境名称会被编辑；编辑类用例用环境序号精确定位同一行。
+        self._wait_for_table_not_loading()
         self.cdp.click_element_by_script(self._environment_more_button_by_serial_script(serial))
 
     def click_visible_dropdown_item(self, text: str) -> None:
@@ -1248,6 +1261,22 @@ class EnvironmentPage(BasePage):
             time.sleep(0.5)
         raise TimeoutError(f"business headers did not match expected: expected={expected}, actual={last_headers}")
 
+    def wait_business_headers_include(
+        self,
+        expected_headers: list[str],
+        timeout_seconds: int | None = None,
+    ) -> list[str]:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        expected = [self._canonical_environment_header(item) for item in expected_headers if str(item).strip()]
+        deadline = time.time() + timeout_seconds
+        last_headers: list[str] = []
+        while time.time() < deadline:
+            last_headers = self.environment_business_header_texts()
+            if all(header in last_headers for header in expected):
+                return last_headers
+            time.sleep(0.5)
+        raise TimeoutError(f"business headers did not include expected: expected={expected}, actual={last_headers}")
+
     def environment_row_count_in_current_page(self) -> int:
         return len(self._environment_rows())
 
@@ -1412,6 +1441,7 @@ class EnvironmentPage(BasePage):
         return str(row.get("action", "")).strip()
 
     def click_environment_action(self, name: str, action_text: str) -> None:
+        self._wait_for_table_not_loading()
         self.cdp.click_element_by_script(self._environment_action_element_script(name, action_text))
 
     def forbidden_open_environment_dialog_visible(self) -> bool:
@@ -1770,11 +1800,40 @@ class EnvironmentPage(BasePage):
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             }};
+            const clickable = (el) => {{
+                if (!el) return null;
+                return el.closest("button, [role='button'], .more-btn, .el-dropdown, .el-dropdown-link, span, div") || el;
+            }};
+            const findMore = (row) => {{
+                const selectors = [
+                    "button.more-btn",
+                    "button:has(.icon-more)",
+                    ".more-btn",
+                    ".icon-more",
+                    "[class*='icon-more']",
+                    "[class*='more']",
+                    "[aria-label*='更多']",
+                    "[title*='更多']",
+                    ".el-dropdown",
+                    ".el-dropdown-link",
+                ];
+                for (const selector of selectors) {{
+                    for (const el of Array.from(row.querySelectorAll(selector))) {{
+                        const target = clickable(el);
+                        if (visible(target)) return target;
+                    }}
+                }}
+                const textCandidate = Array.from(row.querySelectorAll("button, [role='button'], span, div"))
+                    .find((el) => {{
+                        const text = (el.innerText || el.textContent || "").trim();
+                        return visible(el) && ["更多", "...", "⋮"].includes(text);
+                    }});
+                return clickable(textCandidate);
+            }};
             const rows = Array.from(document.querySelectorAll(".el-table__row, tbody tr"))
                 .filter((row) => visible(row) && (row.innerText || "").includes(expectedName));
             for (const row of rows) {{
-                const button = Array.from(row.querySelectorAll("button.more-btn"))
-                    .find((el) => visible(el) && el.querySelector(".icon-more"));
+                const button = findMore(row);
                 if (button) return button;
             }}
             return null;
@@ -1789,6 +1848,36 @@ class EnvironmentPage(BasePage):
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             }};
+            const clickable = (el) => {{
+                if (!el) return null;
+                return el.closest("button, [role='button'], .more-btn, .el-dropdown, .el-dropdown-link, span, div") || el;
+            }};
+            const findMore = (row) => {{
+                const selectors = [
+                    "button.more-btn",
+                    "button:has(.icon-more)",
+                    ".more-btn",
+                    ".icon-more",
+                    "[class*='icon-more']",
+                    "[class*='more']",
+                    "[aria-label*='更多']",
+                    "[title*='更多']",
+                    ".el-dropdown",
+                    ".el-dropdown-link",
+                ];
+                for (const selector of selectors) {{
+                    for (const el of Array.from(row.querySelectorAll(selector))) {{
+                        const target = clickable(el);
+                        if (visible(target)) return target;
+                    }}
+                }}
+                const textCandidate = Array.from(row.querySelectorAll("button, [role='button'], span, div"))
+                    .find((el) => {{
+                        const text = (el.innerText || el.textContent || "").trim();
+                        return visible(el) && ["更多", "...", "⋮"].includes(text);
+                    }});
+                return clickable(textCandidate);
+            }};
             const rows = Array.from(document.querySelectorAll(".el-table__row, tbody tr"))
                 .filter(visible);
             for (const row of rows) {{
@@ -1796,8 +1885,7 @@ class EnvironmentPage(BasePage):
                     .map((cell) => (cell.innerText || cell.textContent || "").trim())
                     .filter(Boolean);
                 if (cells[0] !== expectedSerial) continue;
-                const button = Array.from(row.querySelectorAll("button.more-btn"))
-                    .find((el) => visible(el) && el.querySelector(".icon-more"));
+                const button = findMore(row);
                 if (button) return button;
             }}
             return null;
@@ -4562,6 +4650,54 @@ class EnvironmentPage(BasePage):
                 pass
             time.sleep(0.5)
         raise TimeoutError("environment list did not appear")
+
+    def _wait_for_table_not_loading(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            try:
+                if not self._environment_table_loading_visible():
+                    return
+            except Exception:
+                return
+            time.sleep(0.3)
+        raise TimeoutError("environment table is still loading")
+
+    def _environment_table_loading_visible(self) -> bool:
+        return bool(
+            self.cdp.evaluate(
+                """
+                () => {
+                    const visible = (el) => {
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== "none"
+                            && style.visibility !== "hidden"
+                            && Number(style.opacity || "1") > 0.01
+                            && rect.width > 0
+                            && rect.height > 0
+                            && rect.right > 0
+                            && rect.bottom > 0
+                            && rect.left < window.innerWidth
+                            && rect.top < window.innerHeight;
+                    };
+                    const loadingSelectors = [
+                        ".el-table .el-loading-mask",
+                        ".el-table .el-loading-spinner",
+                        ".el-loading-mask",
+                        ".el-loading-spinner",
+                    ];
+                    const loadingElements = loadingSelectors
+                        .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+                        .filter(visible);
+                    if (loadingElements.length > 0) return true;
+                    return Array.from(document.querySelectorAll(".el-table, table"))
+                        .filter(visible)
+                        .some((table) => (table.innerText || table.textContent || "").includes("正在加载中"));
+                }
+                """
+            )
+        )
 
     def _environment_list_shell_visible(self) -> bool:
         return bool(

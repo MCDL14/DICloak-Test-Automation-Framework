@@ -115,6 +115,28 @@ class MemberPage(BasePage):
             return {}
         return {str(key): str(item or "").strip() for key, item in value.items()}
 
+    def member_identity_type_tooltip(self, member_name: str, expected_type: str = "") -> str:
+        expected = str(expected_type or "").strip()
+        self.cdp.hover_element_by_script(self._member_identity_cell_script(member_name))
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        last_texts: list[str] = []
+        while time.time() < deadline:
+            value = self.cdp.evaluate(self._visible_member_identity_tooltip_texts_script())
+            last_texts = [str(item or "").strip() for item in value] if isinstance(value, list) else []
+            if expected:
+                for text in last_texts:
+                    if expected in text:
+                        return text
+            else:
+                for text in last_texts:
+                    if "内部成员" in text or "外部成员" in text:
+                        return text
+            time.sleep(0.2)
+        raise TimeoutError(
+            f"member identity type tooltip was not visible: member={member_name}, "
+            f"expected={expected or '内部成员/外部成员'}, actual={last_texts}"
+        )
+
     def filter_by_member_group(self, group_name: str) -> None:
         clean_name = str(group_name or "").strip()
         if not clean_name:
@@ -1886,6 +1908,67 @@ class MemberPage(BasePage):
             }}
             return {{}};
         }}
+        """
+
+    def _member_identity_cell_script(self, member_name: str) -> str:
+        return f"""
+        () => {{
+            const expectedName = {member_name!r};
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const headers = Array.from(document.querySelectorAll({self.locator("table_header")!r}))
+                .filter(visible)
+                .map((header) => clean(header.innerText || header.textContent));
+            const headerKeys = headers.map((header) => header.replace(/\\s+/g, ""));
+            let nameIndex = headerKeys.findIndex((header) => header.includes("成员名称"));
+            if (nameIndex < 0) nameIndex = 1;
+            let identityIndex = headerKeys.findIndex((header) => header.includes("成员身份"));
+            if (identityIndex < 0) identityIndex = 4;
+            const rows = Array.from(document.querySelectorAll({self.locator("table_row")!r})).filter(visible);
+            for (const row of rows) {{
+                const cells = Array.from(row.querySelectorAll({self.locator("table_cell")!r})).filter(visible);
+                const nameCell = cells[nameIndex] || cells[1] || cells[0] || row;
+                const nameText = clean(nameCell.innerText || nameCell.textContent);
+                const match = nameText.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
+                const actualName = match ? clean(match[1]) : nameText;
+                if (actualName !== expectedName) continue;
+                const identityCell = cells[identityIndex];
+                return identityCell?.querySelector(".el-tooltip__trigger") || identityCell || null;
+            }}
+            return null;
+        }}
+        """
+
+    def _visible_member_identity_tooltip_texts_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && Number(style.opacity || "1") > 0.01
+                    && el.getAttribute("aria-hidden") !== "true"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.right > 0
+                    && rect.bottom > 0
+                    && rect.left < window.innerWidth
+                    && rect.top < window.innerHeight;
+            };
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            return Array.from(document.querySelectorAll(".el-popper, .el-popover, .el-tooltip__popper"))
+                .filter(visible)
+                .map((el) => clean(el.innerText || el.textContent))
+                .filter((text) => text.includes("内部成员") || text.includes("外部成员"));
+        }
         """
 
     def _member_list_visible_script(self) -> str:

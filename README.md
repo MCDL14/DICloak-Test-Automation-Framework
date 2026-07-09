@@ -367,7 +367,7 @@ CDP 9222: none
 - `test_07_disable_packet_capture_software.py`：禁用抓包软件，校验抓包进程存在时禁止打开环境，关闭抓包软件后环境可正常打开。
 - `test_08_bookmark_setting_overwrite.py`：书签设置-覆盖，校验上传书签文件覆盖内核现有书签。
 - `test_09_bookmark_setting_append.py`：书签设置-追加，校验上传书签文件追加到内核现有书签，并覆盖清空书签。
-- `test_10_environment_field_display_limit.py`：环境列表字段权限，校验环境列表只展示指定字段并恢复列表字段设置能力。
+- `test_10_environment_field_display_limit.py`：环境列表字段权限，校验环境列表按设置展示 `环境序号`、`环境名称`，并兼容新版固定保留的 `环境状态` 列，最后恢复列表字段设置能力。
 - `test_11_environment_list_pagination_setting.py`：环境列表分页设置，校验固定分页条数后隐藏分页选择器，并可恢复默认分页。
 - `test_12_environment_list_sort_limit.py`：环境列表排序设置，校验全局固定排序后隐藏列表排序按钮，并可恢复手动排序。
 
@@ -375,7 +375,7 @@ CDP 9222: none
 
 - `python run.py --config config/config.yaml --module global_settings --attach-existing-app`：`total=12 passed=12 failed=0 errors=0 skipped=0 flaky=0`。
 
-全局设置模块已兼容新版文案和元素入口：`禁止打开浏览器开发者工具` 支持新旧长短文案，网站限制快捷项支持 `Chrome 应用商店` / `谷歌应用商店`，环境列表字段权限支持 `环境列表字段权限` / `环境字段显示限制` 和 `列表字段` / `列表字段设置` 弹窗标题。`test_07_disable_packet_capture_software.py` 仍依赖 Windows 抓包工具能以当前权限启动；若工具本身需要管理员权限，需以管理员身份运行自动化进程或调整该用例的环境前置策略。
+全局设置模块已兼容新版文案和元素入口：`禁止打开浏览器开发者工具` 支持新旧长短文案，网站限制快捷项支持 `Chrome 应用商店` / `谷歌应用商店`，环境列表字段权限支持 `环境列表字段权限` / `环境字段显示限制` 和 `列表字段` / `列表字段设置` 弹窗标题，并兼容新版环境列表强制展示的 `环境状态` 列。`test_07_disable_packet_capture_software.py` 仍依赖 Windows 抓包工具能以当前权限启动；若工具本身需要管理员权限，需以管理员身份运行自动化进程或调整该用例的环境前置策略。
 
 当前已开始编写并验证环境分组管理模块 6 条 P0 用例，文件位于 `tests/p0/environment_group_management/`：
 
@@ -392,9 +392,9 @@ CDP 9222: none
 
 当前已开始编写并验证成员管理模块 15 条 P0 用例，文件位于 `tests/p0/member_management/`：
 
-- `test_01_create_external_member.py`：创建外部成员，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段和编辑弹窗邮箱后删除并校验删除成功。
+- `test_01_create_external_member.py`：创建外部成员，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段、悬浮 `成员身份` 后展示的 `外部成员` tooltip 和编辑弹窗邮箱后删除并校验删除成功。
 - `test_02_edit_external_member_name.py`：编辑外部成员名称，将 `外部成员1` 修改为 `自动化-编辑外部成员名称` 后校验列表，再还原并校验。
-- `test_03_create_internal_member.py`：创建内部成员，填写登录账号和登录密码，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段和编辑弹窗账号后删除并校验删除成功。
+- `test_03_create_internal_member.py`：创建内部成员，填写登录账号和登录密码，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段、悬浮 `成员身份` 后展示的 `内部成员` tooltip 和编辑弹窗账号后删除并校验删除成功。
 - `test_04_edit_internal_member_name.py`：编辑内部成员名称，将 `内部成员003` 修改为 `自动化-编辑内部成员名称` 后校验列表，再选择上级经理 `外部成员1` 并还原名称。
 - `test_05_filter_member_group.py`：成员分组筛选，先创建临时 `运营组` 外部成员保证筛选结果非空，依次筛选 `运营组`、清空筛选、筛选 `管理组`、清空筛选，并校验列表“所属成员分组”列均匹配筛选值，最后删除临时成员。
 - `test_06_filter_member_name.py`：成员名称/ID 筛选，输入 `自动化成员` 并搜索，校验列表成员名称均包含该关键字；清空后输入 `1972494001272483841` 并搜索，校验列表成员 ID 均匹配该 ID。
@@ -412,7 +412,7 @@ CDP 9222: none
 
 四条成员 open API 用例在异常路径增加了 `api_case_recovery.py` 兜底恢复：用例出现问题后会 best-effort 调用接口恢复自动化账号 `status=ENABLED`、`disuse_enable=false`，再尝试重新登录配置中的自动化账号、确认自动化团队并回到成员列表。恢复失败不会覆盖原始用例失败原因，但会写入 warning 日志，方便排查现场。
 
-成员管理新版列表不再稳定展示成员 ID 时，`MemberPage` 会通过当前 APP 登录态读取成员列表接口数据，并结合可见行的姓名、备注、创建时间匹配真实成员 ID。批量编辑、导出、筛选和编辑成员等用例继续按成员 ID 做精确行操作，复杂 DOM 查询和接口补全逻辑都封装在 Page Object 内。
+成员管理新版列表不再稳定展示成员 ID 时，`MemberPage` 会通过当前 APP 登录态读取成员列表接口数据，并结合可见行的姓名、备注、创建时间匹配真实成员 ID。新版列表不直接显示 `内部成员/外部成员` 时，创建成员用例会先断言列表 `成员身份` 为 `员工`，再 hover 对应单元格读取 tooltip 中的成员类型。批量编辑、导出、筛选和编辑成员等用例继续按成员 ID 做精确行操作，复杂 DOM 查询和接口补全逻辑都封装在 Page Object 内。
 
 当前已新增代理管理模块 4 条 P0 用例，文件位于 `tests/p0/proxy_management/`：
 
@@ -427,6 +427,12 @@ CDP 9222: none
 
 最近验证记录：
 
+- `python run.py --config config/config.yaml --module test_02_create_default_environment.py --attach-existing-app`：2026-07-09 通过 `127.0.0.1:9222` CDP 确认环境列表真实 DOM 后，补强表格 loading 等待，单跑通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_10_environment_field_display_limit.py --attach-existing-app`：2026-07-09 兼容新版强制展示 `环境状态` 列后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_01_create_external_member.py --attach-existing-app`：2026-07-09 兼容成员类型改为 hover `成员身份` tooltip 展示后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_03_create_internal_member.py --attach-existing-app`：2026-07-09 兼容成员类型改为 hover `成员身份` tooltip 展示后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_11_no_edit_permission_member.py --attach-existing-app`：2026-07-09 兼容退出登录头像点击被 tooltip 拦截后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python -m compileall -q pages tests` 和 `git diff --check`：2026-07-09 静态验证通过，`git diff --check` 仅有当前 Windows 工作区 LF/CRLF 换行提示。
 - `python run.py --config config/config.yaml --module environment_group_management --attach-existing-app`：2026-07-01 环境分组新版无 ID 行 key 兼容后通过，`total=6 passed=6 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module environment_management --attach-existing-app`：2026-07-01 环境管理元素修复后模块通过，`total=25 passed=25 failed=0 errors=0 skipped=0 flaky=1`。
 - `python run.py --config config/config.yaml --module member_management --attach-existing-app`：2026-07-01 成员管理真实 ID 匹配修复后通过，`total=15 passed=15 failed=0 errors=0 skipped=0 flaky=0`。

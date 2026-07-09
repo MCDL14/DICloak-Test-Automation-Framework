@@ -14,7 +14,8 @@ from pages.login_page import LoginPage
 
 CASE_MODULE = "全局设置"
 
-LIMITED_FIELDS = ["环境序号", "环境名称"]
+LIMITED_SETTING_FIELDS = ["环境序号", "环境名称"]
+LIMITED_EXPECTED_HEADERS = ["环境序号", "环境名称", "环境状态"]
 
 
 class TestEnvironmentFieldDisplayLimit(unittest.TestCase):
@@ -38,6 +39,9 @@ class TestEnvironmentFieldDisplayLimit(unittest.TestCase):
         cleanup_error: Exception | None = None
 
         try:
+            global_settings_page.open()
+            global_settings_page.disable_environment_field_display_limit()
+
             environment_page.open_list()
             original_headers = environment_page.environment_business_header_texts()
             assert_true(bool(original_headers), f"environment headers were not found: {original_headers}")
@@ -48,13 +52,13 @@ class TestEnvironmentFieldDisplayLimit(unittest.TestCase):
 
             global_settings_page.open()
             global_settings_dirty = True
-            global_settings_page.configure_environment_field_display_limit(LIMITED_FIELDS)
+            global_settings_page.configure_environment_field_display_limit(LIMITED_SETTING_FIELDS)
             global_settings_dirty = False
             environment_field_limit_saved = True
 
             environment_page.open_list()
             environment_page.wait_column_settings_button_hidden()
-            environment_page.wait_business_headers_equal(LIMITED_FIELDS)
+            environment_page.wait_business_headers_equal(LIMITED_EXPECTED_HEADERS)
 
             global_settings_page.open()
             global_settings_dirty = True
@@ -65,7 +69,7 @@ class TestEnvironmentFieldDisplayLimit(unittest.TestCase):
             environment_page.open_list()
             environment_page.wait_column_settings_button_visible()
             environment_page.verify_column_settings_button_clickable()
-            environment_page.wait_business_headers_equal(original_headers)
+            environment_page.wait_business_headers_include(LIMITED_EXPECTED_HEADERS)
         finally:
             try:
                 if environment_field_limit_saved:

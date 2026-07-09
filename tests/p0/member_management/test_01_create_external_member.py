@@ -59,9 +59,11 @@ class TestCreateExternalMember(unittest.TestCase):
                 f"member environment group did not match in list: {details}",
             )
             assert_true(
-                identity in details.get("成员身份", "") and "外部成员" in details.get("成员身份", ""),
+                identity in details.get("成员身份", ""),
                 f"member identity/type did not match in list: {details}",
             )
+            identity_type = member_page.member_identity_type_tooltip(member_name, "外部成员")
+            assert_true("外部成员" in identity_type, f"member type tooltip did not match: {identity_type}")
             assert_equal(
                 details.get("所属成员分组"),
                 member_group,

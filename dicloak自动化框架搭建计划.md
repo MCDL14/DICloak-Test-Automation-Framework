@@ -215,26 +215,24 @@ log:
 3. `test_data.bookmark.append_file_name`：追加书签场景使用的文件名。
 4. `test_data.bookmark.overwrite_rows`：覆盖书签场景使用的数据表内容，按行维护。
 5. `test_data.bookmark.append_rows`：追加书签场景使用的数据表内容，按行维护。
-6. `test_data.member_export.expected_file_full_path`：导出成员场景中预先准备的正确文件完整路径。
-7. `test_data.member_export.export_dir`：导出成员文件输出路径。
-8. `test_data.member_export.export_file_name`：导出成员固定文件名；如果导出文件名带时间戳，则保持为空。
-9. `test_data.member_export.export_file_regex`：导出成员文件名正则，例如 `^导出成员列表 - \d{12}\.xlsx$`。
-10. `test_data.batch_import.file_dir`：批量导入文件所在路径。
-11. `test_data.batch_import.file_name`：批量导入文件名。
-12. `test_data.batch_export.export_dir`：批量导出文件路径。
-13. `test_data.batch_export.export_file_name`：批量导出文件名。
-14. `test_data.packet_capture.process_name`：抓包工具进程名称。
-15. `test_data.packet_capture.startup_path`：抓包工具启动路径。
-16. `test_data.local_extension.package_name`：本地扩展包名称。
-17. `test_data.local_extension.package_path`：本地扩展包所在目录；如果直接配置 zip 完整路径，也兼容。
+6. `test_data.member_export.export_dir`：导出成员文件输出路径。
+7. `test_data.member_export.export_file_name`：导出成员固定文件名；如果导出文件名带时间戳，则保持为空。
+8. `test_data.member_export.export_file_regex`：导出成员文件名正则，例如 `^导出成员列表 - \d{12}\.xlsx$`。
+9. `test_data.batch_import.file_dir`：批量导入文件所在路径。
+10. `test_data.batch_import.file_name`：批量导入文件名。
+11. `test_data.batch_export.export_dir`：批量导出文件路径。
+12. `test_data.batch_export.export_file_name`：批量导出文件名。
+13. `test_data.packet_capture.process_name`：抓包工具进程名称。
+14. `test_data.packet_capture.startup_path`：抓包工具启动路径。
+15. `test_data.local_extension.package_name`：本地扩展包名称。
+16. `test_data.local_extension.package_path`：本地扩展包所在目录；如果直接配置 zip 完整路径，也兼容。
 
 路径和文件名规则：
 
 1. 导入、导出、书签、本地扩展包等文件都按全路径匹配。
 2. 配置中拆分为路径和文件名的场景，实际使用时用 `路径 + 文件名` 拼接为完整路径。
-3. 配置中已经是完整路径的字段，例如 `expected_file_full_path`，直接按完整路径校验。
-4. 本地扩展包优先按 `package_path + package_name` 拼接完整路径；如果 `package_path` 直接配置为 zip 文件完整路径，也兼容。
-5. 文件存在性检查放入环境预检，运行用例前先暴露路径错误。
+3. 本地扩展包优先按 `package_path + package_name` 拼接完整路径；如果 `package_path` 直接配置为 zip 文件完整路径，也兼容。
+4. 文件存在性检查放入环境预检，运行用例前先暴露路径错误。
 
 ## 六、框架功能设计
 
@@ -646,7 +644,7 @@ resp.status_code == 200 and resp.json().get("code") == 0
 2. 批量导出文件完整路径由 `test_data.batch_export.export_dir` 和 `test_data.batch_export.export_file_name` 拼接得到。
 3. 成员导出文件如果 `test_data.member_export.export_file_name` 不为空，则由 `export_dir + export_file_name` 拼接得到。
 4. 成员导出文件如果 `export_file_name` 为空，则在 `export_dir` 中按 `test_data.member_export.export_file_regex` 匹配，例如 `导出成员列表 - 202604281947.xlsx`。
-5. 成员导出预期文件直接使用 `test_data.member_export.expected_file_full_path`。
+5. 成员导出预期数据来自清空筛选时监听到的 `GET /gin/v1/member` 响应，不维护固定预期 Excel。
 6. 自动化校验时需要同时匹配路径和文件名。
 7. 导出类用例需要等待文件生成完成，再进行断言。
 8. 文件生成完成的判断可结合文件是否存在、文件大小是否大于 0、短时间内文件大小是否稳定。

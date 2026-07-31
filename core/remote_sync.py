@@ -47,6 +47,8 @@ PROTECTED_EXCLUDE_PATTERNS = (
     "config/remote_hosts.yaml",
     "config/remote_sync.yaml",
     "config/remote_connection_cache.yaml",
+    "config/account_groups.yaml",
+    "config/.ui_account_profile_*.yaml",
 )
 
 DEFAULT_EXCLUDE_PATTERNS = (
@@ -443,7 +445,7 @@ if [ "$OLD_EXISTS" = "1" ] && [ -d "$OLD_REAL/config" ]; then
     [ -f "$cfg" ] || continue
     base=$(basename "$cfg")
     case "$base" in
-      *.example.yaml|remote_hosts.yaml|remote_sync.yaml|remote_connection_cache.yaml) continue ;;
+      *.example.yaml|remote_hosts.yaml|remote_sync.yaml|remote_connection_cache.yaml|account_groups.yaml) continue ;;
     esac
     if [ -f "$RELEASE_DIR/config/$base" ]; then
       continue

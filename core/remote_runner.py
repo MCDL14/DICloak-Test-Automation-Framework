@@ -8,7 +8,8 @@ import socket
 import stat
 import threading
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -22,6 +23,10 @@ class RemoteConfigError(Exception):
 
 class RemoteRunError(Exception):
     """Raised when a remote command cannot be started."""
+
+
+class RemoteRunCancelled(RemoteRunError):
+    """Raised after an active SSH command is interrupted by the UI."""
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,8 @@ class RemoteRunRequest:
     value: str = ""
     values: tuple[str, ...] = ()
     attach_existing_app: bool = False
+    account_profile: dict[str, Any] | None = None
+    account_profile_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -130,6 +137,8 @@ def run_remote_tests(
     host: RemoteHost,
     request: RemoteRunRequest,
     log_queue: queue.Queue,
+    *,
+    stop_event: threading.Event | None = None,
 ) -> RemoteRunResult:
     lock = _host_lock(host.name)
     if not lock.acquire(blocking=False):
@@ -137,11 +146,21 @@ def run_remote_tests(
         raise RemoteRunError(f"remote host is busy: {host.name}")
 
     started_at = time.time()
-    command = build_remote_command(host, request)
+    staged_profile_path = ""
     try:
+        effective_request = request
+        if request.account_profile:
+            staged_profile_path = _stage_remote_account_profile(host, request.account_profile)
+            effective_request = replace(
+                request,
+                account_profile=None,
+                account_profile_path=staged_profile_path,
+            )
+            log_queue.put(f"远程账号组运行配置已就绪：{request.account_profile.get('group_name', '-')}")
+        command = build_remote_command(host, effective_request)
         log_queue.put(f"远程节点：{host.name} ({host.username}@{host.host}:{host.port})")
         log_queue.put(f"远程命令：{command}")
-        exit_code = _exec_ssh_command(host, command, log_queue)
+        exit_code = _exec_ssh_command(host, command, log_queue, stop_event=stop_event)
         finished_at = time.time()
         return RemoteRunResult(
             host_name=host.name,
@@ -151,10 +170,17 @@ def run_remote_tests(
             finished_at=finished_at,
         )
     finally:
+        if staged_profile_path:
+            _remove_remote_account_profile(host, staged_profile_path, log_queue)
         lock.release()
 
 
-def run_remote_health_check(host: RemoteHost, log_queue: queue.Queue) -> RemoteHealthResult:
+def run_remote_health_check(
+    host: RemoteHost,
+    log_queue: queue.Queue,
+    *,
+    stop_event: threading.Event | None = None,
+) -> RemoteHealthResult:
     lock = _host_lock(host.name)
     if not lock.acquire(blocking=False):
         log_queue.put(f"远程节点 {host.name} 已有任务正在运行，请等待当前任务结束后再检查。")
@@ -165,7 +191,7 @@ def run_remote_health_check(host: RemoteHost, log_queue: queue.Queue) -> RemoteH
     try:
         log_queue.put(f"远程节点：{host.name} ({host.username}@{host.host}:{host.port})")
         log_queue.put("远程健康检查：开始")
-        exit_code = _exec_ssh_command(host, command, log_queue)
+        exit_code = _exec_ssh_command(host, command, log_queue, stop_event=stop_event)
         finished_at = time.time()
         return RemoteHealthResult(
             host_name=host.name,
@@ -269,6 +295,8 @@ def build_remote_command(host: RemoteHost, request: RemoteRunRequest) -> str:
 
     if request.attach_existing_app and scope != "precheck":
         run_parts.append("--attach-existing-app")
+    if request.account_profile_path and scope != "precheck":
+        run_parts.extend(["--account-profile", _quote(request.account_profile_path)])
     parts.extend(run_parts)
     return " ".join(parts)
 
@@ -390,7 +418,13 @@ def _positive_int(value: Any, *, default: int) -> int:
     return result if result > 0 else default
 
 
-def _exec_ssh_command(host: RemoteHost, command: str, log_queue: queue.Queue) -> int:
+def _exec_ssh_command(
+    host: RemoteHost,
+    command: str,
+    log_queue: queue.Queue,
+    *,
+    stop_event: threading.Event | None = None,
+) -> int:
     client = _connect_ssh_client(host)
     try:
         transport = client.get_transport()
@@ -400,7 +434,7 @@ def _exec_ssh_command(host: RemoteHost, command: str, log_queue: queue.Queue) ->
         channel.set_combine_stderr(True)
         channel.get_pty()
         channel.exec_command(command)
-        _stream_channel(channel, log_queue)
+        _stream_channel(channel, log_queue, stop_event=stop_event)
         return int(channel.recv_exit_status())
     finally:
         client.close()
@@ -439,9 +473,73 @@ def _connect_ssh_client(host: RemoteHost) -> Any:
         raise RemoteRunError(f"remote SSH connection failed on {host.name}: {exc}") from exc
 
 
-def _stream_channel(channel: Any, log_queue: queue.Queue) -> None:
+def _stage_remote_account_profile(host: RemoteHost, profile: dict[str, Any]) -> str:
+    remote_path = _remote_join(
+        host.project_dir,
+        "config",
+        f".ui_account_profile_{uuid.uuid4().hex}.yaml",
+    )
+    payload = yaml.safe_dump(profile, allow_unicode=True, sort_keys=False)
+    client = _connect_ssh_client(host)
+    try:
+        sftp = client.open_sftp()
+        try:
+            try:
+                with sftp.open(remote_path, "w") as remote_file:
+                    remote_file.write(payload)
+                sftp.chmod(remote_path, 0o600)
+            except Exception:
+                try:
+                    sftp.remove(remote_path)
+                except Exception:
+                    pass
+                raise
+        finally:
+            sftp.close()
+    except Exception as exc:
+        raise RemoteRunError(f"remote account profile upload failed on {host.name}: {exc}") from exc
+    finally:
+        client.close()
+    return remote_path
+
+
+def _remove_remote_account_profile(
+    host: RemoteHost,
+    remote_path: str,
+    log_queue: queue.Queue,
+) -> None:
+    try:
+        client = _connect_ssh_client(host)
+        try:
+            sftp = client.open_sftp()
+            try:
+                sftp.remove(remote_path)
+            finally:
+                sftp.close()
+        finally:
+            client.close()
+        log_queue.put("远程账号组临时配置已清理")
+    except Exception as exc:
+        log_queue.put(f"远程账号组临时配置清理失败：{exc}")
+
+
+def _stream_channel(
+    channel: Any,
+    log_queue: queue.Queue,
+    *,
+    stop_event: threading.Event | None = None,
+) -> None:
     buffer = ""
     while True:
+        if stop_event is not None and stop_event.is_set():
+            log_queue.put("收到停止请求，正在中断远程命令...")
+            try:
+                channel.send("\x03")
+            except Exception:
+                pass
+            finally:
+                channel.close()
+            raise RemoteRunCancelled("remote command cancelled by user")
         if channel.recv_ready():
             data = channel.recv(4096)
             text = data.decode("utf-8", errors="replace")

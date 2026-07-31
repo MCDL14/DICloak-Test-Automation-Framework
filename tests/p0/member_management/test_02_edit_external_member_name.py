@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from core.account_groups import case_external_member_name
 from core.assertions import assert_equal, assert_true
 from core.cdp_driver import CDPDriver
 from core.config import load_config
@@ -28,13 +29,14 @@ class TestEditExternalMemberName(unittest.TestCase):
         cls.cdp.close()
 
     def test_edit_external_member_name_and_restore(self) -> None:
-        original_name = "外部成员1"
         edited_name = "自动化-编辑外部成员名称"
         member_page = MemberPage(cdp_driver=self.cdp, config=self.config)
         renamed = False
+        original_name = case_external_member_name(self.config)
 
         try:
             member_page.open_list()
+            member_page.clear_filters()
             if member_page.member_visible(edited_name) and not member_page.member_visible(original_name):
                 member_page.rename_member(edited_name, original_name)
 

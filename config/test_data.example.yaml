@@ -117,14 +117,17 @@ test_data:
 
   # 成员导出校验数据
   member_export:
-    # 预先准备的正确成员文件完整路径
-    expected_file_full_path: "test_data/members/自动化-导出成员数据存放.xlsx"
     # APP 导出成员文件的输出目录
     export_dir: "test_data/export"
     # 固定导出文件名；成员导出文件带时间戳时保持为空
     export_file_name: ""
     # 成员导出文件名正则；示例：导出成员列表 - 202604281947.xlsx
     export_file_regex: "^导出成员列表 - \\d{12}\\.xlsx$"
+
+  # 普通成员 UI 用例使用；与登录 APP 的自动化主账号严格区分
+  case_external_member:
+    name: "外部成员1"
+    email: "oytrhsjwe@tempmail.cn"
 
   # 成员 open API 用例数据；token 建议用 DICLOAK_API_MEMBER_EDIT_TOKEN 环境变量维护
   api_member_edit:

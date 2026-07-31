@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from core.account_groups import account_group_test_suffix, case_external_member_name
 from core.assertions import assert_equal, assert_true
 from core.cdp_driver import CDPDriver
 from core.config import load_config
@@ -30,15 +31,16 @@ class TestCreateExternalMember(unittest.TestCase):
     def test_create_external_member_and_delete(self) -> None:
         member_name = "自动化-创建外部成员"
         member_group = "运营组"
-        email = "wklocxt1k@tempmail.cn"
+        email = f"wklocxt1k+create-{account_group_test_suffix(self.config)}@tempmail.cn"
         environment_group = "未分组"
         identity = "员工"
-        supervisor = "外部成员1"
         member_page = MemberPage(cdp_driver=self.cdp, config=self.config)
         created = False
 
         try:
             member_page.open_list()
+            supervisor = case_external_member_name(self.config)
+            member_page.clear_filters()
             member_page.delete_member_if_exists(member_name)
 
             member_page.create_external_member(

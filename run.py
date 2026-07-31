@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+from core.account_groups import ACCOUNT_PROFILE_ENV
 from core.config import ConfigError, load_config
 from core.logger import setup_logger
 from core.run_metadata import cli_run_start_fields, log_run_end, log_run_start
@@ -13,6 +15,11 @@ from core.runner import AutomationRunner, ExitCode
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Dicloak automation runner")
     parser.add_argument("--config", default="config/config.yaml", help="Path to YAML config file")
+    parser.add_argument(
+        "--account-profile",
+        default="",
+        help="Path to a temporary runtime account profile selected by the UI",
+    )
     parser.add_argument("--level", default=None, help="Case level, for example P0 or P1")
     parser.add_argument("--module", default=None, help="Run cases from one module")
     parser.add_argument(
@@ -37,6 +44,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    run_source = _run_source_from_environment()
+    if args.account_profile:
+        os.environ[ACCOUNT_PROFILE_ENV] = str(Path(args.account_profile).expanduser().resolve())
     try:
         config = load_config(Path(args.config))
     except ConfigError as exc:
@@ -45,7 +55,11 @@ def main(argv: list[str] | None = None) -> int:
 
     logger = setup_logger(config, reset=True)
     runner = AutomationRunner(config=config, logger=logger)
-    log_run_start(logger, **cli_run_start_fields(args))
+    start_fields = cli_run_start_fields(args)
+    start_fields["source"] = run_source
+    if config.get("_account_group_name"):
+        start_fields["account_group"] = str(config["_account_group_name"])
+    log_run_start(logger, **start_fields)
 
     try:
         if args.precheck:
@@ -58,15 +72,20 @@ def main(argv: list[str] | None = None) -> int:
                 case=args.case,
                 attach_existing_app=args.attach_existing_app,
             )
-        log_run_end(logger, source="CLI", exit_code=exit_code, success=exit_code == ExitCode.SUCCESS)
+        log_run_end(logger, source=run_source, exit_code=exit_code, success=exit_code == ExitCode.SUCCESS)
         return exit_code
     except KeyboardInterrupt:
         logger.warning("Run interrupted by user")
-        log_run_end(logger, source="CLI", exit_code=ExitCode.USER_INTERRUPTED, success=False)
+        log_run_end(logger, source=run_source, exit_code=ExitCode.USER_INTERRUPTED, success=False)
         return ExitCode.USER_INTERRUPTED
     except Exception:
-        log_run_end(logger, source="CLI", exit_code=1, success=False, error="unhandled_exception")
+        log_run_end(logger, source=run_source, exit_code=1, success=False, error="unhandled_exception")
         raise
+
+
+def _run_source_from_environment() -> str:
+    run_source = os.environ.get("DICLOAK_RUN_SOURCE", "CLI").strip().upper()
+    return run_source if run_source in {"CLI", "UI_LOCAL"} else "CLI"
 
 
 if __name__ == "__main__":

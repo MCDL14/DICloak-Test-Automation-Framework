@@ -40,3 +40,5 @@ exclude:
   - "config/remote_hosts.yaml"
   - "config/remote_sync.yaml"
   - "config/remote_connection_cache.yaml"
+  - "config/account_groups.yaml"
+  - "config/.ui_account_profile_*.yaml"

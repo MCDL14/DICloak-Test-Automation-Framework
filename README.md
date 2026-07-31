@@ -142,7 +142,28 @@ Mac 当前跳过项：
 streamlit run ui/app.py
 ```
 
-UI 支持用例发现、按模块筛选、批量选择、实时日志、运行结果统计和历史日志查看，并复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路。同一 UI 进程内执行任务串行化；不要同时用 CLI 和 UI 对同一个 APP、CDP 端口、测试账号或业务数据执行自动化。详细说明见 `UI使用文档.md`。
+UI 支持用例发现、按模块筛选、批量选择、实时日志、运行结果统计和历史日志查看，并复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路。用例运行中点击 Streamlit 右上角 `Stop` 会同步取消后台执行：本机任务中断独立 CLI 子进程，远程任务向 SSH PTY 发送 `Ctrl+C`。UI 还支持把 Windows 本机和 macOS 远程执行作为一个同步任务并行启动、统一停止，并分别展示两端结果。不要在 UI 任务之外再用 CLI 抢占同一个 APP、CDP 端口、测试账号或业务数据。详细说明见 `UI使用文档.md`。
+
+### 自动化账号组与同步执行
+
+首次使用前，打开 UI 的“自动化账号组”页面维护固定的两组数据。每组包含：
+
+- 自动化主账号、密码、自动化团队名称和主账号成员 ID；该 ID 只供主账号停用/到期停用接口用例使用。
+- 普通 UI 用例使用的外部成员名称和邮箱，与自动化主账号严格区分。
+- 内部成员账号、密码和内部成员 ID。
+- 该团队的成员 Open API token；停用/到期用例跨团队执行时不能共用另一个团队的 token。
+
+保存位置为 `config/account_groups.yaml`。该文件会记住密码和 token，已加入 `.gitignore`；编辑页面提供“显示密码和 Open API token”开关。仓库只提交不含真实凭据的 `config/account_groups.example.yaml`。
+
+执行页提供三种位置：
+
+- **本机**：选择一组账号后在 Windows 本机执行。
+- **远程节点**：选择一组账号后在远端执行。
+- **本机 + Mac 远程**：Windows 和 macOS 必须选择不同账号组，同时执行相同的已勾选用例。
+
+两个团队还需要准备一致的业务基线数据。当前全量用例会直接使用成员组 `运营组/管理组`、环境组 `未分组/分组二/分组三`、固定成员备注和环境标签等数据；某个团队缺少这些数据时，只会影响依赖该数据的用例，不代表同步执行通道失败。成员创建用例使用按账号组稳定生成的测试邮箱和内部登录账号，避免双端同时创建时发生平台级唯一值冲突。上级经理、外部成员编辑、邮箱筛选和成员导出从账号组的“用例所需外部成员”读取名称/邮箱，不读取自动化主账号及其 ID；成员导出还会监听 `GET /gin/v1/member`，实时获取 `自动化成员1` 和该外部成员的接口记录及真实 ID，再与导出 Excel 的 14 列逐列比较。
+
+执行时只把当前执行端选中的一组写入临时运行配置。Windows 临时文件在子进程结束后删除；macOS 临时文件通过 SFTP 以 `0600` 权限上传，SSH 命令结束后删除。密码和 token 不会拼入命令预览或运行日志。远端代码快照同步强制排除 `account_groups.yaml` 和 `.ui_account_profile_*.yaml`，即使自定义同步规则包含整个 `config/` 也不会上传两组凭据。
 
 ### UI 远程节点执行
 
@@ -202,7 +223,7 @@ python run.py --config <remote-config> --case <test_id_1> --case <test_id_2>
 
 - “检查远端代码”会比较远端当前 `.remote_manifest.json` 和本地当前工作区快照，避免误跑旧代码。
 - “同步当前代码”会通过 SFTP 发布本地当前工作区到远端新快照目录，包含本地 `config/` 和 `test_data/`，不依赖远端安装 Git。
-- 同步会让远端使用当前本地运行配置和测试数据；仅在本地快照缺少某个 `config/*.yaml` 时才保留远端旧配置。远程连接配置、连接缓存和运行产物仍会被排除，远端 `.venv` 会保留。
+- 同步会让远端使用当前本地运行配置和测试数据；仅在本地快照缺少某个 `config/*.yaml` 时才保留远端旧配置。远程连接配置、连接缓存、账号组凭据、运行时账号临时文件和运行产物始终排除，远端 `.venv` 会保留。
 - 如果远端 `project_dir` 是真实目录，首次同步会先把它改名为 `.backup_<release>`，再创建指向新快照的软链接；旧目录保留可回退。
 - 默认发布目录为 `<project_dir>_releases`，可在 `config/remote_hosts.yaml` 中通过 `sync_release_root` 覆盖。
 - `config/remote_sync.example.yaml` 描述同步包含/排除规则；真实 `config/remote_sync.yaml` 已加入 `.gitignore`，仅在需要本机覆盖规则时创建。
@@ -330,7 +351,7 @@ CDP 9222: none
 
 当前已完成并验证环境管理模块 25 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
-- `test_01_kernel_integrity.py`
+- `test_01_kernel_integrity.py`：按独立阶段校验 142 内核首次启动、缓存拷贝、缓存启动路径、134 内核下载和 134 环境启动；中间阶段失败会记录原因并继续执行后续阶段，最后统一汇总断言，避免 134 下载被前置断言阻断。
 - `test_02_create_default_environment.py`
 - `test_03_batch_create_environments.py`
 - `test_04_create_134_kernel_environment.py`
@@ -381,7 +402,7 @@ CDP 9222: none
 
 - `test_01_create_environment_group.py`：创建环境分组，校验创建成功后删除并校验删除成功。
 - `test_02_group_containing_environment.py`：包含环境的分组，创建分组和归属该分组的环境，通过“包含环境”筛选框校验筛选结果并清除筛选，删除分组时勾选删除分组下环境，并校验分组和环境都被删除。
-- `test_03_group_authorized_member.py`：授权成员的分组，创建环境分组后给 `自动化成员1` 追加授权，校验授权成员弹窗和“授权成员”筛选结果，删除分组后校验成员授权环境分组恢复为原始分组。
+- `test_03_group_authorized_member.py`：授权成员的分组，通过 `/gin/v1/member` 实时解析预置成员 `自动化成员1` 在当前团队的真实 ID，并从同一接口记录读取原授权环境分组，再定位该成员并追加授权；追加成功和删除分组后的恢复结果继续通过成员列表校验，前端显示的 `all` 与 `全部分组` 按相同语义处理。
 - `test_04_filter_group_name.py`：环境分组名称筛选，切换筛选模式到“备注”并搜索 `勿动！！！`，校验列表结果均匹配备注后切回“分组名称”并清除筛选。
 - `test_05_edit_group_name.py`：修改环境分组名称，记录首个可编辑分组的名称和 ID，修改为 `自动化-修改环境分组名称` 后按 ID 校验，再还原原名称并按 ID 校验。
 - `test_06_edit_group_remark.py`：修改环境分组备注，记录首个可编辑分组的备注和 ID，修改为 `自动化-修改环境分组备注` 后按 ID 校验，再还原原备注并按 ID 校验。
@@ -395,24 +416,24 @@ CDP 9222: none
 - `test_01_create_external_member.py`：创建外部成员，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段、悬浮 `成员身份` 后展示的 `外部成员` tooltip 和编辑弹窗邮箱后删除并校验删除成功。
 - `test_02_edit_external_member_name.py`：编辑外部成员名称，将 `外部成员1` 修改为 `自动化-编辑外部成员名称` 后校验列表，再还原并校验。
 - `test_03_create_internal_member.py`：创建内部成员，填写登录账号和登录密码，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段、悬浮 `成员身份` 后展示的 `内部成员` tooltip 和编辑弹窗账号后删除并校验删除成功。
-- `test_04_edit_internal_member_name.py`：编辑内部成员名称，将 `内部成员003` 修改为 `自动化-编辑内部成员名称` 后校验列表，再选择上级经理 `外部成员1` 并还原名称。
+- `test_04_edit_internal_member_name.py`：编辑内部成员名称，仅将 `内部成员003` 修改为 `自动化-编辑内部成员名称` 后校验列表，再还原名称；保留现有上级经理和已有环境分组，仅在环境分组为空、APP 阻止提交时补选 `未分组`。
 - `test_05_filter_member_group.py`：成员分组筛选，先创建临时 `运营组` 外部成员保证筛选结果非空，依次筛选 `运营组`、清空筛选、筛选 `管理组`、清空筛选，并校验列表“所属成员分组”列均匹配筛选值，最后删除临时成员。
-- `test_06_filter_member_name.py`：成员名称/ID 筛选，输入 `自动化成员` 并搜索，校验列表成员名称均包含该关键字；清空后输入 `1972494001272483841` 并搜索，校验列表成员 ID 均匹配该 ID。
+- `test_06_filter_member_name.py`：成员名称/ID 筛选，输入 `自动化成员` 并搜索，校验列表成员名称均包含该关键字；再通过 `/gin/v1/member` 实时解析 `自动化成员1` 在当前团队的真实 ID，清空后按该 ID 搜索并校验结果，不读取账号组主账号 ID。
 - `test_07_filter_member_remark.py`：成员备注筛选，通过“更多筛选”抽屉在 `备注` 输入 `必要数据` 并立即筛选，校验列表备注均包含该关键字后清空筛选。
-- `test_08_filter_member_login_account_email.py`：登录账号/邮箱筛选，通过“更多筛选”抽屉分别输入 `mcdl003` 和 `oytrhsjwe@tempmail.cn`，筛选后逐行打开编辑弹窗读取登录账号或成员邮箱并校验包含关键字，最后清空筛选。
+- `test_08_filter_member_login_account_email.py`：登录账号/邮箱筛选，内部登录账号从当前账号组内部成员读取，外部邮箱从当前账号组“用例所需外部成员”读取；筛选后逐行打开编辑弹窗读取对应字段并校验，最后清空筛选。
 - `test_09_batch_edit_member_remark.py`：批量编辑成员备注，按原备注定位预置成员，依次校验覆盖备注、追加备注和还原备注，并在失败清理中兜底还原原备注。
-- `test_10_export_member.py`：导出成员，按成员名称精确筛选获取 `自动化成员1` 和 `外部成员1` 的 ID 后勾选导出所选成员，校验导出文件名规则、xlsx 表头、导出范围仅包含所选成员、目标成员行和预置文件内容一致，并清理临时导出文件。
+- `test_10_export_member.py`：导出成员，目标为 `自动化成员1` 和当前账号组配置的用例外部成员；监听成员接口获取两者真实 ID 后勾选导出所选成员，校验文件名规则并将 Excel 14 列与接口快照逐列比较，最后清理临时文件。
 - `test_11_no_edit_permission_member.py`：无编辑权限成员环境操作校验，使用 MCDL007 登录后校验环境列表所有编辑入口（快捷编辑五列、下拉编辑、批量编辑备注、批量更多三项）均不可见，最后切回自动化账号并兜底还原。
 - `test_12_api_disable_external_member.py`：API 编辑外部成员-停用成员，通过成员 open API 将指定外部成员置为停用，校验接口状态码和 `msg=success`，再在 APP 内切换页面触发强制退出弹窗，点击“退出登录”后校验回到登录页，最后调用接口启用成员、重新登录自动化账号、确认团队并回到成员列表。
 - `test_13_api_disuse_external_member.py`：API 编辑外部成员-到期停用成员，通过成员 open API 设置 `disuse_enable=true`、过期时间和时区，校验接口状态码和 `msg=success`，在 APP 内点击刷新后检查强制退出弹窗；若页面内刷新未触发会话失效，则执行页面级刷新触发检查，点击“退出登录”后校验回到登录页，随后按步骤调用 `status=ENABLED` 重新启用成员，并额外清理到期停用开关，重新登录、确认自动化团队并回到成员列表。
 - `test_14_api_disable_internal_member.py`：API 编辑内部成员-停用成员，退出自动化账号后登录内部成员 `MCDL007`，通过成员 open API 将该内部成员置为停用，校验接口状态码和 `msg=success`；在 APP 内切换环境分组/环境管理触发自动退登并校验回到登录页，再直接点击“立即登录”校验停用账号提示且未登录成功；最后调用接口启用成员、验证内部成员可重新登录，并切回自动化账号、确认团队后回到成员列表。
 - `test_15_api_disuse_internal_member.py`：API 编辑内部成员-到期停用成员，登录内部成员 `MCDL007` 后通过成员 open API 设置 `disuse_enable=true`、过期时间和时区，校验接口状态码和 `msg=success`；点击 APP 刷新按钮后校验回到登录页，若页面内刷新未触发则用页面级刷新兜底；直接点击“立即登录”校验停用账号提示且未登录成功；最后调用 `status=ENABLED` 启用成员、额外清理到期停用开关，验证内部成员可重新登录，并切回自动化账号、确认团队后回到成员列表。
 
-成员 open API 用例统一使用 `MemberEditApiClient` 调用接口；请求地址、目标外部成员 ID、内部成员信息、到期停用参数和状态码重试参数统一维护在 `test_data.api_member_edit`，其中内部成员与重试参数采用 `internal_member`、`disuse`、`status_retry` 小块分组，避免 YAML 过度膨胀。真实 token 不写入仓库，优先通过 `DICLOAK_API_MEMBER_EDIT_TOKEN` 环境变量注入；目标外部成员 ID 可用 `DICLOAK_API_MEMBER_EDIT_MEMBER_ID` 临时覆盖。当 HTTP 状态码不是 200 时会额外重试 3 次，重试间隔默认 1 秒，可通过 `test_data.api_member_edit.status_retry.times` 和 `status_retry.interval_seconds` 调整。
+成员 open API 用例统一使用 `MemberEditApiClient` 调用接口；请求地址、自动化主账号成员 ID、内部成员信息、到期停用参数和状态码重试参数统一维护在 `test_data.api_member_edit`，其中内部成员与重试参数采用 `internal_member`、`disuse`、`status_retry` 小块分组。主账号成员 ID 只允许用于 `test_12`、`test_13` 停用/到期停用接口流程，普通 UI 用例不得读取。真实 token 不写入仓库，优先通过 `DICLOAK_API_MEMBER_EDIT_TOKEN` 环境变量注入；目标主账号 ID 可用 `DICLOAK_API_MEMBER_EDIT_MEMBER_ID` 临时覆盖。
 
 四条成员 open API 用例在异常路径增加了 `api_case_recovery.py` 兜底恢复：用例出现问题后会 best-effort 调用接口恢复自动化账号 `status=ENABLED`、`disuse_enable=false`，再尝试重新登录配置中的自动化账号、确认自动化团队并回到成员列表。恢复失败不会覆盖原始用例失败原因，但会写入 warning 日志，方便排查现场。
 
-成员管理新版列表不再稳定展示成员 ID 时，`MemberPage` 会通过当前 APP 登录态读取成员列表接口数据，并结合可见行的姓名、备注、创建时间匹配真实成员 ID。新版列表不直接显示 `内部成员/外部成员` 时，创建成员用例会先断言列表 `成员身份` 为 `员工`，再 hover 对应单元格读取 tooltip 中的成员类型。批量编辑、导出、筛选和编辑成员等用例继续按成员 ID 做精确行操作，复杂 DOM 查询和接口补全逻辑都封装在 Page Object 内。
+成员管理新版列表不再稳定展示成员 ID 时，`MemberPage` 会通过当前 APP 登录态读取成员列表接口数据，并结合可见行的归一化姓名、当前列表索引和“本账号”标记匹配真实成员 ID；DOM 名称末尾的 `(本账号)` 会在映射时移除，同名成员优先使用本账号身份和列表顺序消歧。新版列表不直接显示 `内部成员/外部成员` 时，创建成员用例会先断言列表 `成员身份` 为 `员工`，再 hover 对应单元格读取 tooltip 中的成员类型。
 
 当前已新增代理管理模块 4 条 P0 用例，文件位于 `tests/p0/proxy_management/`：
 

@@ -92,8 +92,6 @@ class EnvironmentPrechecker:
             Path(bookmark.get("storage_dir", "")).is_dir(),
             str(bookmark.get("storage_dir", "")),
         )
-        expected_member = Path(member_export.get("expected_file_full_path", ""))
-        result.add("Expected member export file exists", expected_member.is_file(), str(expected_member))
         member_export_dir = Path(member_export.get("export_dir", ""))
         result.add("Member export dir exists", member_export_dir.is_dir(), str(member_export_dir))
         try:

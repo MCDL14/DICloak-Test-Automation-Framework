@@ -4,6 +4,7 @@ import os
 import shutil
 import unittest
 from pathlib import Path
+from typing import Callable, TypeVar
 
 from core.assertions import assert_equal, assert_true
 from core.app_config import resolve_app_config
@@ -23,6 +24,7 @@ KERNEL_142_PREFIX = "142"
 KERNEL_134_PREFIX = "134"
 KERNEL_134_DOWNLOAD_MAJOR = "134"
 KERNEL_CACHE_SUBDIR = "browsers"
+StageResult = TypeVar("StageResult")
 
 
 class TestKernelIntegrity(unittest.TestCase):
@@ -50,85 +52,197 @@ class TestKernelIntegrity(unittest.TestCase):
         kernel_cdp_probe_timeout = timeout_seconds(self.config, "kernel_cdp_probe_seconds", 3)
         http_probe_timeout = timeout_seconds(self.config, "http_probe_seconds", 2)
         kernel_download_timeout = timeout_seconds(self.config, "kernel_download_seconds", 300)
+        failures: list[str] = []
 
         settings_page = PersonalSettingsPage(cdp_driver=self.cdp, config=self.config)
         settings_page.open_from_avatar()
         settings_page.open_basic_settings()
         cache_dir = settings_page.environment_cache_dir()
-        browsers_dir = self._clear_cache_subdir(cache_dir, KERNEL_CACHE_SUBDIR)
+        browsers_dir = resolve_kernel_browsers_dir(cache_dir, KERNEL_CACHE_SUBDIR)
+        self._run_validation_stage(
+            failures,
+            "清空内核缓存",
+            lambda: self._clear_cache_subdir(cache_dir, KERNEL_CACHE_SUBDIR),
+        )
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         try:
-            environment_page.open_list()
-            if environment_page.first_environment_name() != environment_name:
-                environment_page.search_environment(fallback_keyword)
-
-            self._open_environment_assert_kernel_and_close(
-                environment_page=environment_page,
-                environment_name=environment_name,
-                expected_kernel_prefix=KERNEL_142_PREFIX,
-                environment_open_timeout=environment_open_timeout,
-                environment_close_timeout=environment_close_timeout,
-                kernel_process_timeout=kernel_process_timeout,
-                kernel_cdp_timeout=kernel_cdp_timeout,
-                kernel_cdp_probe_timeout=kernel_cdp_probe_timeout,
-                http_probe_timeout=http_probe_timeout,
+            self._run_validation_stage(
+                failures,
+                "首次打开并校验 142 内核",
+                lambda: self._open_kernel_environment_from_list(
+                    environment_page=environment_page,
+                    search_keyword=fallback_keyword,
+                    environment_name=environment_name,
+                    expected_kernel_prefix=KERNEL_142_PREFIX,
+                    environment_open_timeout=environment_open_timeout,
+                    environment_close_timeout=environment_close_timeout,
+                    kernel_process_timeout=kernel_process_timeout,
+                    kernel_cdp_timeout=kernel_cdp_timeout,
+                    kernel_cdp_probe_timeout=kernel_cdp_probe_timeout,
+                    http_probe_timeout=http_probe_timeout,
+                ),
             )
 
-            self.cdp.reload()
-            LoginPage(cdp_driver=self.cdp, config=self.config).ensure_logged_in_as_config_account()
-
-            kernel_142_dir = wait_for_kernel_version_dir(
-                browsers_dir,
-                KERNEL_142_PREFIX,
-                timeout_seconds=kernel_download_timeout,
+            self._run_validation_stage(
+                failures,
+                "刷新 APP 登录状态",
+                lambda: self._reload_and_restore_login(),
             )
 
-            environment_page.open_list()
-            environment_page.search_environment(fallback_keyword)
-            self._open_environment_assert_kernel_and_close(
-                environment_page=environment_page,
-                environment_name=environment_name,
-                expected_kernel_prefix=KERNEL_142_PREFIX,
-                environment_open_timeout=environment_open_timeout,
-                environment_close_timeout=environment_close_timeout,
-                kernel_process_timeout=kernel_process_timeout,
-                kernel_cdp_timeout=kernel_cdp_timeout,
-                kernel_cdp_probe_timeout=kernel_cdp_probe_timeout,
-                http_probe_timeout=http_probe_timeout,
-                expected_executable_parent=kernel_142_dir,
+            kernel_142_dir = self._run_validation_stage(
+                failures,
+                "等待 142 内核拷贝到缓存",
+                lambda: wait_for_kernel_version_dir(
+                    browsers_dir,
+                    KERNEL_142_PREFIX,
+                    timeout_seconds=kernel_download_timeout,
+                ),
             )
 
-            settings_page.open_from_avatar()
-            settings_page.open_basic_settings()
-            settings_page.delete_download_record_kernels_except_first()
-            settings_page.download_latest_kernel(KERNEL_134_DOWNLOAD_MAJOR)
-            wait_for_kernel_executable_dir(
-                browsers_dir,
-                KERNEL_134_PREFIX,
-                executable_name=resolve_app_config(self.config).browser_process_name,
-                timeout_seconds=kernel_download_timeout,
+            if kernel_142_dir is not None:
+                self._run_validation_stage(
+                    failures,
+                    "使用缓存目录再次校验 142 内核",
+                    lambda: self._open_kernel_environment_from_list(
+                        environment_page=environment_page,
+                        search_keyword=fallback_keyword,
+                        environment_name=environment_name,
+                        expected_kernel_prefix=KERNEL_142_PREFIX,
+                        environment_open_timeout=environment_open_timeout,
+                        environment_close_timeout=environment_close_timeout,
+                        kernel_process_timeout=kernel_process_timeout,
+                        kernel_cdp_timeout=kernel_cdp_timeout,
+                        kernel_cdp_probe_timeout=kernel_cdp_probe_timeout,
+                        http_probe_timeout=http_probe_timeout,
+                        expected_executable_parent=kernel_142_dir,
+                    ),
+                )
+
+            self._run_validation_stage(
+                failures,
+                "触发 134 内核下载",
+                lambda: self._download_kernel_134(settings_page),
             )
 
-            environment_page.open_list()
-            environment_page.search_environment(kernel_134_search_keyword)
-            environment_134_name = environment_page.first_environment_name()
-            self._open_environment_assert_kernel_and_close(
-                environment_page=environment_page,
-                environment_name=environment_134_name,
-                expected_kernel_prefix=KERNEL_134_PREFIX,
-                environment_open_timeout=environment_open_timeout,
-                environment_close_timeout=environment_close_timeout,
-                kernel_process_timeout=kernel_process_timeout,
-                kernel_cdp_timeout=kernel_cdp_timeout,
-                kernel_cdp_probe_timeout=kernel_cdp_probe_timeout,
-                http_probe_timeout=http_probe_timeout,
+            self._run_validation_stage(
+                failures,
+                "等待 134 内核下载完成",
+                lambda: wait_for_kernel_executable_dir(
+                    browsers_dir,
+                    KERNEL_134_PREFIX,
+                    executable_name=resolve_app_config(self.config).browser_process_name,
+                    timeout_seconds=kernel_download_timeout,
+                ),
+            )
+
+            self._run_validation_stage(
+                failures,
+                "打开并校验 134 内核",
+                lambda: self._open_first_matching_kernel_environment(
+                    environment_page=environment_page,
+                    search_keyword=kernel_134_search_keyword,
+                    expected_kernel_prefix=KERNEL_134_PREFIX,
+                    environment_open_timeout=environment_open_timeout,
+                    environment_close_timeout=environment_close_timeout,
+                    kernel_process_timeout=kernel_process_timeout,
+                    kernel_cdp_timeout=kernel_cdp_timeout,
+                    kernel_cdp_probe_timeout=kernel_cdp_probe_timeout,
+                    http_probe_timeout=http_probe_timeout,
+                ),
             )
         finally:
             try:
                 environment_page.clear_search()
             except Exception:
                 pass
+        assert_true(
+            not failures,
+            "kernel integrity validation failed:\n- " + "\n- ".join(failures),
+        )
+
+    def _run_validation_stage(
+        self,
+        failures: list[str],
+        stage_name: str,
+        action: Callable[[], StageResult],
+    ) -> StageResult | None:
+        try:
+            return action()
+        except Exception as exc:
+            message = f"{stage_name}: {type(exc).__name__}: {exc}"
+            failures.append(message)
+            self.logger.exception("Kernel integrity stage failed: %s", stage_name)
+            return None
+
+    def _reload_and_restore_login(self) -> None:
+        self.cdp.reload()
+        LoginPage(cdp_driver=self.cdp, config=self.config).ensure_logged_in_as_config_account()
+
+    def _download_kernel_134(self, settings_page: PersonalSettingsPage) -> None:
+        settings_page.open_from_avatar()
+        settings_page.open_basic_settings()
+        settings_page.delete_download_record_kernels_except_first()
+        settings_page.download_latest_kernel(KERNEL_134_DOWNLOAD_MAJOR)
+
+    def _open_kernel_environment_from_list(
+        self,
+        *,
+        environment_page: EnvironmentPage,
+        search_keyword: str,
+        environment_name: str,
+        expected_kernel_prefix: str,
+        environment_open_timeout: int,
+        environment_close_timeout: int,
+        kernel_process_timeout: int,
+        kernel_cdp_timeout: int,
+        kernel_cdp_probe_timeout: int,
+        http_probe_timeout: int,
+        expected_executable_parent: Path | None = None,
+    ) -> None:
+        environment_page.open_list()
+        if environment_page.first_environment_name() != environment_name:
+            environment_page.search_environment(search_keyword)
+        self._open_environment_assert_kernel_and_close(
+            environment_page=environment_page,
+            environment_name=environment_name,
+            expected_kernel_prefix=expected_kernel_prefix,
+            environment_open_timeout=environment_open_timeout,
+            environment_close_timeout=environment_close_timeout,
+            kernel_process_timeout=kernel_process_timeout,
+            kernel_cdp_timeout=kernel_cdp_timeout,
+            kernel_cdp_probe_timeout=kernel_cdp_probe_timeout,
+            http_probe_timeout=http_probe_timeout,
+            expected_executable_parent=expected_executable_parent,
+        )
+
+    def _open_first_matching_kernel_environment(
+        self,
+        *,
+        environment_page: EnvironmentPage,
+        search_keyword: str,
+        expected_kernel_prefix: str,
+        environment_open_timeout: int,
+        environment_close_timeout: int,
+        kernel_process_timeout: int,
+        kernel_cdp_timeout: int,
+        kernel_cdp_probe_timeout: int,
+        http_probe_timeout: int,
+    ) -> None:
+        environment_page.open_list()
+        environment_page.search_environment(search_keyword)
+        environment_name = environment_page.first_environment_name()
+        self._open_environment_assert_kernel_and_close(
+            environment_page=environment_page,
+            environment_name=environment_name,
+            expected_kernel_prefix=expected_kernel_prefix,
+            environment_open_timeout=environment_open_timeout,
+            environment_close_timeout=environment_close_timeout,
+            kernel_process_timeout=kernel_process_timeout,
+            kernel_cdp_timeout=kernel_cdp_timeout,
+            kernel_cdp_probe_timeout=kernel_cdp_probe_timeout,
+            http_probe_timeout=http_probe_timeout,
+        )
 
     def _open_environment_assert_kernel_and_close(
         self,

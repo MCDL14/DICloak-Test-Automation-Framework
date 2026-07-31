@@ -25,7 +25,8 @@
     │         ├─ core.result      # AutomationTextRunner + RunResult
     │         └─ core.feishu      # 飞书通知
     └─ ui/pages/02_运行历史.py   # 运行历史页
-         └─ logs/*.log          # 直接读取 log 文件
+    │    └─ logs/*.log          # 直接读取 log 文件
+    └─ ui/pages/03_账号组.py     # 两组自动化账号与团队配置
 """
 
 from __future__ import annotations
@@ -109,4 +110,5 @@ with c2:
     st.page_link("pages/02_运行历史.py", label="📋 运行历史", icon="📂")
     st.caption("浏览历史 log 文件，回顾每次运行统计")
 with c3:
-    st.info("💡 更多页面：在 `ui/pages/` 目录新增 `.py` 文件即可自动注册")
+    st.page_link("pages/03_账号组.py", label="自动化账号组", icon="🔐")
+    st.caption("维护 Windows 与 macOS 并行执行使用的两组账号")

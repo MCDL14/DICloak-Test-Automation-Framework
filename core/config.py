@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from core.account_groups import (
+    ACCOUNT_PROFILE_ENV,
+    AccountGroupError,
+    apply_runtime_account_profile,
+    load_runtime_account_profile,
+)
 
 
 class ConfigError(Exception):
@@ -152,10 +160,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "append_rows": [],
         },
         "member_export": {
-            "expected_file_full_path": "",
             "export_dir": "",
             "export_file_name": "",
             "export_file_regex": r"^导出成员列表 - \d{12}\.xlsx$",
+        },
+        "case_external_member": {
+            "name": "外部成员1",
+            "email": "oytrhsjwe@tempmail.cn",
         },
         "api_member_edit": {
             "base_url": "https://app.dicloak.com/gin/v1/api/member/open/edit?",
@@ -232,6 +243,13 @@ def load_config(path: Path) -> dict[str, Any]:
     validate_required_sections(loaded)
     loaded = _merge_external_test_data(config_path, loaded)
     merged = deep_merge(DEFAULT_CONFIG, loaded)
+    profile_file = str(os.environ.get(ACCOUNT_PROFILE_ENV, "") or "").strip()
+    if profile_file:
+        try:
+            profile = load_runtime_account_profile(profile_file)
+            merged = apply_runtime_account_profile(merged, profile, profile_file=profile_file)
+        except AccountGroupError as exc:
+            raise ConfigError(str(exc)) from exc
     validate_config(merged)
     merged["_config_file"] = str(config_path.resolve())
     test_data_file = str(merged.get("_test_data_file", "")).strip()

@@ -53,6 +53,8 @@ class RemoteSyncSafetyTests(unittest.TestCase):
             (config_dir / "test_data.yaml").write_text("token: real\n", encoding="utf-8")
             (config_dir / "remote_hosts.yaml").write_text("hosts: []\n", encoding="utf-8")
             (config_dir / "remote_connection_cache.yaml").write_text("hosts: {}\n", encoding="utf-8")
+            (config_dir / "account_groups.yaml").write_text("groups: {}\n", encoding="utf-8")
+            (config_dir / ".ui_account_profile_secret.yaml").write_text("password: secret\n", encoding="utf-8")
             (config_dir / "remote_sync.yaml").write_text(
                 yaml.safe_dump({"include": ["config/*.yaml", "run.py"], "exclude": []}),
                 encoding="utf-8",
@@ -66,6 +68,8 @@ class RemoteSyncSafetyTests(unittest.TestCase):
         self.assertIn("config/test_data.yaml", synced_paths)
         self.assertNotIn("config/remote_hosts.yaml", synced_paths)
         self.assertNotIn("config/remote_connection_cache.yaml", synced_paths)
+        self.assertNotIn("config/account_groups.yaml", synced_paths)
+        self.assertNotIn("config/.ui_account_profile_secret.yaml", synced_paths)
         self.assertNotIn("config/remote_sync.yaml", synced_paths)
 
     def test_remote_sync_logs_and_errors_are_sanitized(self) -> None:

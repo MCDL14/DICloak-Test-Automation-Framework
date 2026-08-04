@@ -18,6 +18,7 @@ include:
   - "pages/**"
   - "tests/**"
   - "ui/**"
+  - "web_templates/**"
   - "config/**"
   - "test_data/**"
 
@@ -37,6 +38,11 @@ exclude:
   - "reports/**"
   - "screenshots/**"
   - "remote_artifacts/**"
+  # Local Auth Lab state is never part of the code manifest/archive. When the
+  # UI uses "sync before remote run", a dedicated SFTP channel transfers the
+  # override, persistent credentials, and a consistent SQLite backup.
+  - "test_data/local_auth_lab/**"
+  - "config/local_auth_lab.yaml"
   - "config/remote_hosts.yaml"
   - "config/remote_sync.yaml"
   - "config/remote_connection_cache.yaml"

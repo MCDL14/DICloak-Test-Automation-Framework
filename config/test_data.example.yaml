@@ -191,3 +191,18 @@ test_data:
     package_name: "自动化-本地扩展.zip"
     # 本地扩展包所在目录；如果这里直接配置 zip 完整路径，也会兼容
     package_path: "test_data/extensions"
+
+  # 新环境 Cookie 持续保持用例的本地模拟站账号
+  environment_new_cookie_persistence:
+    username: "MCDL004"
+    password: "请在本地 config/test_data.yaml 中填写"
+
+  # 新环境 Local Storage 持续保持用例的本地模拟站账号
+  environment_new_local_storage_persistence:
+    username: "MCDL005"
+    password: "请在本地 config/test_data.yaml 中填写"
+
+  # 新环境 IndexedDB 持续保持用例的本地模拟站账号
+  environment_new_indexeddb_persistence:
+    username: "MCDL006"
+    password: "请在本地 config/test_data.yaml 中填写"

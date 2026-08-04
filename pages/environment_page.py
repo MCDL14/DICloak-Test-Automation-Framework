@@ -10,10 +10,21 @@ from core.process import main_process_ids, wait_for_new_main_process_ids
 from pages.base_page import BasePage
 
 
+class _CreateEnvironmentSubmitNotStarted(RuntimeError):
+    pass
+
+
 class EnvironmentPage(BasePage):
     locator_file = "environment_locators.yaml"
     COLUMN_SETTINGS_DIALOG_TITLES = ("列表字段", "列表字段设置")
     MORE_FINGERPRINT_LABELS = ("指纹设置", "更多指纹")
+    CREATE_ENVIRONMENT_DEFAULT_GROUP = "未分组"
+    CREATE_ENVIRONMENT_DRAWER_REOPEN_RETRIES = 2
+    CREATE_ENVIRONMENT_DEFAULT_GROUP_SECONDS = 20
+    CREATE_ENVIRONMENT_SUBMIT_STATE_SECONDS = 3
+    CREATE_ENVIRONMENT_SECOND_SUBMIT_DELAY_SECONDS = 2
+    ENVIRONMENT_LIST_LOADING_SECONDS = 20
+    ENVIRONMENT_LIST_LOADING_REFRESH_RETRIES = 2
     _ENVIRONMENT_HEADER_ALIASES = {
         "环境序号": ("环境序号", "序号"),
         "环境名称": ("环境名称", "名称"),
@@ -50,7 +61,7 @@ class EnvironmentPage(BasePage):
                     pass
             try:
                 self._wait_for_environment_list(timeout_seconds=5)
-                self._wait_for_table_not_loading(timeout_seconds=10)
+                self._wait_for_environment_list_not_loading_with_refresh_retry()
                 self.clear_selected_environments()
                 return
             except Exception as exc:
@@ -59,95 +70,128 @@ class EnvironmentPage(BasePage):
         raise TimeoutError(f"environment list did not appear after menu retry: {last_error}")
 
     def create_environment(self, name: str) -> None:
-        self.dismiss_blocking_overlays()
-        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
-        self.fill("environment_name_input", name)
-        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        self._wait_for_overlay_closed()
-        self._wait_for_table_not_loading()
+        def open_drawer() -> None:
+            self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+
+        def populate_drawer() -> None:
+            self.fill("environment_name_input", name)
+
+        self._run_create_environment_drawer_flow(open_drawer, populate_drawer, context=f"create environment: {name}")
 
     def create_environment_with_kernel(self, name: str, kernel_label: str) -> None:
-        self.dismiss_blocking_overlays()
-        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
-        self.fill("environment_name_input", name)
-        self._expand_create_environment_fingerprint_settings()
-        self._expand_more_fingerprint_settings()
-        self._select_create_environment_kernel(kernel_label)
-        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        self._wait_for_overlay_closed()
-        self._wait_for_table_not_loading()
+        def open_drawer() -> None:
+            self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+
+        def populate_drawer() -> None:
+            self.fill("environment_name_input", name)
+            self._expand_create_environment_fingerprint_settings()
+            self._expand_more_fingerprint_settings()
+            self._select_create_environment_kernel(kernel_label)
+
+        self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context=f"create environment with kernel: {name}",
+        )
 
     def create_environment_with_groups(self, name: str, group_names: list[str]) -> tuple[list[str], list[str]]:
-        self.dismiss_blocking_overlays()
-        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
-        self.fill("environment_name_input", name)
-        initial_groups = self.create_environment_selected_groups()
-        self._select_create_environment_groups(group_names)
-        expected_groups = self._unique_non_empty(initial_groups + self.create_environment_selected_groups() + group_names)
-        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        self._wait_for_overlay_closed()
-        self._wait_for_table_not_loading()
-        return initial_groups, expected_groups
+        def open_drawer() -> None:
+            self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+
+        def populate_drawer() -> tuple[list[str], list[str]]:
+            self.fill("environment_name_input", name)
+            initial_groups = self.create_environment_selected_groups()
+            self._select_create_environment_groups(group_names)
+            expected_groups = self._unique_non_empty(
+                initial_groups + self.create_environment_selected_groups() + group_names
+            )
+            return initial_groups, expected_groups
+
+        return self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context=f"create environment with groups: {name}",
+        )
 
     def create_environment_with_exact_groups_from_default_name(self, group_names: list[str]) -> tuple[str, list[str]]:
-        self.dismiss_blocking_overlays()
-        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
-        environment_name = self._active_environment_name_input_value()
-        if not environment_name:
-            raise RuntimeError("create environment drawer default environment name is empty")
-        expected_groups = self._unique_non_empty(group_names)
-        self._clear_create_environment_groups()
-        self._select_create_environment_groups(expected_groups)
-        extra_groups = [group for group in self.create_environment_selected_groups() if group not in expected_groups]
-        self._deselect_create_environment_groups(extra_groups)
-        self._close_select_dropdowns()
-        final_groups = self.create_environment_selected_groups()
-        if set(final_groups) != set(expected_groups):
-            raise AssertionError(
-                "create environment groups were not exact after clearing defaults: "
-                f"expected={expected_groups}, actual={final_groups}"
-            )
-        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        self._wait_for_overlay_closed()
-        self._wait_for_table_not_loading()
-        return environment_name, final_groups
+        def open_drawer() -> None:
+            self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+
+        def populate_drawer() -> tuple[str, list[str]]:
+            environment_name = self._active_environment_name_input_value()
+            if not environment_name:
+                raise RuntimeError("create environment drawer default environment name is empty")
+            expected_groups = self._unique_non_empty(group_names)
+            self._clear_create_environment_groups()
+            self._select_create_environment_groups(expected_groups)
+            extra_groups = [group for group in self.create_environment_selected_groups() if group not in expected_groups]
+            self._deselect_create_environment_groups(extra_groups)
+            self._close_select_dropdowns()
+            final_groups = self.create_environment_selected_groups()
+            if set(final_groups) != set(expected_groups):
+                raise AssertionError(
+                    "create environment groups were not exact after clearing defaults: "
+                    f"expected={expected_groups}, actual={final_groups}"
+                )
+            return environment_name, final_groups
+
+        return self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context="create environment with exact groups from default name",
+        )
 
     def create_environment_with_tags(self, name: str, tag_names: list[str]) -> list[str]:
-        self.dismiss_blocking_overlays()
-        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
-        self.fill("environment_name_input", name)
-        self.cdp.click_element_by_script(self._create_environment_set_tag_button_script())
-        self._select_create_environment_tags(tag_names)
-        selected_tags = self._unique_non_empty(tag_names)
-        self.cdp.press("Escape")
-        self._wait_select_dropdown_closed()
-        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        self._wait_for_overlay_closed()
-        self._wait_for_table_not_loading()
-        return selected_tags
+        def open_drawer() -> None:
+            self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+
+        def populate_drawer() -> list[str]:
+            self.fill("environment_name_input", name)
+            self.cdp.click_element_by_script(self._create_environment_set_tag_button_script())
+            self._select_create_environment_tags(tag_names)
+            selected_tags = self._unique_non_empty(tag_names)
+            self.cdp.press("Escape")
+            self._wait_select_dropdown_closed()
+            return selected_tags
+
+        return self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context=f"create environment with tags: {name}",
+        )
 
     def batch_create_environments(self, name_prefix: str, count: int) -> None:
-        self.dismiss_blocking_overlays()
-        self.clear_selected_environments()
-        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
-        self.fill("batch_create_count_input", str(count))
-        self.fill("batch_create_name_prefix_input", name_prefix)
-        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        self._wait_for_overlay_closed()
-        self._wait_for_table_not_loading()
+        def open_drawer() -> None:
+            self.clear_selected_environments()
+            self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
+
+        def populate_drawer() -> None:
+            self.fill("batch_create_count_input", str(count))
+            self.fill("batch_create_name_prefix_input", name_prefix)
+
+        self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context=f"batch create environments: {name_prefix}",
+        )
 
     def batch_create_environments_with_kernel(self, name_prefix: str, count: int, kernel_label: str) -> None:
-        self.dismiss_blocking_overlays()
-        self.clear_selected_environments()
-        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
-        self.fill("batch_create_count_input", str(count))
-        self.fill("batch_create_name_prefix_input", name_prefix)
-        self._expand_create_environment_fingerprint_settings()
-        self._expand_more_fingerprint_settings()
-        self._select_create_environment_kernel(kernel_label)
-        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        self._wait_for_overlay_closed()
-        self._wait_for_table_not_loading()
+        def open_drawer() -> None:
+            self.clear_selected_environments()
+            self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
+
+        def populate_drawer() -> None:
+            self.fill("batch_create_count_input", str(count))
+            self.fill("batch_create_name_prefix_input", name_prefix)
+            self._expand_create_environment_fingerprint_settings()
+            self._expand_more_fingerprint_settings()
+            self._select_create_environment_kernel(kernel_label)
+
+        self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context=f"batch create environments with kernel: {name_prefix}",
+        )
 
     def batch_create_environments_with_groups(
         self,
@@ -155,18 +199,25 @@ class EnvironmentPage(BasePage):
         count: int,
         group_names: list[str],
     ) -> tuple[list[str], list[str]]:
-        self.dismiss_blocking_overlays()
-        self.clear_selected_environments()
-        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
-        self.fill("batch_create_count_input", str(count))
-        self.fill("batch_create_name_prefix_input", name_prefix)
-        initial_groups = self.create_environment_selected_groups()
-        self._select_create_environment_groups(group_names)
-        expected_groups = self._unique_non_empty(initial_groups + self.create_environment_selected_groups() + group_names)
-        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        self._wait_for_overlay_closed()
-        self._wait_for_table_not_loading()
-        return initial_groups, expected_groups
+        def open_drawer() -> None:
+            self.clear_selected_environments()
+            self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
+
+        def populate_drawer() -> tuple[list[str], list[str]]:
+            self.fill("batch_create_count_input", str(count))
+            self.fill("batch_create_name_prefix_input", name_prefix)
+            initial_groups = self.create_environment_selected_groups()
+            self._select_create_environment_groups(group_names)
+            expected_groups = self._unique_non_empty(
+                initial_groups + self.create_environment_selected_groups() + group_names
+            )
+            return initial_groups, expected_groups
+
+        return self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context=f"batch create environments with groups: {name_prefix}",
+        )
 
     def batch_create_environments_with_tags(
         self,
@@ -174,20 +225,109 @@ class EnvironmentPage(BasePage):
         count: int,
         tag_names: list[str],
     ) -> list[str]:
-        self.dismiss_blocking_overlays()
-        self.clear_selected_environments()
-        self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
-        self.fill("batch_create_count_input", str(count))
-        self.fill("batch_create_name_prefix_input", name_prefix)
-        self.cdp.click_element_by_script(self._create_environment_set_tag_button_script())
-        self._select_create_environment_tags(tag_names)
-        selected_tags = self._unique_non_empty(tag_names)
-        self.cdp.press("Escape")
-        self._wait_select_dropdown_closed()
+        def open_drawer() -> None:
+            self.clear_selected_environments()
+            self.cdp.click_element_by_script(self._visible_text_element_script("批量创建", "batch_create_button"))
+
+        def populate_drawer() -> list[str]:
+            self.fill("batch_create_count_input", str(count))
+            self.fill("batch_create_name_prefix_input", name_prefix)
+            self.cdp.click_element_by_script(self._create_environment_set_tag_button_script())
+            self._select_create_environment_tags(tag_names)
+            selected_tags = self._unique_non_empty(tag_names)
+            self.cdp.press("Escape")
+            self._wait_select_dropdown_closed()
+            return selected_tags
+
+        return self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context=f"batch create environments with tags: {name_prefix}",
+        )
+
+    def _run_create_environment_drawer_flow(self, open_drawer, populate_drawer, *, context: str):
+        attempts = self.CREATE_ENVIRONMENT_DRAWER_REOPEN_RETRIES + 1
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            self.dismiss_blocking_overlays()
+            open_drawer()
+            try:
+                self._wait_create_environment_default_group_selected(
+                    timeout_seconds=self.CREATE_ENVIRONMENT_DEFAULT_GROUP_SECONDS
+                )
+            except TimeoutError as exc:
+                last_error = exc
+                continue
+
+            result = populate_drawer()
+            try:
+                self._submit_active_create_environment_drawer(context)
+            except _CreateEnvironmentSubmitNotStarted as exc:
+                last_error = exc
+                continue
+            self._wait_for_environment_list_not_loading_with_refresh_retry()
+            return result
+
+        raise TimeoutError(
+            "create environment drawer did not become ready after "
+            f"{self.CREATE_ENVIRONMENT_DRAWER_REOPEN_RETRIES} reopen retries: context={context}; "
+            f"last_error={last_error}"
+        )
+
+    def _wait_create_environment_default_group_selected(self, timeout_seconds: int) -> None:
+        deadline = time.time() + timeout_seconds
+        last_groups: list[str] = []
+        while time.time() < deadline:
+            last_groups = self.create_environment_selected_groups()
+            if self.CREATE_ENVIRONMENT_DEFAULT_GROUP in last_groups:
+                return
+            time.sleep(0.5)
+        raise TimeoutError(
+            "create environment drawer default group was not selected: "
+            f"expected={self.CREATE_ENVIRONMENT_DEFAULT_GROUP}, actual={last_groups}"
+        )
+
+    def _submit_active_create_environment_drawer(self, context: str) -> None:
+        self._close_select_dropdowns()
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        self._wait_for_overlay_closed()
-        self._wait_for_table_not_loading()
-        return selected_tags
+        state = self._wait_create_environment_submit_state(
+            timeout_seconds=self.CREATE_ENVIRONMENT_SUBMIT_STATE_SECONDS
+        )
+        if state == "closed":
+            return
+        if state == "loading":
+            self._wait_for_overlay_closed()
+            return
+
+        time.sleep(self.CREATE_ENVIRONMENT_SECOND_SUBMIT_DELAY_SECONDS)
+        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
+        second_state = self._wait_create_environment_submit_state(
+            timeout_seconds=self.CREATE_ENVIRONMENT_SUBMIT_STATE_SECONDS
+        )
+        if second_state == "closed":
+            return
+        if second_state == "loading":
+            self._wait_for_overlay_closed()
+            return
+
+        raise _CreateEnvironmentSubmitNotStarted(
+            "create environment drawer submit did not start loading after second confirm click and drawer stayed open: "
+            f"context={context}; button_state={self._active_overlay_button_state('确定')}"
+        )
+
+    def _wait_create_environment_submit_state(self, timeout_seconds: int) -> str:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if not self._create_environment_drawer_visible():
+                return "closed"
+            button_state = self._active_overlay_button_state("确定")
+            if bool(button_state.get("loading")):
+                return "loading"
+            time.sleep(0.2)
+        if not self._create_environment_drawer_visible():
+            return "closed"
+        button_state = self._active_overlay_button_state("确定")
+        return "loading" if bool(button_state.get("loading")) else "idle"
 
     def search_environment(self, name: str) -> None:
         # “序号/名称/备注”筛选框默认展示；直接 fill 触发 Vue/Element Plus 的真实输入绑定。
@@ -816,7 +956,7 @@ class EnvironmentPage(BasePage):
         self._wait_for_search_input_visible()
         self._fill_search_input(name)
         self.cdp.click_element_by_script(self._search_button_script())
-        self._wait_for_table_not_loading()
+        self._wait_for_environment_list_not_loading_with_refresh_retry()
 
     def open_environment(self, name: str) -> None:
         self.search_environment(name)
@@ -4262,6 +4402,88 @@ class EnvironmentPage(BasePage):
         }}
         """
 
+    def _create_environment_drawer_visible(self) -> bool:
+        return bool(self.cdp.evaluate(self._create_environment_drawer_visible_script()))
+
+    def _active_overlay_button_state(self, text: str) -> dict:
+        value = self.cdp.evaluate(self._active_overlay_button_state_script(text))
+        return value if isinstance(value, dict) else {}
+
+    def _create_environment_drawer_visible_script(self) -> str:
+        return f"""
+        () => {{
+            const nameInputSelector = {self.locator("environment_name_input")!r};
+            const batchCountInputSelector = {self.locator("batch_create_count_input")!r};
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && Number(style.opacity || "1") > 0.01
+                    && el.getAttribute("aria-hidden") !== "true"
+                    && !el.classList.contains("is-leave")
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.right > 0
+                    && rect.bottom > 0
+                    && rect.left < window.innerWidth
+                    && rect.top < window.innerHeight;
+            }};
+            return Array.from(document.querySelectorAll(".el-drawer"))
+                .filter(visible)
+                .some((drawer) => {{
+                    const text = drawer.innerText || drawer.textContent || "";
+                    return text.includes("创建环境")
+                        || text.includes("批量创建")
+                        || Boolean(drawer.querySelector(nameInputSelector))
+                        || Boolean(drawer.querySelector(batchCountInputSelector));
+                }});
+        }}
+        """
+
+    def _active_overlay_button_state_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const overlaySelector = {self.locator("blocking_overlay")!r};
+            const buttonSelector = {self.locator("button")!r};
+            const expectedText = {text!r};
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && Number(style.opacity || "1") > 0.01
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const overlays = Array.from(document.querySelectorAll(overlaySelector))
+                .filter(visible);
+            for (const overlay of overlays.reverse()) {{
+                const button = Array.from(overlay.querySelectorAll(buttonSelector))
+                    .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText);
+                if (!button) continue;
+                const className = String(button.className || "");
+                const ariaDisabled = button.getAttribute("aria-disabled");
+                const loading = button.classList.contains("is-loading")
+                    || Boolean(button.querySelector(".is-loading, .el-icon-loading, [class*='loading']"));
+                const disabled = Boolean(button.disabled)
+                    || ariaDisabled === "true"
+                    || button.classList.contains("is-disabled");
+                return {{
+                    visible: true,
+                    text: (button.innerText || button.textContent || "").trim(),
+                    disabled,
+                    loading,
+                    className,
+                    ariaDisabled,
+                }};
+            }}
+            return {{ visible: false, loading: false, disabled: false }};
+        }}
+        """
+
     def _message_box_button_script(self, text: str) -> str:
         return f"""
         () => {{
@@ -4654,14 +4876,49 @@ class EnvironmentPage(BasePage):
     def _wait_for_table_not_loading(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
         deadline = time.time() + timeout_seconds
+        stable_not_loading_count = 0
         while time.time() < deadline:
             try:
                 if not self._environment_table_loading_visible():
-                    return
+                    stable_not_loading_count += 1
+                    if stable_not_loading_count >= 2:
+                        return
+                else:
+                    stable_not_loading_count = 0
             except Exception:
                 return
             time.sleep(0.3)
         raise TimeoutError("environment table is still loading")
+
+    def _wait_for_environment_list_not_loading_with_refresh_retry(
+        self,
+        *,
+        timeout_seconds: int | None = None,
+        refresh_retries: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or self.ENVIRONMENT_LIST_LOADING_SECONDS
+        refresh_retries = (
+            self.ENVIRONMENT_LIST_LOADING_REFRESH_RETRIES
+            if refresh_retries is None
+            else refresh_retries
+        )
+        last_error: Exception | None = None
+        for attempt in range(refresh_retries + 1):
+            try:
+                self._wait_for_table_not_loading(timeout_seconds=timeout_seconds)
+                return
+            except TimeoutError as exc:
+                last_error = exc
+                if attempt >= refresh_retries:
+                    break
+                self._trigger_environment_list_refresh()
+        raise TimeoutError(
+            "environment table loading did not finish after search refresh retries: "
+            f"timeout_seconds={timeout_seconds}, refresh_retries={refresh_retries}, last_error={last_error}"
+        )
+
+    def _trigger_environment_list_refresh(self) -> None:
+        self.cdp.click_element_by_script(self._search_button_script())
 
     def _environment_table_loading_visible(self) -> bool:
         return bool(

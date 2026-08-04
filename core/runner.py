@@ -15,6 +15,11 @@ from core.circuit_breaker import BreakerName, CircuitBreakerRegistry
 from core.feishu import FeishuNotifier
 from core.precheck import EnvironmentPrechecker
 from core.result import AutomationTextRunner, RunResult
+from core.runtime_services import (
+    RuntimeServiceError,
+    RuntimeServiceManager,
+    collect_required_runtime_services,
+)
 
 
 class ExitCode:
@@ -68,36 +73,56 @@ class AutomationRunner:
             self.notifier.send_summary(empty_result)
             return ExitCode.SUCCESS
 
+        try:
+            required_services = collect_required_runtime_services(suite)
+        except RuntimeServiceError as exc:
+            self.notifier.send_failure("运行时服务依赖声明错误", str(exc))
+            return ExitCode.CONFIG_OR_PRECHECK_ERROR
+
+        runtime_services: RuntimeServiceManager | None = None
+        if required_services:
+            runtime_services = RuntimeServiceManager(self.config, self.logger)
+            try:
+                runtime_services.start(required_services)
+            except RuntimeServiceError as exc:
+                self.notifier.send_failure("自动化专用运行时服务启动失败", str(exc))
+                runtime_services.stop()
+                return ExitCode.CONFIG_OR_PRECHECK_ERROR
+
         app_manager = AppManager(self.config, self.logger)
         cdp_driver = CDPDriver(self.config, self.logger)
         app_started = False
         try:
-            if attach_existing_app:
-                self.logger.info("Attach existing APP mode enabled; skipping APP startup and shutdown")
-            else:
-                app_started = app_manager.launch_fresh()
-                if not app_started:
-                    self.notifier.send_failure(
-                        "Dicloak APP 进程检测失败",
-                        "启动后 30 秒内未检测到 APP 进程，将继续尝试 CDP 连接。",
-                    )
-            cdp_driver.connect()
-            cdp_driver.wait_for_app_ready()
-            cdp_driver.close()
-            self.logger.info("CDP startup check passed and connection released before test execution")
-        except (AppStartupError, CDPConnectionError, OSError) as exc:
-            self.breakers.trip(BreakerName.APP_STARTUP, str(exc))
-            self.notifier.send_failure("Dicloak APP 启动或 CDP 连接失败", str(exc))
-            return ExitCode.APP_OR_CDP_ERROR
+            try:
+                if attach_existing_app:
+                    self.logger.info("Attach existing APP mode enabled; skipping APP startup and shutdown")
+                else:
+                    app_started = app_manager.launch_fresh()
+                    if not app_started:
+                        self.notifier.send_failure(
+                            "Dicloak APP 进程检测失败",
+                            "启动后 30 秒内未检测到 APP 进程，将继续尝试 CDP 连接。",
+                        )
+                cdp_driver.connect()
+                cdp_driver.wait_for_app_ready()
+                cdp_driver.close()
+                self.logger.info("CDP startup check passed and connection released before test execution")
+            except (AppStartupError, CDPConnectionError, OSError) as exc:
+                self.breakers.trip(BreakerName.APP_STARTUP, str(exc))
+                self.notifier.send_failure("Dicloak APP 启动或 CDP 连接失败", str(exc))
+                return ExitCode.APP_OR_CDP_ERROR
 
-        try:
-            result = self._run_suite(suite)
-            self.notifier.send_summary(result)
-            return ExitCode.SUCCESS if result.success else ExitCode.TEST_FAILED
+            try:
+                result = self._run_suite(suite)
+                self.notifier.send_summary(result)
+                return ExitCode.SUCCESS if result.success else ExitCode.TEST_FAILED
+            finally:
+                cdp_driver.close()
+                if not attach_existing_app:
+                    app_manager.close()
         finally:
-            cdp_driver.close()
-            if not attach_existing_app:
-                app_manager.close()
+            if runtime_services is not None:
+                runtime_services.stop()
 
     def _build_suite(
         self,

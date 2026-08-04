@@ -19,6 +19,8 @@ logs/*
 reports/*
 screenshots/*
 remote_artifacts/*
+test_data/local_auth_lab/*
+config/local_auth_lab.yaml
 !logs/.gitkeep
 !reports/.gitkeep
 !screenshots/.gitkeep

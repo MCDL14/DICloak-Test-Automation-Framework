@@ -48,6 +48,7 @@ from core.remote_runner import (
 from core.remote_sync import (
     check_remote_code_status,
     remote_release_root,
+    sync_remote_local_auth_lab_state,
     sync_remote_project,
 )
 from core.runner import AutomationRunner
@@ -762,6 +763,7 @@ def _run_remote_cli_unlocked(
 
     if sync_before_run:
         sync_remote_project(host, log_queue, project_root=PROJECT_ROOT)
+        sync_remote_local_auth_lab_state(host, log_queue, project_root=PROJECT_ROOT)
 
     request = RemoteRunRequest(
         scope=scope,

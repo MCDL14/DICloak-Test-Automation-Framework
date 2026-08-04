@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{SITE_NAME}}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body data-site-id="{{SITE_ID}}" data-storage-type="{{STORAGE_ID}}">
+  <main class="shell">
+    <section class="card">
+      <header>
+        <p class="eyebrow">DICloak Local Auth Lab</p>
+        <h1 data-testid="site-name">{{SITE_NAME}}</h1>
+        <p>该站点仅通过 <strong data-testid="storage-type">{{STORAGE_TYPE}}</strong> 保存登录令牌。</p>
+      </header>
+
+      <div class="status-grid" aria-live="polite">
+        <div><span>当前状态</span><strong data-testid="auth-status">正在检查登录状态</strong></div>
+        <div><span>当前账号</span><strong data-testid="current-account">—</strong></div>
+        <div><span>Run ID</span><strong data-testid="run-id">—</strong></div>
+        <div><span>Token 指纹</span><strong data-testid="token-fingerprint">—</strong></div>
+      </div>
+
+      <p class="message" data-testid="message"></p>
+
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab active" data-action="show-login">登录</button>
+        <button type="button" class="tab" data-action="show-register">注册</button>
+      </div>
+
+      <form data-testid="login-form" data-form="login">
+        <label>账号<input data-testid="username-input" name="username" autocomplete="username" required></label>
+        <label>密码<input data-testid="password-input" name="password" type="password" autocomplete="current-password" required></label>
+        <label>Run ID（可选）<input data-testid="run-id-input" name="runId" autocomplete="off"></label>
+        <button data-testid="login-button" type="submit">登录</button>
+      </form>
+
+      <form data-testid="register-form" data-form="register" hidden>
+        <label>账号<input data-testid="register-username-input" name="username" autocomplete="username" required></label>
+        <label>密码<input data-testid="register-password-input" name="password" type="password" autocomplete="new-password" required></label>
+        <label>确认密码<input data-testid="confirm-password-input" name="confirmPassword" type="password" autocomplete="new-password" required></label>
+        <button data-testid="register-button" type="submit">注册账号</button>
+      </form>
+
+      <button class="secondary" data-testid="logout-button" data-action="logout" type="button" hidden>退出登录</button>
+    </section>
+  </main>
+  <script src="/static/auth.js" defer></script>
+</body>
+</html>

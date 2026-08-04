@@ -9,6 +9,8 @@ from pages.base_page import BasePage
 
 class GlobalSettingsPage(BasePage):
     locator_file = "global_settings_locators.yaml"
+    MINIMUM_CHECKED_CHECKBOXES = 3
+    GLOBAL_SETTINGS_REENTRY_RETRIES = 2
     DISABLE_DEVTOOLS_LABELS = ("禁止打开浏览器开发者工具", "禁止打开浏览器开发者工具界面")
     ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS = ("环境列表字段权限", "环境字段显示限制")
     ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG_TITLES = ("列表字段", "列表字段设置")
@@ -24,11 +26,43 @@ class GlobalSettingsPage(BasePage):
     }
 
     def open(self) -> None:
-        self._dismiss_blocking_overlays()
-        self.cdp.click_element_by_script(
-            self._visible_text_element_script("global_settings_menu_candidates", "全局设置", exact=True)
+        """Open a fully loaded global-settings page, retrying through Environment Management."""
+        observations: list[dict[str, object]] = []
+        total_attempts = self.GLOBAL_SETTINGS_REENTRY_RETRIES + 1
+        for attempt_index in range(total_attempts):
+            if attempt_index > 0:
+                self._open_environment_management_for_retry()
+
+            self._dismiss_blocking_overlays()
+            if not self._global_settings_route_active():
+                self.cdp.click_element_by_script(
+                    self._visible_text_element_script(
+                        "global_settings_menu_candidates",
+                        "全局设置",
+                        exact=True,
+                    )
+                )
+            self._wait_for_global_settings_page()
+            self._wait_for_global_settings_rendered()
+            checkbox_states = self._wait_checkbox_states_stable()
+            checked_names = sorted(name for name, checked in checkbox_states.items() if checked)
+            observations.append(
+                {
+                    "attempt": attempt_index + 1,
+                    "checked_count": len(checked_names),
+                    "checkbox_count": len(checkbox_states),
+                    "checked_names": checked_names,
+                }
+            )
+            if len(checked_names) >= self.MINIMUM_CHECKED_CHECKBOXES:
+                return
+
+        raise AssertionError(
+            "global settings page remained abnormal after the initial entry and "
+            f"{self.GLOBAL_SETTINGS_REENTRY_RETRIES} re-entry retries: "
+            f"expected at least {self.MINIMUM_CHECKED_CHECKBOXES} checked checkboxes, "
+            f"observations={observations}"
         )
-        self._wait_for_global_settings_page()
 
     def ensure_disable_view_password_enabled(self) -> bool:
         """Return True when this method changed the setting."""
@@ -53,6 +87,84 @@ class GlobalSettingsPage(BasePage):
     def ensure_disable_member_google_extension_pages_disabled(self) -> bool:
         """Return True when this method changed the setting."""
         return self.ensure_checkbox_disabled("禁止成员访问谷歌扩展商店和扩展设置页面")
+
+    def ensure_cookie_data_sync_enabled(self) -> bool:
+        """Enable and persist only the Cookie item under 数据设置 → 数据同步."""
+        self._wait_for_cookie_data_sync()
+        before_states = self._wait_checkbox_states_stable()
+        if self.cookie_data_sync_enabled():
+            return False
+
+        self.cdp.click_element_by_script(self._cookie_data_sync_checkbox_script())
+        self._wait_cookie_data_sync_enabled(True)
+        after_states = self.checkbox_states()
+        self._assert_only_checkbox_changed("Cookie", before_states, after_states)
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+
+        # Re-enter the page so the assertion reflects persisted server state, not only Vue local state.
+        self.open()
+        self._wait_for_cookie_data_sync()
+        self._wait_cookie_data_sync_enabled(True)
+        return True
+
+    def cookie_data_sync_enabled(self) -> bool:
+        value = self.cdp.evaluate(self._cookie_data_sync_enabled_script())
+        if value is None:
+            raise RuntimeError("数据同步 Cookie checkbox was not found")
+        return bool(value)
+
+    def ensure_local_storage_data_sync_enabled(self) -> bool:
+        """Enable and persist only the Local Storage item under 数据设置 → 数据同步."""
+        self._wait_for_local_storage_data_sync()
+        before_states = self._wait_checkbox_states_stable()
+        if self.local_storage_data_sync_enabled():
+            return False
+
+        self.cdp.click_element_by_script(self._local_storage_data_sync_checkbox_script())
+        self._wait_local_storage_data_sync_enabled(True)
+        after_states = self.checkbox_states()
+        self._assert_only_checkbox_changed("Local Storage", before_states, after_states)
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+
+        # Re-enter the page so the assertion reflects persisted server state, not only Vue local state.
+        self.open()
+        self._wait_for_local_storage_data_sync()
+        self._wait_local_storage_data_sync_enabled(True)
+        return True
+
+    def local_storage_data_sync_enabled(self) -> bool:
+        value = self.cdp.evaluate(self._local_storage_data_sync_enabled_script())
+        if value is None:
+            raise RuntimeError("数据同步 Local Storage checkbox was not found")
+        return bool(value)
+
+    def ensure_indexeddb_data_sync_enabled(self) -> bool:
+        """Enable and persist only the IndexedDB item under 数据设置 → 数据同步."""
+        self._wait_for_indexeddb_data_sync()
+        before_states = self._wait_checkbox_states_stable()
+        if self.indexeddb_data_sync_enabled():
+            return False
+
+        self.cdp.click_element_by_script(self._indexeddb_data_sync_checkbox_script())
+        self._wait_indexeddb_data_sync_enabled(True)
+        after_states = self.checkbox_states()
+        self._assert_only_checkbox_changed("IndexedDB", before_states, after_states)
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+
+        # Re-enter the page so the assertion reflects persisted server state, not only Vue local state.
+        self.open()
+        self._wait_for_indexeddb_data_sync()
+        self._wait_indexeddb_data_sync_enabled(True)
+        return True
+
+    def indexeddb_data_sync_enabled(self) -> bool:
+        value = self.cdp.evaluate(self._indexeddb_data_sync_enabled_script())
+        if value is None:
+            raise RuntimeError("数据同步 IndexedDB checkbox was not found")
+        return bool(value)
 
     def configure_packet_capture_blocking(self, process_name: str) -> None:
         """Enable packet capture blocking and save the configured process name."""
@@ -769,20 +881,84 @@ class GlobalSettingsPage(BasePage):
     def _wait_for_global_settings_page(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
         deadline = time.time() + timeout_seconds
-        marker_selector = self.locator("global_settings_page_marker")
         while time.time() < deadline:
-            if self.cdp.evaluate(
+            if self._global_settings_page_visible():
+                return
+            time.sleep(0.2)
+        raise TimeoutError("global settings page did not appear")
+
+    def _global_settings_page_visible(self) -> bool:
+        return bool(
+            self.cdp.evaluate(
                 """
                 () => {
+                    const route = String(window.location.hash || "")
+                        .split("?")[0]
+                        .replace(/\\/+$/, "");
+                    if (!(route === "#/setting" || route.startsWith("#/setting/"))) return false;
                     const marker = document.querySelector(__MARKER_SELECTOR__);
                     const text = marker ? (marker.innerText || marker.textContent || "") : "";
                     return text.includes("全局设置") && text.includes("禁止查看网站密码");
                 }
-                """.replace("__MARKER_SELECTOR__", repr(marker_selector))
-            ):
-                return
-            time.sleep(0.2)
-        raise TimeoutError("global settings page did not appear")
+                """.replace(
+                    "__MARKER_SELECTOR__",
+                    repr(self.locator("global_settings_page_marker")),
+                )
+            )
+        )
+
+    def _global_settings_route_active(self) -> bool:
+        return bool(
+            self.cdp.evaluate(
+                """
+                () => {
+                    const route = String(window.location.hash || "")
+                        .split("?")[0]
+                        .replace(/\\/+$/, "");
+                    return route === "#/setting" || route.startsWith("#/setting/");
+                }
+                """
+            )
+        )
+
+    def _open_environment_management_for_retry(self) -> None:
+        self._dismiss_blocking_overlays()
+        self.cdp.click_element_by_script(
+            self._visible_text_element_script(
+                "global_settings_menu_candidates",
+                "环境管理",
+                exact=True,
+            )
+        )
+        self._wait_for_environment_management_page()
+
+    def _wait_for_environment_management_page(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        stable_since = 0.0
+        while time.time() < deadline:
+            on_environment_route = bool(
+                self.cdp.evaluate(
+                    """
+                    () => {
+                        const route = String(window.location.hash || "")
+                            .split("?")[0]
+                            .replace(/\\/+$/, "");
+                        return route === "#/environment/envList"
+                            || route.startsWith("#/environment/envList/");
+                    }
+                    """
+                )
+            )
+            if on_environment_route and not self._has_visible_loading():
+                if stable_since == 0:
+                    stable_since = time.time()
+                if time.time() - stable_since >= 0.5:
+                    return
+            else:
+                stable_since = 0.0
+            time.sleep(0.1)
+        raise TimeoutError("environment management page did not become ready for global-settings retry")
 
     def _wait_for_overlay_closed(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -817,6 +993,72 @@ class GlobalSettingsPage(BasePage):
                 return
             time.sleep(0.2)
         raise TimeoutError(f"{label_text} checkbox did not appear")
+
+    def _wait_for_cookie_data_sync(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._cookie_data_sync_exists_script()):
+                return
+            time.sleep(0.2)
+        raise TimeoutError("数据同步 Cookie checkbox did not appear")
+
+    def _wait_cookie_data_sync_enabled(
+        self,
+        expected: bool,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._cookie_data_sync_enabled_script()) is expected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"数据同步 Cookie checkbox state did not become expected: {expected}")
+
+    def _wait_for_local_storage_data_sync(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._local_storage_data_sync_exists_script()):
+                return
+            time.sleep(0.2)
+        raise TimeoutError("数据同步 Local Storage checkbox did not appear")
+
+    def _wait_local_storage_data_sync_enabled(
+        self,
+        expected: bool,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._local_storage_data_sync_enabled_script()) is expected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"数据同步 Local Storage checkbox state did not become expected: {expected}")
+
+    def _wait_for_indexeddb_data_sync(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._indexeddb_data_sync_exists_script()):
+                return
+            time.sleep(0.2)
+        raise TimeoutError("数据同步 IndexedDB checkbox did not appear")
+
+    def _wait_indexeddb_data_sync_enabled(
+        self,
+        expected: bool,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._indexeddb_data_sync_enabled_script()) is expected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"数据同步 IndexedDB checkbox state did not become expected: {expected}")
 
     def _wait_for_website_restriction(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -1458,6 +1700,75 @@ class GlobalSettingsPage(BasePage):
             time.sleep(0.2)
         raise TimeoutError("global settings page still has visible loading mask")
 
+    def _wait_for_global_settings_rendered(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        stable_since = 0.0
+        last_state: dict[str, bool | int] = {}
+        while time.time() < deadline:
+            state = self._global_settings_render_state()
+            last_state = state
+            ready = (
+                not bool(state.get("loading_text_visible"))
+                and int(state.get("visible_loading_count") or 0) == 0
+                and bool(state.get("data_sync_present"))
+            )
+            if ready:
+                if stable_since == 0:
+                    stable_since = time.time()
+                if time.time() - stable_since >= 1.0:
+                    return
+            else:
+                stable_since = 0.0
+            time.sleep(0.1)
+        raise TimeoutError(f"global settings page did not finish rendering: {last_state}")
+
+    def _global_settings_render_state(self) -> dict[str, bool | int]:
+        value = self.cdp.evaluate(
+            """
+            () => {
+                const visible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== "none"
+                        && style.visibility !== "hidden"
+                        && rect.width > 0
+                        && rect.height > 0;
+                };
+                const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                const loadingTextVisible = Array.from(document.querySelectorAll("body *"))
+                    .filter(visible)
+                    .some((el) => {
+                        const text = clean(el.innerText || el.textContent);
+                        return text === "正在加载中..."
+                            || text === "正在加载中…"
+                            || text === "正在加载中";
+                    });
+                const visibleLoadingCount = Array.from(document.querySelectorAll(__LOADING_SELECTOR__))
+                    .filter(visible).length;
+                return {
+                    loading_text_visible: loadingTextVisible,
+                    visible_loading_count: visibleLoadingCount,
+                    data_sync_present: Boolean(document.querySelector(__DATA_SYNC_SELECTOR__)),
+                };
+            }
+            """.replace("__LOADING_SELECTOR__", repr(self.locator("loading_mask"))).replace(
+                "__DATA_SYNC_SELECTOR__",
+                repr(self.locator("data_sync_root")),
+            )
+        )
+        if not isinstance(value, dict):
+            return {
+                "loading_text_visible": True,
+                "visible_loading_count": 0,
+                "data_sync_present": False,
+            }
+        return {
+            "loading_text_visible": bool(value.get("loading_text_visible")),
+            "visible_loading_count": int(value.get("visible_loading_count") or 0),
+            "data_sync_present": bool(value.get("data_sync_present")),
+        }
+
     def _has_visible_loading(self) -> bool:
         return bool(
             self.cdp.evaluate(
@@ -1590,6 +1901,180 @@ class GlobalSettingsPage(BasePage):
             repr(self.locator("checkbox_candidates")),
         ).replace(
             "__CHECKBOX_SELECTOR_ONLY__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__CHECKBOX_INPUT_SELECTOR__",
+            repr(self.locator("checkbox_input")),
+        ).replace(
+            "__CHECKBOX_STATE_SELECTOR__",
+            repr(self.locator("checkbox_state")),
+        )
+
+    def _cookie_data_sync_exists_script(self) -> str:
+        return """
+        () => Boolean((() => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            return Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .find((checkbox) => clean(checkbox.innerText || checkbox.textContent) === "Cookie") || null;
+        })())
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        )
+
+    def _cookie_data_sync_checkbox_script(self) -> str:
+        return """
+        () => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .find((item) => clean(item.innerText || item.textContent) === "Cookie") || null;
+            if (!checkbox) return null;
+            return checkbox.querySelector(__CHECKBOX_STATE_SELECTOR__) || checkbox;
+        }
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__CHECKBOX_STATE_SELECTOR__",
+            repr(self.locator("checkbox_state")),
+        )
+
+    def _cookie_data_sync_enabled_script(self) -> str:
+        return """
+        () => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .find((item) => clean(item.innerText || item.textContent) === "Cookie") || null;
+            if (!checkbox) return null;
+            const input = checkbox.querySelector(__CHECKBOX_INPUT_SELECTOR__);
+            if (input) return Boolean(input.checked);
+            const state = checkbox.querySelector(__CHECKBOX_STATE_SELECTOR__) || checkbox;
+            return state.classList.contains("is-checked") || checkbox.classList.contains("is-checked");
+        }
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__CHECKBOX_INPUT_SELECTOR__",
+            repr(self.locator("checkbox_input")),
+        ).replace(
+            "__CHECKBOX_STATE_SELECTOR__",
+            repr(self.locator("checkbox_state")),
+        )
+
+    def _local_storage_data_sync_exists_script(self) -> str:
+        return """
+        () => Boolean((() => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            return Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .find((checkbox) => clean(checkbox.innerText || checkbox.textContent) === "Local Storage") || null;
+        })())
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        )
+
+    def _local_storage_data_sync_checkbox_script(self) -> str:
+        return """
+        () => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .find((item) => clean(item.innerText || item.textContent) === "Local Storage") || null;
+            if (!checkbox) return null;
+            return checkbox.querySelector(__CHECKBOX_STATE_SELECTOR__) || checkbox;
+        }
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__CHECKBOX_STATE_SELECTOR__",
+            repr(self.locator("checkbox_state")),
+        )
+
+    def _local_storage_data_sync_enabled_script(self) -> str:
+        return """
+        () => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .find((item) => clean(item.innerText || item.textContent) === "Local Storage") || null;
+            if (!checkbox) return null;
+            const input = checkbox.querySelector(__CHECKBOX_INPUT_SELECTOR__);
+            if (input) return Boolean(input.checked);
+            const state = checkbox.querySelector(__CHECKBOX_STATE_SELECTOR__) || checkbox;
+            return state.classList.contains("is-checked") || checkbox.classList.contains("is-checked");
+        }
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__CHECKBOX_INPUT_SELECTOR__",
+            repr(self.locator("checkbox_input")),
+        ).replace(
+            "__CHECKBOX_STATE_SELECTOR__",
+            repr(self.locator("checkbox_state")),
+        )
+
+    def _indexeddb_data_sync_exists_script(self) -> str:
+        return """
+        () => Boolean((() => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            return Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .find((checkbox) => clean(checkbox.innerText || checkbox.textContent) === "IndexedDB") || null;
+        })())
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        )
+
+    def _indexeddb_data_sync_checkbox_script(self) -> str:
+        return """
+        () => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .find((item) => clean(item.innerText || item.textContent) === "IndexedDB") || null;
+            if (!checkbox) return null;
+            return checkbox.querySelector(__CHECKBOX_STATE_SELECTOR__) || checkbox;
+        }
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__CHECKBOX_STATE_SELECTOR__",
+            repr(self.locator("checkbox_state")),
+        )
+
+    def _indexeddb_data_sync_enabled_script(self) -> str:
+        return """
+        () => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .find((item) => clean(item.innerText || item.textContent) === "IndexedDB") || null;
+            if (!checkbox) return null;
+            const input = checkbox.querySelector(__CHECKBOX_INPUT_SELECTOR__);
+            if (input) return Boolean(input.checked);
+            const state = checkbox.querySelector(__CHECKBOX_STATE_SELECTOR__) || checkbox;
+            return state.classList.contains("is-checked") || checkbox.classList.contains("is-checked");
+        }
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__CHECKBOX_SELECTOR__",
             repr(self.locator("checkbox")),
         ).replace(
             "__CHECKBOX_INPUT_SELECTOR__",

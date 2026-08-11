@@ -30,7 +30,9 @@ hosts:
     port: 22
     username: tianji
     project_dir: /Users/tianji/dicloak_automation_mac
-    python: python
+    # macOS usually does not provide a system "python" command; use python3
+    # or the absolute interpreter path prepared for this node.
+    python: python3
     config: config/config.macos.yaml
     venv_activate: .venv/bin/activate
     password_env: DICLOAK_REMOTE_MAC_PASSWORD

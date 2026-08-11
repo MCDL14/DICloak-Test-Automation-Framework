@@ -155,6 +155,32 @@ class RemoteSyncSafetyTests(unittest.TestCase):
         self.assertIn("AUTH_STATE_SERVICE_RUNNING", script)
         self.assertIn("install -m 600", script)
 
+    def test_remote_auth_state_install_uses_venv_and_python3_fallback(self) -> None:
+        host = RemoteHost(
+            name="mac",
+            host="127.0.0.1",
+            username="tester",
+            project_dir="/Users/tester/project",
+            python="python",
+            config="config/config.macos.yaml",
+            venv_activate=".venv/bin/activate",
+        )
+        script = _remote_auth_state_install_script(
+            host=host,
+            remote_archive="/tmp/dicloak_auth_state_key_1.tar.gz",
+            signing_key_id="key-id",
+            database_sha256="db-hash",
+            override_path="config/local_auth_lab.yaml",
+            credentials_path="test_data/local_auth_lab/credentials.json",
+            database_path="test_data/local_auth_lab/auth.db",
+        )
+
+        self.assertIn("VENV_ACTIVATE=.venv/bin/activate", script)
+        self.assertIn('if [ -f "$VENV_ACTIVATE" ]; then . "$VENV_ACTIVATE"; fi', script)
+        self.assertIn('if [ "$PYTHON_BIN" = "python" ] && command -v python3', script)
+        self.assertIn("PYTHON_BIN=python3", script)
+        self.assertIn("PYTHON_BIN_NOT_FOUND", script)
+
     def test_execute_before_sync_orders_code_then_auth_state_then_remote_run(self) -> None:
         import streamlit_runner
 

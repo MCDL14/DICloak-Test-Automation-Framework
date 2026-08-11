@@ -285,6 +285,7 @@ python run.py --config <remote-config> --case <test_id_1> --case <test_id_2>
 - “同步当前代码”会通过 SFTP 发布本地当前工作区到远端新快照目录，包含本地 `config/` 和 `test_data/`，不依赖远端安装 Git。
 - 勾选“远程执行前同步当前代码”后，不再按 level/module/business-module/case 区分是否需要账号站，固定严格按“代码快照 → Local Auth Lab 认证状态 → 远程用例”串行执行；认证状态同步失败时不会继续执行任何远程用例。认证状态使用独立 SFTP 包，不进入 `.remote_manifest.json`，包含 `config/local_auth_lab.yaml`、持久凭据及通过 SQLite backup API 生成的一致性数据库快照。
 - 认证状态在远端以 `0600` 权限安装，并校验数据库 SHA-256、schema 和非敏感签名密钥指纹；同步时若远端认证站仍在运行会明确失败，避免新快照误复用仍绑定旧 release 数据库的进程。完整密钥、token 和密码不写入同步日志。该链路让 macOS 后端使用与 Windows 相同的签名密钥和 Session 记录，已同步到云端的登录令牌才能在 Mac 浏览器中免登。
+- 2026-08-04 修复 macOS 认证状态同步阶段 `zsh: command not found: python`：独立认证状态安装脚本现在会在远端项目目录内先执行节点 `command_prefix`、再 source `venv_activate`，随后校验 `PYTHON_BIN`；当节点仍配置为 `python` 且系统没有该命令时，会自动回退到 `python3`，仍找不到解释器才以 `PYTHON_BIN_NOT_FOUND` 明确失败。建议 macOS 节点在 `config/remote_hosts.yaml` 中显式配置为 `.venv/bin/python`、`python3` 或 pyenv 的绝对解释器路径。
 - 同步会让远端使用当前本地运行配置和测试数据；仅在本地快照缺少某个 `config/*.yaml` 时才保留远端旧配置。远程连接配置、连接缓存、账号组凭据、运行时账号临时文件和运行产物始终排除，远端 `.venv` 会保留。
 - 如果远端 `project_dir` 是真实目录，首次同步会先把它改名为 `.backup_<release>`，再创建指向新快照的软链接；旧目录保留可回退。
 - 默认发布目录为 `<project_dir>_releases`，可在 `config/remote_hosts.yaml` 中通过 `sync_release_root` 覆盖。
@@ -518,6 +519,7 @@ CDP 9222: none
 
 最近验证记录：
 
+- `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-08-04 修复 macOS 远端 Local Auth Lab 认证状态同步脚本未加载 venv 且裸跑 `python` 的问题后通过，`Ran 100 tests ... OK`；定向 `python -m unittest tests.p1.test_remote_sync -v` 通过，`Ran 7 tests ... OK`。
 - `python run.py --config config/config.yaml --module test_02_create_default_environment.py --attach-existing-app` 与 `python run.py --config config/config.yaml --module test_03_batch_create_environments.py --attach-existing-app`：2026-08-04 为创建环境抽屉“确定”按钮增加二次提交保护后均通过，结果分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。当前逻辑为：点击“确定”后若抽屉未关闭且按钮未进入 loading，则等待 2 秒后再次点击“确定”；第二次仍未关闭且未进入 loading 时才重新打开创建抽屉，最多重新打开 2 次，每次重开后都保留同样的 2 秒后二次点击。
 - `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-08-04 创建环境抽屉二次提交保护加入后通过，`Ran 99 tests ... OK`。
 - `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-08-04 为环境列表进入/创建后/搜索后的 loading 等待增加搜索刷新重试保护后通过，`Ran 97 tests ... OK`；真实页面非变更烟测 `open_list()`、`search_environment_without_assert("_tmp_refresh_probe_")`、`clear_search()` 输出 `REAL_LIST_WAIT_SMOKE_OK`。当时真实创建用例 `test_02_create_default_environment.py --attach-existing-app` 被创建抽屉提交按钮未进入 loading 的保护拦截，未走到创建成功后的列表刷新阶段，因此不作为本次列表 loading 改动的通过结论；该提交问题已在后续二次提交保护中修复。

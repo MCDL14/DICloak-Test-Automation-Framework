@@ -622,11 +622,32 @@ def _remote_auth_state_install_script(
     database_path: str,
 ) -> str:
     python_bin = host.python.strip() or "python"
+    venv_activate = host.venv_activate.strip()
+    command_prefix = host.command_prefix.strip()
+    python_prepare_lines = []
+    if command_prefix:
+        python_prepare_lines.append(f"{command_prefix}")
+    if venv_activate:
+        python_prepare_lines.append('if [ -f "$VENV_ACTIVATE" ]; then . "$VENV_ACTIVATE"; fi')
+    python_prepare_lines.extend(
+        [
+            'if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then',
+            '  if [ "$PYTHON_BIN" = "python" ] && command -v python3 >/dev/null 2>&1; then',
+            '    PYTHON_BIN=python3',
+            "  else",
+            '    printf "PYTHON_BIN_NOT_FOUND=%s\\n" "$PYTHON_BIN" >&2',
+            "    exit 22",
+            "  fi",
+            "fi",
+        ]
+    )
+    python_prepare_block = "\n".join(python_prepare_lines)
     return f"""
 set -e
 PROJECT={shlex.quote(host.project_dir)}
 REMOTE_ARCHIVE={shlex.quote(remote_archive)}
 PYTHON_BIN={shlex.quote(python_bin)}
+VENV_ACTIVATE={shlex.quote(venv_activate)}
 REMOTE_CONFIG={shlex.quote(host.config)}
 EXPECTED_KEY_ID={shlex.quote(signing_key_id)}
 EXPECTED_DB_SHA256={shlex.quote(database_sha256)}
@@ -655,6 +676,7 @@ for rel in "$OVERRIDE_PATH" "$CREDENTIALS_PATH" "$DATABASE_PATH"; do
   install -m 600 "$STATE_DIR/$rel" "$PROJECT/$rel"
 done
 cd "$PROJECT"
+{python_prepare_block}
 DICLOAK_EXPECTED_KEY_ID="$EXPECTED_KEY_ID" DICLOAK_EXPECTED_DB_SHA256="$EXPECTED_DB_SHA256" DICLOAK_REMOTE_CONFIG="$REMOTE_CONFIG" "$PYTHON_BIN" - <<'PY'
 from __future__ import annotations
 

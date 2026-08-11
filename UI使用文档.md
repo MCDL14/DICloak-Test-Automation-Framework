@@ -182,6 +182,8 @@ Stop-Process -Id <OwningProcess> -Force
 
 Local Auth Lab 的 `config/local_auth_lab.yaml`、`test_data/local_auth_lab/credentials.json` 和 `auth.db` 继续被普通代码快照强制排除。只有“执行前同步”会通过独立 SFTP 状态包传输它们：数据库先使用 SQLite backup API 生成一致性快照，远端以 `0600` 权限安装，并核验数据库哈希、schema 和非敏感密钥指纹。这样 macOS 在同步代码后可启动同一版本后端，并使用与 Windows 相同的签名密钥和 Session 记录验证云端登录数据；状态同步异常时用例不会继续执行。
 
+2026-08-04 起，认证状态安装脚本会在远端项目目录内先应用节点 `command_prefix` 并 source `venv_activate`，再执行 Python 校验；如果节点仍配置为 `python` 且 macOS 没有该命令，会自动回退到 `python3`。新 macOS 节点建议在 `config/remote_hosts.yaml` 中直接配置 `.venv/bin/python`、`python3` 或 pyenv 解释器绝对路径。
+
 远程节点模式还提供“检查远程节点”按钮。该按钮只做只读健康检查，不启动 APP、不执行用例。检查项包括：
 
 - 项目目录是否存在。

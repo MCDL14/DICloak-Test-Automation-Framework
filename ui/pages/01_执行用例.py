@@ -23,6 +23,7 @@ import re
 import sys
 import threading
 import time
+import hashlib
 from collections import defaultdict
 import inspect
 from pathlib import Path
@@ -34,15 +35,28 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 import streamlit as st
 
+from core.account_groups import (
+    ACCOUNT_GROUP_SLOTS,
+    AccountGroupError,
+    account_group_label,
+    account_group_missing_fields,
+    concurrent_account_group_conflicts,
+    load_account_groups,
+    runtime_account_profile,
+)
+from core.config import ConfigError, load_config
 from streamlit_runner import (
     check_remote_host,
     check_remote_code,
+    create_ui_stop_event,
     discover_cases,
     discover_remote_hosts,
     load_remote_connection_cache,
     preview_remote_command,
     remote_capability_matrix,
+    request_ui_task_stop,
     reset_stale_ui_task_lock,
+    run_local_and_remote,
     run_remote_cli,
     run_selected_tests,
     save_remote_connection_cache,
@@ -75,6 +89,39 @@ _UNITTEST_ERROR_BLOCK_RE = re.compile(
 )
 
 _REMOTE_RUN_TYPE_OPTIONS = ("远程预检", "执行用例")
+_ACCOUNT_GROUPS_PATH = _PROJECT_ROOT / "config" / "account_groups.yaml"
+_CONFIG_PATH = _PROJECT_ROOT / "config" / "config.yaml"
+_MEMBER_API_CASE_MARKERS = (
+    ".test_12_api_disable_external_member.",
+    ".test_13_api_disuse_external_member.",
+    ".test_14_api_disable_internal_member.",
+    ".test_15_api_disuse_internal_member.",
+)
+_INTERNAL_ACCOUNT_CASE_MARKERS = (
+    ".test_08_filter_member_login_account_email.",
+    ".test_11_no_edit_permission_member.",
+    ".test_14_api_disable_internal_member.",
+    ".test_15_api_disuse_internal_member.",
+)
+_MEMBER_ID_CASE_MARKERS = (
+    ".test_12_api_disable_external_member.",
+    ".test_13_api_disuse_external_member.",
+    ".test_14_api_disable_internal_member.",
+    ".test_15_api_disuse_internal_member.",
+)
+_CASE_EXTERNAL_MEMBER_CASE_MARKERS = (
+    ".test_01_create_external_member.",
+    ".test_02_edit_external_member_name.",
+    ".test_03_create_internal_member.",
+    ".test_05_filter_member_group.",
+    ".test_08_filter_member_login_account_email.",
+    ".test_10_export_member.",
+)
+
+
+def _stable_widget_key(prefix: str, identity: str) -> str:
+    digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{digest}"
 
 # ═══════════════════════════════════════════════════════════════════
 # 页面配置
@@ -98,6 +145,45 @@ except Exception as exc:
     st.caption("请确认 `config/config.yaml` 存在且格式正确；必要时先运行 `python run.py --config config/config.yaml --precheck`。")
     st.stop()
 
+try:
+    _base_config = load_config(_CONFIG_PATH)
+    account_groups = load_account_groups(_ACCOUNT_GROUPS_PATH, base_config=_base_config)
+except (ConfigError, AccountGroupError) as exc:
+    st.error(f"账号组配置读取失败：{exc}")
+    st.stop()
+
+
+def _account_group_options() -> dict[str, str]:
+    result: dict[str, str] = {}
+    for index, slot in enumerate(ACCOUNT_GROUP_SLOTS, start=1):
+        label = f"组 {index} · {account_group_label(slot, account_groups[slot])}"
+        result[label] = slot
+    return result
+
+
+def _selected_account_requirements(case_ids: list[str]) -> tuple[bool, bool, bool, bool]:
+    require_member_api = any(
+        marker in case_id
+        for case_id in case_ids
+        for marker in _MEMBER_API_CASE_MARKERS
+    )
+    require_internal = require_member_api or any(
+        marker in case_id
+        for case_id in case_ids
+        for marker in _INTERNAL_ACCOUNT_CASE_MARKERS
+    )
+    require_member_ids = require_member_api or any(
+        marker in case_id
+        for case_id in case_ids
+        for marker in _MEMBER_ID_CASE_MARKERS
+    )
+    require_case_external = any(
+        marker in case_id
+        for case_id in case_ids
+        for marker in _CASE_EXTERNAL_MEMBER_CASE_MARKERS
+    )
+    return require_internal, require_member_ids, require_member_api, require_case_external
+
 # 按模块分组
 by_module: dict[str, list[dict]] = defaultdict(list)
 for c in cases:
@@ -106,7 +192,11 @@ module_names = sorted(by_module.keys())
 
 
 def _case_key(case_id: str) -> str:
-    return f"sel_{case_id}"
+    return _stable_widget_key("case_selected", case_id)
+
+
+def _module_action_key(action: str, module_name: str) -> str:
+    return _stable_widget_key(f"module_{action}", module_name)
 
 
 def _set_case_selected(case_list: list[dict], selected: bool) -> None:
@@ -129,6 +219,8 @@ def _case_matches_keyword(case: dict, keyword: str) -> bool:
 
 
 def _summary_missing_message(log_text: str) -> tuple[str, str]:
+    if "执行已停止" in log_text or "收到停止请求" in log_text:
+        return "warning", "执行已停止，后续用例不会继续启动。"
     if "已有 UI 执行任务正在运行" in log_text:
         return "warning", "已有 UI 执行任务正在运行，本次没有启动新的用例执行。"
     if "环境预检失败" in log_text:
@@ -173,6 +265,34 @@ def _parse_result_summary(log_text: str) -> tuple[int, int, int, int, int, int, 
         return total, passed, failed, errors, skipped, flaky, rate
 
     return None
+
+
+def _parse_prefixed_result_summaries(
+    log_lines: list[str],
+) -> dict[str, tuple[int, int, int, int, int, int, str]]:
+    result: dict[str, tuple[int, int, int, int, int, int, str]] = {}
+    for label in ("Windows", "macOS"):
+        prefix = f"[{label}] "
+        target_text = "\n".join(
+            line[len(prefix):]
+            for line in log_lines
+            if line.startswith(prefix)
+        )
+        summary = _parse_result_summary(target_text)
+        if summary:
+            result[label] = summary
+    return result
+
+
+def _render_metrics(summary: tuple[int, int, int, int, int, int, str]) -> None:
+    total, passed, failed, errors, skipped, _flaky, rate = summary
+    cols = st.columns(6)
+    cols[0].metric("总计", total)
+    cols[1].metric("通过", passed)
+    cols[2].metric("失败", failed, delta=None if failed == 0 else f"-{failed}")
+    cols[3].metric("错误", errors)
+    cols[4].metric("跳过", skipped)
+    cols[5].metric("通过率", f"{rate}%")
 
 
 def _failure_detail_text(log_text: str) -> str:
@@ -322,6 +442,18 @@ def _render_execution_status(container, *, allow_reset_button: bool) -> dict[str
             if task_status.get("active") and task_status.get("thread_alive"):
                 st.warning(f"后台任务仍在运行：{task_name}")
                 st.caption(f"开始时间：{started_at}")
+                if task_status.get("stop_requested"):
+                    st.info("已发送停止请求，正在清理当前任务...")
+                elif allow_reset_button and st.button(
+                    "停止当前任务",
+                    type="secondary",
+                    use_container_width=True,
+                ):
+                    if request_ui_task_stop():
+                        st.info("已发送停止请求，正在清理当前任务...")
+                        st.rerun()
+                    else:
+                        st.warning("当前任务已结束，无需停止。")
             else:
                 st.warning("检测到残留执行锁，当前没有活动后台线程。")
                 st.caption(f"上次任务：{task_name}；开始时间：{started_at}")
@@ -373,6 +505,14 @@ selected_ids: list[str] = [
     if bool(st.session_state.get(_case_key(case["id"]), True))
 ]
 selected_count = len(selected_ids)
+(
+    require_internal_account,
+    require_member_ids,
+    require_member_api,
+    require_case_external,
+) = _selected_account_requirements(selected_ids)
+account_group_options = _account_group_options()
+account_group_labels = list(account_group_options)
 
 # ═══════════════════════════════════════════════════════════════════
 # 侧边栏：筛选 & 批量操作
@@ -393,6 +533,11 @@ remote_ssh_password = ""
 remote_cache_enabled = True
 remote_connection_ready = False
 selected_remote_host: dict[str, str] | None = None
+local_account_group_slot = ACCOUNT_GROUP_SLOTS[0]
+remote_account_group_slot = ACCOUNT_GROUP_SLOTS[1]
+local_account_missing: list[str] = []
+remote_account_missing: list[str] = []
+concurrent_group_conflicts: list[str] = []
 health_clicked = False
 code_status_clicked = False
 code_sync_clicked = False
@@ -425,44 +570,123 @@ with st.sidebar:
 
     col_a, col_b = st.columns(2)
     with col_a:
-        if st.button("✅ 全选", use_container_width=True):
-            _set_all_cases_selected(True)
-            st.rerun()
+        st.button(
+            "✅ 全选",
+            use_container_width=True,
+            on_click=_set_all_cases_selected,
+            args=(True,),
+        )
     with col_b:
-        if st.button("⬜ 取消全选", use_container_width=True):
-            _set_all_cases_selected(False)
-            st.rerun()
+        st.button(
+            "⬜ 取消全选",
+            use_container_width=True,
+            on_click=_set_all_cases_selected,
+            args=(False,),
+        )
 
     st.divider()
     st.header("运行位置")
     execution_mode = st.radio(
         "执行位置",
-        options=["本机", "远程节点"],
+        options=["本机", "远程节点", "本机 + Mac 远程"],
         horizontal=True,
-        help="本机模式按当前勾选用例执行；远程节点模式通过 SSH 在目标机器执行 CLI 命令。",
+        help="同步模式会让 Windows 本机和 macOS 远程节点同时执行同一批已勾选用例。",
     )
 
-    if execution_mode == "本机":
+    if execution_mode in {"本机", "本机 + Mac 远程"}:
         attach_existing = st.checkbox(
             "连接已打开的 APP",
             value=True,
             help="勾选：连接已手动启动的 DICloak APP。\n取消：框架自动启动新 APP。",
         )
-        st.caption("本机模式执行全部已勾选用例。")
+        if execution_mode == "本机":
+            st.caption("本机模式执行全部已勾选用例。")
+        else:
+            st.caption("同步模式会在两个独立团队中并行执行同一批用例。")
     else:
         attach_existing = True
         st.caption("远程模式选择“执行用例”时，会按下方已勾选用例执行。")
 
+    st.markdown("**执行账号组**")
+    if not _ACCOUNT_GROUPS_PATH.exists():
+        st.warning("尚未保存账号组；当前组 1 从 config.yaml 临时迁移，组 2 为空。请先到“账号组”页面保存。")
+
+    if execution_mode == "本机":
+        local_group_label = st.selectbox(
+            "本机账号组",
+            options=account_group_labels,
+            index=0,
+            help="本机子进程只会收到当前选中组的账号数据。",
+        )
+        local_account_group_slot = account_group_options[local_group_label]
+    elif execution_mode == "远程节点":
+        remote_group_label = st.selectbox(
+            "远程账号组",
+            options=account_group_labels,
+            index=1,
+            help="选中组会通过临时配置安全传给远端，执行结束后删除。",
+        )
+        remote_account_group_slot = account_group_options[remote_group_label]
+    else:
+        local_group_label = st.selectbox(
+            "Windows 本机账号组",
+            options=account_group_labels,
+            index=0,
+        )
+        remote_group_label = st.selectbox(
+            "macOS 远程账号组",
+            options=account_group_labels,
+            index=1,
+        )
+        local_account_group_slot = account_group_options[local_group_label]
+        remote_account_group_slot = account_group_options[remote_group_label]
+        if local_account_group_slot == remote_account_group_slot:
+            st.error("同步执行必须选择两个不同账号组，避免两个系统同时操作同一团队数据。")
+        else:
+            concurrent_group_conflicts = concurrent_account_group_conflicts(
+                account_groups[local_account_group_slot],
+                account_groups[remote_account_group_slot],
+            )
+            if concurrent_group_conflicts:
+                st.error(
+                    "两个账号组不能用于同步执行："
+                    f"{'、'.join(concurrent_group_conflicts)}。请确认两组属于不同账号和不同团队。"
+                )
+
+    local_account_missing = account_group_missing_fields(
+        account_groups[local_account_group_slot],
+        require_internal=require_internal_account,
+        require_member_ids=require_member_ids,
+        require_member_api=require_member_api,
+        require_case_external=require_case_external,
+    )
+    remote_account_missing = account_group_missing_fields(
+        account_groups[remote_account_group_slot],
+        require_internal=require_internal_account,
+        require_member_ids=require_member_ids,
+        require_member_api=require_member_api,
+        require_case_external=require_case_external,
+    )
+
     st.divider()
     st.caption(f"共 {len(cases)} 条用例 / {len(module_names)} 个模块")
 
-if execution_mode == "远程节点":
+local_account_profile = runtime_account_profile(account_groups[local_account_group_slot])
+remote_account_profile = runtime_account_profile(account_groups[remote_account_group_slot])
+
+if execution_mode in {"远程节点", "本机 + Mac 远程"}:
     st.subheader("远程节点执行")
     try:
         remote_hosts = _load_remote_hosts()
     except Exception as exc:
         remote_hosts = []
         st.error(f"远程节点配置读取失败：{exc}")
+    if execution_mode == "本机 + Mac 远程":
+        remote_hosts = [
+            host
+            for host in remote_hosts
+            if str(host.get("platform", "")).strip().lower() in {"mac", "macos", "darwin", "macos-arm64"}
+        ]
 
     host_labels = [
         f"{host['name']} ({host.get('platform') or 'unknown'})"
@@ -579,26 +803,36 @@ if execution_mode == "远程节点":
 
         st.markdown("**运行类型**")
         type_col, info_col = st.columns([1, 2])
-        with type_col:
-            remote_run_type = st.selectbox(
-                "运行类型",
-                options=list(_REMOTE_RUN_TYPE_OPTIONS),
-                help="远程预检只检查环境；执行用例才会运行测试。",
-            )
-        if remote_run_type == "远程预检":
-            remote_scope_label = "远程预检"
-            remote_scope = "precheck"
-            remote_value = ""
-            with info_col:
-                st.info("当前只检查远端环境，不运行任何用例。")
-        else:
-            remote_scope_label = "执行用例"
+        if execution_mode == "本机 + Mac 远程":
+            remote_run_type = "执行用例"
+            remote_scope_label = "同步执行"
             remote_scope = "cases"
             remote_value = ""
+            with type_col:
+                st.text_input("运行类型", value="Windows + macOS 同步执行", disabled=True)
             with info_col:
-                st.info(f"将远程执行下方已勾选的 {len(selected_ids)} 条用例。")
-                if not _remote_selected_cases_supported():
-                    st.error("远程按勾选用例执行需要重启 Streamlit 后端，请重启 UI 后再运行。")
+                st.info(f"两个执行端将同时运行下方已勾选的 {len(selected_ids)} 条用例。")
+        else:
+            with type_col:
+                remote_run_type = st.selectbox(
+                    "运行类型",
+                    options=list(_REMOTE_RUN_TYPE_OPTIONS),
+                    help="远程预检只检查环境；执行用例才会运行测试。",
+                )
+            if remote_run_type == "执行用例":
+                remote_scope_label = "执行用例"
+                remote_scope = "cases"
+                remote_value = ""
+                with info_col:
+                    st.info(f"将远程执行下方已勾选的 {len(selected_ids)} 条用例。")
+                    if not _remote_selected_cases_supported():
+                        st.error("远程按勾选用例执行需要重启 Streamlit 后端，请重启 UI 后再运行。")
+            else:
+                remote_scope_label = "远程预检"
+                remote_scope = "precheck"
+                remote_value = ""
+                with info_col:
+                    st.info("当前只检查远端环境，不运行任何用例。")
 
         st.markdown("**执行选项**")
         option_attach_col, option_artifact_col, option_sync_col = st.columns(3)
@@ -677,6 +911,12 @@ if execution_mode == "远程节点":
 
     st.caption("远程模式选择“执行用例”时，会按下方已勾选用例执行。")
 
+if execution_mode in {"本机", "本机 + Mac 远程"} and local_account_missing:
+    st.error(f"Windows 本机账号组缺少：{'、'.join(local_account_missing)}。请到“账号组”页面补齐。")
+if execution_mode in {"远程节点", "本机 + Mac 远程"} and remote_scope == "cases" and remote_account_missing:
+    remote_account_label = "macOS 远程账号组" if execution_mode == "本机 + Mac 远程" else "远程账号组"
+    st.error(f"{remote_account_label}缺少：{'、'.join(remote_account_missing)}。请到“账号组”页面补齐。")
+
 # ═══════════════════════════════════════════════════════════════════
 # 主体：用例选择列表
 # ═══════════════════════════════════════════════════════════════════
@@ -714,13 +954,21 @@ else:
         with col_count:
             st.markdown(f"已选 {mod_selected_count}/{len(all_mod_cases)}")
         with col_select:
-            if st.button("选中模块", key=f"select_mod_{mod}", use_container_width=True):
-                _set_case_selected(all_mod_cases, True)
-                st.rerun()
+            st.button(
+                "选中模块",
+                key=_module_action_key("select", mod),
+                use_container_width=True,
+                on_click=_set_case_selected,
+                args=(all_mod_cases, True),
+            )
         with col_clear:
-            if st.button("取消模块", key=f"clear_mod_{mod}", use_container_width=True):
-                _set_case_selected(all_mod_cases, False)
-                st.rerun()
+            st.button(
+                "取消模块",
+                key=_module_action_key("clear", mod),
+                use_container_width=True,
+                on_click=_set_case_selected,
+                args=(all_mod_cases, False),
+            )
 
         with st.expander(
             f"查看用例（{len(mod_cases)} 条）",
@@ -746,13 +994,25 @@ col_btn, col_info = st.columns([1, 3])
 with col_btn:
     if execution_mode == "本机":
         run_label = f"▶ 运行选中（{len(selected_ids)} 条）"
-        run_disabled = len(selected_ids) == 0
+        run_disabled = len(selected_ids) == 0 or bool(local_account_missing)
+    elif execution_mode == "本机 + Mac 远程":
+        run_label = f"▶ Windows + macOS 同步运行（{len(selected_ids)} 条）"
+        run_disabled = (
+            len(selected_ids) == 0
+            or not remote_connection_ready
+            or bool(local_account_missing)
+            or bool(remote_account_missing)
+            or local_account_group_slot == remote_account_group_slot
+            or bool(concurrent_group_conflicts)
+            or not _remote_selected_cases_supported()
+        )
     else:
         run_label = _remote_run_button_label(remote_scope_label, remote_value, case_count=len(selected_ids))
         run_disabled = (
             not remote_connection_ready
             or (remote_scope == "cases" and len(selected_ids) == 0)
             or (remote_scope == "cases" and not _remote_selected_cases_supported())
+            or (remote_scope == "cases" and bool(remote_account_missing))
         )
     if task_status.get("locked"):
         run_disabled = True
@@ -765,6 +1025,8 @@ with col_btn:
 with col_info:
     if execution_mode == "本机":
         st.caption("本机执行全部已勾选用例；显示模块和搜索显示只影响列表可见性。")
+    elif execution_mode == "本机 + Mac 远程":
+        st.caption("Windows 与 macOS 使用不同账号组并行执行相同用例；停止任务会同时中断两个执行端。")
     elif remote_scope == "precheck":
         st.caption("当前会执行远程预检，不会运行用例；如需跑用例，请把运行类型改为“执行用例”。")
     else:
@@ -780,6 +1042,7 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
     status_placeholder = st.empty()
 
     log_queue: queue.Queue = queue.Queue()
+    stop_event = create_ui_stop_event()
 
     if execution_mode == "远程节点" and remote_cache_enabled and remote_connection_ready:
         try:
@@ -802,6 +1065,7 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
                 "ssh_port": remote_ssh_port,
                 "ssh_username": remote_ssh_username,
                 "ssh_password": remote_ssh_password,
+                "stop_event": stop_event,
             },
             daemon=True,
         )
@@ -814,6 +1078,7 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
                 "ssh_port": remote_ssh_port,
                 "ssh_username": remote_ssh_username,
                 "ssh_password": remote_ssh_password,
+                "stop_event": stop_event,
             },
             daemon=True,
         )
@@ -826,6 +1091,7 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
                 "ssh_port": remote_ssh_port,
                 "ssh_username": remote_ssh_username,
                 "ssh_password": remote_ssh_password,
+                "stop_event": stop_event,
             },
             daemon=True,
         )
@@ -833,7 +1099,31 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
         thread = threading.Thread(
             target=run_selected_tests,
             args=(selected_ids, log_queue),
-            kwargs={"attach_existing_app": attach_existing},
+            kwargs={
+                "attach_existing_app": attach_existing,
+                "account_profile": local_account_profile,
+                "stop_event": stop_event,
+            },
+            daemon=True,
+        )
+    elif execution_mode == "本机 + Mac 远程":
+        thread = threading.Thread(
+            target=run_local_and_remote,
+            args=(selected_ids, log_queue),
+            kwargs={
+                "local_attach_existing_app": attach_existing,
+                "local_account_profile": local_account_profile,
+                "remote_host_name": remote_host_name,
+                "remote_attach_existing_app": remote_attach_existing,
+                "remote_collect_artifacts": remote_collect_artifacts,
+                "remote_sync_before_run": remote_sync_before_run,
+                "remote_ssh_host": remote_ssh_host,
+                "remote_ssh_port": remote_ssh_port,
+                "remote_ssh_username": remote_ssh_username,
+                "remote_ssh_password": remote_ssh_password,
+                "remote_account_profile": remote_account_profile,
+                "stop_event": stop_event,
+            },
             daemon=True,
         )
     else:
@@ -849,6 +1139,8 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
                 "ssh_username": remote_ssh_username,
                 "ssh_password": remote_ssh_password,
                 "case_ids": selected_ids if remote_scope == "cases" else None,
+                "account_profile": remote_account_profile if remote_scope == "cases" else None,
+                "stop_event": stop_event,
             },
             daemon=True,
         )
@@ -868,29 +1160,36 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
     else:
         status_placeholder.info("⏳ 正在执行...")
 
-    while True:
-        try:
-            msg = log_queue.get(timeout=1)
-            if msg is None:          # 哨兵：执行结束
-                break
-            log_lines.append(msg)
-            last_log_time = time.time()
-            idle_warning_shown = False
-            _refresh_execution_status(task_status_container, thread=thread)
-            # 只保留最近日志行避免 UI 卡顿
-            display = "\n".join(log_lines[-_LOG_DISPLAY_LINES:])
-            log_placeholder.code(display, language="text", height=_LOG_DISPLAY_HEIGHT)
-        except queue.Empty:
-            _refresh_execution_status(task_status_container, thread=thread)
-            if not thread.is_alive():
-                break
-            idle_seconds = int(time.time() - last_log_time)
-            if idle_seconds >= _LOG_IDLE_WARNING_SECONDS and not idle_warning_shown:
-                status_placeholder.warning(
-                    f"⏳ 后台仍在执行，但已 {idle_seconds} 秒没有新日志。"
-                    "如果 APP/CDP 或系统弹窗卡住，请到本机窗口检查当前状态。"
-                )
-                idle_warning_shown = True
+    received_sentinel = False
+    try:
+        while True:
+            try:
+                msg = log_queue.get(timeout=1)
+                if msg is None:          # 哨兵：执行结束
+                    received_sentinel = True
+                    break
+                log_lines.append(msg)
+                last_log_time = time.time()
+                idle_warning_shown = False
+                _refresh_execution_status(task_status_container, thread=thread)
+                # 只保留最近日志行避免 UI 卡顿
+                display = "\n".join(log_lines[-_LOG_DISPLAY_LINES:])
+                log_placeholder.code(display, language="text", height=_LOG_DISPLAY_HEIGHT)
+            except queue.Empty:
+                _refresh_execution_status(task_status_container, thread=thread)
+                if not thread.is_alive():
+                    break
+                idle_seconds = int(time.time() - last_log_time)
+                if idle_seconds >= _LOG_IDLE_WARNING_SECONDS and not idle_warning_shown:
+                    status_placeholder.warning(
+                        f"⏳ 后台仍在执行，但已 {idle_seconds} 秒没有新日志。"
+                        "如果 APP/CDP 或系统弹窗卡住，请到本机窗口检查当前状态。"
+                    )
+                    idle_warning_shown = True
+    finally:
+        # Streamlit 右上角 Stop/页面重跑会中断本脚本；同步取消后台任务。
+        if not received_sentinel and thread.is_alive():
+            request_ui_task_stop(stop_event)
     _refresh_execution_status(task_status_container)
 
     # ═══════════════════════════════════════════════════════════════
@@ -899,38 +1198,64 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
 
     full_text = "\n".join(log_lines)
 
-    if health_clicked or code_status_clicked or code_sync_clicked or execution_mode == "远程节点":
+    if health_clicked or code_status_clicked or code_sync_clicked or execution_mode in {"远程节点", "本机 + Mac 远程"}:
         _render_remote_result_summary(log_lines)
 
-    # 用正则从最终总结行提取统计
-    summary = _parse_result_summary(full_text)
-    if summary:
-        total, passed, failed, errors, skipped, flaky, rate = summary
-
-        # 指标卡片栏
-        cols = st.columns(6)
-        cols[0].metric("📊 总计", total)
-        cols[1].metric("✅ 通过", passed)
-        cols[2].metric("❌ 失败", failed, delta=None if failed == 0 else f"-{failed}")
-        cols[3].metric("⚠️ 错误", errors)
-        cols[4].metric("⏭️ 跳过", skipped)
-        cols[5].metric("📈 通过率", f"{rate}%")
-
-        # 失败详情
-        if failed > 0 or errors > 0:
-            with st.expander("🔍 失败/错误详情", expanded=True):
-                failure_details = _failure_detail_text(full_text)
-                if failure_details:
-                    st.code(failure_details, language="text")
-                else:
-                    st.caption("详情请查看上方完整日志中的 CASE FAIL/CASE ERROR 行")
-
-        status_placeholder.success("✅ 执行完成")
-    else:
-        level, message = _summary_missing_message(full_text)
-        if level == "error":
-            status_placeholder.error(f"❌ {message}")
-        elif level == "success":
-            status_placeholder.success(f"✅ {message}")
+    combined_summaries = (
+        _parse_prefixed_result_summaries(log_lines)
+        if execution_mode == "本机 + Mac 远程" and run_clicked
+        else {}
+    )
+    if combined_summaries:
+        st.subheader("同步执行结果")
+        result_tabs = st.tabs(["Windows 本机", "macOS 远程"])
+        has_failure = False
+        for result_tab, label in zip(result_tabs, ("Windows", "macOS")):
+            with result_tab:
+                target_summary = combined_summaries.get(label)
+                if not target_summary:
+                    st.warning(f"{label} 未生成可解析的结果统计，请查看上方日志。")
+                    has_failure = True
+                    continue
+                _render_metrics(target_summary)
+                _, _, target_failed, target_errors, _, _, _ = target_summary
+                if target_failed or target_errors:
+                    has_failure = True
+                    prefix = f"[{label}] "
+                    target_text = "\n".join(
+                        line[len(prefix):]
+                        for line in log_lines
+                        if line.startswith(prefix)
+                    )
+                    with st.expander("失败/错误详情", expanded=True):
+                        failure_details = _failure_detail_text(target_text)
+                        st.code(failure_details or "详情请查看上方完整日志。", language="text")
+        if has_failure:
+            status_placeholder.warning("同步执行完成，至少一个执行端存在失败、错误或缺少结果。")
         else:
-            status_placeholder.warning(f"⚠️ {message}")
+            status_placeholder.success("Windows 本机与 macOS 远程同步执行完成")
+    else:
+        # 用正则从最终总结行提取统计
+        summary = _parse_result_summary(full_text)
+        if summary:
+            total, passed, failed, errors, skipped, flaky, rate = summary
+
+            _render_metrics(summary)
+
+            if failed > 0 or errors > 0:
+                with st.expander("失败/错误详情", expanded=True):
+                    failure_details = _failure_detail_text(full_text)
+                    if failure_details:
+                        st.code(failure_details, language="text")
+                    else:
+                        st.caption("详情请查看上方完整日志中的 CASE FAIL/CASE ERROR 行")
+
+            status_placeholder.success("执行完成")
+        else:
+            level, message = _summary_missing_message(full_text)
+            if level == "error":
+                status_placeholder.error(message)
+            elif level == "success":
+                status_placeholder.success(message)
+            else:
+                status_placeholder.warning(message)

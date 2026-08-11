@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from core.account_groups import account_group_test_suffix, case_external_member_name
 from core.assertions import assert_equal, assert_true
 from core.cdp_driver import CDPDriver
 from core.config import load_config
@@ -30,16 +31,17 @@ class TestCreateInternalMember(unittest.TestCase):
     def test_create_internal_member_and_delete(self) -> None:
         member_name = "自动化-创建内部成员"
         member_group = "运营组"
-        login_account = "mcdl666"
+        login_account = f"mcdl{account_group_test_suffix(self.config)}"
         login_password = "M12345678"
         environment_group = "未分组"
         identity = "员工"
-        supervisor = "外部成员1"
         member_page = MemberPage(cdp_driver=self.cdp, config=self.config)
         created = False
 
         try:
             member_page.open_list()
+            supervisor = case_external_member_name(self.config)
+            member_page.clear_filters()
             member_page.delete_member_if_exists(member_name)
 
             member_page.create_internal_member(
@@ -61,9 +63,11 @@ class TestCreateInternalMember(unittest.TestCase):
                 f"member environment group did not match in list: {details}",
             )
             assert_true(
-                identity in details.get("成员身份", "") and "内部成员" in details.get("成员身份", ""),
+                identity in details.get("成员身份", ""),
                 f"member identity/type did not match in list: {details}",
             )
+            identity_type = member_page.member_identity_type_tooltip(member_name, "内部成员")
+            assert_true("内部成员" in identity_type, f"member type tooltip did not match: {identity_type}")
             assert_equal(
                 details.get("所属成员分组"),
                 member_group,

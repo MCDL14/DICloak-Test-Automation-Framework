@@ -66,11 +66,18 @@ class MemberEditApiClient:
     def _load_api_config(self) -> MemberEditApiConfig:
         data = api_member_edit_data(self.config)
         base_url = str(data.get("base_url") or DEFAULT_BASE_URL).strip()
-        token = str(os.environ.get(API_TOKEN_ENV) or data.get("token") or "").strip()
+        profile_selected = bool(self.config.get("_account_profile_file"))
+        token = str(
+            (data.get("token") if profile_selected else os.environ.get(API_TOKEN_ENV))
+            or data.get("token")
+            or os.environ.get(API_TOKEN_ENV)
+            or ""
+        ).strip()
         member_id = str(
-            os.environ.get(API_MEMBER_ID_ENV)
+            (data.get("external_member_id") if profile_selected else os.environ.get(API_MEMBER_ID_ENV))
             or data.get("external_member_id")
             or data.get("member_id")
+            or os.environ.get(API_MEMBER_ID_ENV)
             or DEFAULT_EXTERNAL_MEMBER_ID
         ).strip()
         status_retry = _nested_mapping(data, "status_retry")

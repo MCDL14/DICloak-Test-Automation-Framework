@@ -10,6 +10,7 @@
 - `test_data/members/`：成员导出校验用的预期 xlsx 文件。
 - `test_data/extensions/`：本地扩展包安装用例使用的 zip 文件。
 - `test_data/Tools/`：抓包工具等外部工具的本地启动文件。
+- `test_data/local_auth_lab/`：Local Auth Lab 的持久签名凭据和 SQLite 认证数据库；属于本机敏感运行状态，不提交 Git，也不进入普通代码快照。
 
 ## 配置关系
 
@@ -62,10 +63,15 @@ test_data:
 8. 成员导出用例使用的预期 xlsx 文件、导出目录和文件名正则。
 9. 成员 open API 用例使用的接口地址、目标外部成员 ID、内部成员信息、到期停用参数、状态码重试次数和重试间隔；配置集中在 `test_data.api_member_edit`，并按 `internal_member`、`disuse`、`status_retry` 小块分组，避免 YAML 过度膨胀。
 10. 代理管理创建自定义代理用例使用的代理主机、端口、账号和密码；配置集中在 `test_data.proxy_custom`。Windows 系统代理主机和端口属于运行环境配置，统一维护在 `config.yaml` 顶层 `windows_system_proxy.host/port`，默认 `127.0.0.1:7897`。
+11. 新环境 Cookie 持续保持用例使用 `test_data.environment_new_cookie_persistence`，当前账号为 `MCDL004`，密码只写入本地 `config/test_data.yaml`。
+12. 新环境 Local Storage 持续保持用例使用 `test_data.environment_new_local_storage_persistence`，当前账号为 `MCDL005`，密码只写入本地 `config/test_data.yaml`。
+13. 新环境 IndexedDB 持续保持用例使用 `test_data.environment_new_indexeddb_persistence`，当前账号为 `MCDL006`，密码只写入本地 `config/test_data.yaml`。
 
 成员 open API 的真实 token 属于敏感信息，优先通过运行进程环境变量 `DICLOAK_API_MEMBER_EDIT_TOKEN` 注入；如必须写入本地配置，只能写入被 `.gitignore` 排除的 `config/test_data.yaml`，不要写入 `config/test_data.example.yaml`、测试代码或文档。目标外部成员 ID 可通过 `DICLOAK_API_MEMBER_EDIT_MEMBER_ID` 临时覆盖。
 
 代理管理创建自定义代理用例的真实账号和密码属于敏感信息，优先通过运行进程环境变量 `DICLOAK_PROXY_CUSTOM_ACCOUNT`、`DICLOAK_PROXY_CUSTOM_PASSWORD` 注入；如必须写入本地配置，只能写入被 `.gitignore` 排除的 `config/test_data.yaml`，不要写入 `config/test_data.example.yaml`、测试代码或文档。
+
+Local Auth Lab 的 `config/local_auth_lab.yaml`、`test_data/local_auth_lab/credentials.json` 和 `auth.db` 由独立认证状态同步链路处理，普通代码清单和归档强制排除这些文件。远程执行前同步当前代码时，普通 `config/config.yaml` 与 `config/test_data.yaml` 会随当前工作区同步；认证覆盖配置、持久密钥和数据库则通过独立 SFTP 状态包传输并校验。仓库示例只保留账号标识和密码占位说明，不保存真实密码、签名密钥、管理密钥或 session token。
 
 后续扩展管理、环境分组管理、成员管理、全局设置等模块新增用例时，只把跨机器路径、外部文件、预置业务数据和少量流程参数写入 `config/test_data.yaml`。用例自己创建、修改、删除的临时数据，应优先使用统一命名工具自动生成。
 

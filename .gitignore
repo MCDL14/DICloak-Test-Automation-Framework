@@ -13,10 +13,14 @@ config/test_data.yaml
 config/remote_hosts.yaml
 config/remote_sync.yaml
 config/remote_connection_cache.yaml
+config/account_groups.yaml
+config/.ui_account_profile_*.yaml
 logs/*
 reports/*
 screenshots/*
 remote_artifacts/*
+test_data/local_auth_lab/*
+config/local_auth_lab.yaml
 !logs/.gitkeep
 !reports/.gitkeep
 !screenshots/.gitkeep

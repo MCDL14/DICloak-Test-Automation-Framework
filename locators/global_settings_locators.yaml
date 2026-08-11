@@ -6,6 +6,10 @@ global_settings_menu_candidates:
 global_settings_page_marker:
   selector: "body"
 
+# “数据设置 → 数据同步”功能块；Cookie、Local Storage、IndexedDB 等同步项均在此区域内。
+data_sync_root:
+  selector: "#AsyncData"
+
 # 全局设置页常见 loading 遮罩。
 loading_mask:
   selector: ".el-loading-mask, .el-loading-spinner"

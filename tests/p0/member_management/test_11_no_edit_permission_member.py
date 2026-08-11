@@ -10,13 +10,10 @@ from core.config import load_config
 from core.logger import setup_logger
 from pages.environment_page import EnvironmentPage
 from pages.login_page import LoginPage
+from tests.p0.member_management.member_open_api import internal_member_password, internal_member_username
 
 
 CASE_MODULE = "成员管理"
-
-NO_EDIT_USERNAME = "MCDL007"
-NO_EDIT_PASSWORD = "M12345678"
-
 
 class TestNoEditPermissionMember(unittest.TestCase):
     @classmethod
@@ -35,19 +32,21 @@ class TestNoEditPermissionMember(unittest.TestCase):
         login_page = LoginPage(cdp_driver=self.cdp, config=self.config)
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         should_restore_config_account = False
+        no_edit_username = internal_member_username(self.config)
+        no_edit_password = internal_member_password(self.config)
 
         try:
             login_page.logout()
             time.sleep(1)
 
-            login_page.login(username=NO_EDIT_USERNAME, password=NO_EDIT_PASSWORD)
+            login_page.login(username=no_edit_username, password=no_edit_password)
             should_restore_config_account = True
             time.sleep(3)
 
-            assert_true(login_page.is_logged_in(), f"{NO_EDIT_USERNAME} login failed")
+            assert_true(login_page.is_logged_in(), f"{no_edit_username} login failed")
             assert_true(
                 bool(login_page.current_account()),
-                f"{NO_EDIT_USERNAME} login succeeded but current account could not be read",
+                f"{no_edit_username} login succeeded but current account could not be read",
             )
 
             environment_page.open_list()

@@ -28,12 +28,13 @@ class TestFilterMemberName(unittest.TestCase):
         cls.cdp.close()
 
     def test_filter_member_name_and_id(self) -> None:
+        target_member_name = "自动化成员1"
         name_keyword = "自动化成员"
-        target_member_id = "1972494001272483841"
         member_page = MemberPage(cdp_driver=self.cdp, config=self.config)
 
         try:
             member_page.open_list()
+            target_member_id = member_page.member_id_by_exact_name(target_member_name)
             member_page.clear_filters()
 
             member_page.filter_by_member_name_or_id(name_keyword)

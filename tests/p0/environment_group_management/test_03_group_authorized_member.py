@@ -51,7 +51,19 @@ class TestGroupAuthorizedMember(unittest.TestCase):
             assert_true(group_page.group_visible(group_name), f"environment group was not created: {group_name}")
 
             member_page.open_list()
-            member_original_groups = member_page.assign_environment_group_to_member(member_name, group_name)
+            member_page.clear_filters()
+            member_id = member_page.member_id_by_exact_name(member_name)
+            resolved_member_name = member_page.member_name_by_id(member_id)
+            assert_true(
+                resolved_member_name == member_name,
+                "member ID did not map back to the expected automation member: "
+                f"expected={member_name}, actual={resolved_member_name}, id={member_id}",
+            )
+            member_original_groups = member_page.assign_environment_group_to_member(
+                member_name,
+                group_name,
+                member_id=member_id,
+            )
             member_updated = True
 
             group_page.open_list()
@@ -113,7 +125,11 @@ class TestGroupAuthorizedMember(unittest.TestCase):
                 raise cleanup_error
 
     def _groups_expected_in_group_list(self, group_names: list[str]) -> list[str]:
-        return [group for group in group_names if group and group != "全部分组"]
+        return [
+            group
+            for group in group_names
+            if group and str(group).strip().lower() not in {"all", "全部分组"}
+        ]
 
 
 if __name__ == "__main__":

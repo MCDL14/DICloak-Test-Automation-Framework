@@ -1,11 +1,11 @@
 # Copy this file to config/remote_sync.yaml only when the default remote
 # snapshot sync rules need local overrides.
 #
-# The real config/remote_sync.yaml is ignored by git. Keep secrets and local
-# runtime configs out of sync packages; remote sync preserves the remote
-# config/*.yaml runtime files from the previous active project directory.
-# Runtime configs, connection caches, logs, screenshots, reports, and
-# remote_artifacts are always excluded even if a local override forgets them.
+# The real config/remote_sync.yaml is ignored by git. By default, remote sync
+# now publishes local config/ and test_data/ so remote nodes run with the same
+# runtime config and fixtures as this workspace. Remote connection configs,
+# logs, screenshots, reports, and remote_artifacts are always excluded even if
+# a local override forgets them.
 
 include:
   - "*.md"
@@ -18,14 +18,9 @@ include:
   - "pages/**"
   - "tests/**"
   - "ui/**"
-  - "config/*.example.yaml"
-  - "test_data/README.md"
-  - "test_data/import/**"
-  - "test_data/export/**"
-  - "test_data/bookmarks/**"
-  - "test_data/members/**"
-  - "test_data/extensions/**"
-  - "test_data/Tools/**"
+  - "web_templates/**"
+  - "config/**"
+  - "test_data/**"
 
 exclude:
   - ".git/**"
@@ -43,8 +38,13 @@ exclude:
   - "reports/**"
   - "screenshots/**"
   - "remote_artifacts/**"
-  - "config/config.yaml"
-  - "config/test_data.yaml"
+  # Local Auth Lab state is never part of the code manifest/archive. When the
+  # UI uses "sync before remote run", a dedicated SFTP channel transfers the
+  # override, persistent credentials, and a consistent SQLite backup.
+  - "test_data/local_auth_lab/**"
+  - "config/local_auth_lab.yaml"
   - "config/remote_hosts.yaml"
   - "config/remote_sync.yaml"
   - "config/remote_connection_cache.yaml"
+  - "config/account_groups.yaml"
+  - "config/.ui_account_profile_*.yaml"

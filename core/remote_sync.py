@@ -18,6 +18,8 @@ from typing import Any
 
 import yaml
 
+from core.config import load_config
+from core.local_auth_lab.state_sync import create_state_bundle
 from core.remote_runner import RemoteHost, RemoteRunError, _connect_ssh_client, _sanitize_log_line
 
 
@@ -35,14 +37,9 @@ DEFAULT_INCLUDE_PATTERNS = (
     "pages/**",
     "tests/**",
     "ui/**",
-    "config/*.example.yaml",
-    "test_data/README.md",
-    "test_data/import/**",
-    "test_data/export/**",
-    "test_data/bookmarks/**",
-    "test_data/members/**",
-    "test_data/extensions/**",
-    "test_data/Tools/**",
+    "web_templates/**",
+    "config/**",
+    "test_data/**",
 )
 
 PROTECTED_EXCLUDE_PATTERNS = (
@@ -50,11 +47,13 @@ PROTECTED_EXCLUDE_PATTERNS = (
     "reports/**",
     "screenshots/**",
     "remote_artifacts/**",
-    "config/config.yaml",
-    "config/test_data.yaml",
+    "test_data/local_auth_lab/**",
+    "config/local_auth_lab.yaml",
     "config/remote_hosts.yaml",
     "config/remote_sync.yaml",
     "config/remote_connection_cache.yaml",
+    "config/account_groups.yaml",
+    "config/.ui_account_profile_*.yaml",
 )
 
 DEFAULT_EXCLUDE_PATTERNS = (
@@ -107,6 +106,16 @@ class RemoteSyncResult:
     archive_size: int
     started_at: float
     finished_at: float
+
+
+@dataclass(frozen=True)
+class RemoteAuthStateSyncResult:
+    host_name: str
+    signing_key_id: str
+    database_sha256: str
+    users: int
+    sessions: int
+    archive_size: int
 
 
 def check_remote_code_status(
@@ -249,6 +258,75 @@ def sync_remote_project(
         archive_size=archive_size,
         started_at=started_at,
         finished_at=finished_at,
+    )
+
+
+def sync_remote_local_auth_lab_state(
+    host: RemoteHost,
+    log_queue: queue.Queue | None = None,
+    *,
+    project_root: Path | str = ".",
+    local_config_path: Path | str = "config/config.yaml",
+) -> RemoteAuthStateSyncResult:
+    """Synchronize auth credentials and a consistent session DB outside the code snapshot."""
+    root = Path(project_root).resolve()
+    config_path = Path(local_config_path)
+    if not config_path.is_absolute():
+        config_path = root / config_path
+    try:
+        config = load_config(config_path)
+        bundle = create_state_bundle(config, root)
+    except (OSError, ValueError) as exc:
+        raise RemoteRunError(f"cannot prepare local auth lab state: {exc}") from exc
+
+    archive_size = bundle.archive_path.stat().st_size
+    remote_archive = f"/tmp/dicloak_auth_state_{bundle.signing_key_id}_{int(time.time())}.tar.gz"
+    _put(
+        log_queue,
+        "本地认证状态同步：开始 "
+        f"节点={host.name} key_id={bundle.signing_key_id} "
+        f"users={bundle.users} sessions={bundle.sessions}",
+    )
+    client = _connect_ssh_client(host)
+    try:
+        sftp = client.open_sftp()
+        try:
+            sftp.put(str(bundle.archive_path), remote_archive)
+        finally:
+            sftp.close()
+        _exec_checked(
+            client,
+            _remote_auth_state_install_script(
+                host=host,
+                remote_archive=remote_archive,
+                signing_key_id=bundle.signing_key_id,
+                database_sha256=bundle.database_sha256,
+                override_path=bundle.relative_override_path,
+                credentials_path=bundle.relative_credentials_path,
+                database_path=bundle.relative_database_path,
+            ),
+            log_queue,
+        )
+    finally:
+        client.close()
+        try:
+            bundle.archive_path.unlink()
+        except OSError:
+            pass
+
+    _put(
+        log_queue,
+        "本地认证状态同步完成 → "
+        f"节点={host.name} key_id={bundle.signing_key_id} "
+        f"users={bundle.users} sessions={bundle.sessions}",
+    )
+    return RemoteAuthStateSyncResult(
+        host_name=host.name,
+        signing_key_id=bundle.signing_key_id,
+        database_sha256=bundle.database_sha256,
+        users=bundle.users,
+        sessions=bundle.sessions,
+        archive_size=archive_size,
     )
 
 
@@ -451,8 +529,11 @@ if [ "$OLD_EXISTS" = "1" ] && [ -d "$OLD_REAL/config" ]; then
     [ -f "$cfg" ] || continue
     base=$(basename "$cfg")
     case "$base" in
-      *.example.yaml|remote_hosts.yaml|remote_sync.yaml|remote_connection_cache.yaml) continue ;;
+      *.example.yaml|remote_hosts.yaml|remote_sync.yaml|remote_connection_cache.yaml|account_groups.yaml) continue ;;
     esac
+    if [ -f "$RELEASE_DIR/config/$base" ]; then
+      continue
+    fi
     cp "$cfg" "$RELEASE_DIR/config/"
   done
 fi
@@ -527,6 +608,110 @@ if root.exists():
     print(f"PRUNED_RELEASES={{removed}}")
 PY
 fi
+"""
+
+
+def _remote_auth_state_install_script(
+    *,
+    host: RemoteHost,
+    remote_archive: str,
+    signing_key_id: str,
+    database_sha256: str,
+    override_path: str,
+    credentials_path: str,
+    database_path: str,
+) -> str:
+    python_bin = host.python.strip() or "python"
+    venv_activate = host.venv_activate.strip()
+    command_prefix = host.command_prefix.strip()
+    python_prepare_lines = []
+    if command_prefix:
+        python_prepare_lines.append(f"{command_prefix}")
+    if venv_activate:
+        python_prepare_lines.append('if [ -f "$VENV_ACTIVATE" ]; then . "$VENV_ACTIVATE"; fi')
+    python_prepare_lines.extend(
+        [
+            'if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then',
+            '  if [ "$PYTHON_BIN" = "python" ] && command -v python3 >/dev/null 2>&1; then',
+            '    PYTHON_BIN=python3',
+            "  else",
+            '    printf "PYTHON_BIN_NOT_FOUND=%s\\n" "$PYTHON_BIN" >&2',
+            "    exit 22",
+            "  fi",
+            "fi",
+        ]
+    )
+    python_prepare_block = "\n".join(python_prepare_lines)
+    return f"""
+set -e
+PROJECT={shlex.quote(host.project_dir)}
+REMOTE_ARCHIVE={shlex.quote(remote_archive)}
+PYTHON_BIN={shlex.quote(python_bin)}
+VENV_ACTIVATE={shlex.quote(venv_activate)}
+REMOTE_CONFIG={shlex.quote(host.config)}
+EXPECTED_KEY_ID={shlex.quote(signing_key_id)}
+EXPECTED_DB_SHA256={shlex.quote(database_sha256)}
+OVERRIDE_PATH={shlex.quote(override_path)}
+CREDENTIALS_PATH={shlex.quote(credentials_path)}
+DATABASE_PATH={shlex.quote(database_path)}
+STATE_DIR=$(mktemp -d /tmp/dicloak_auth_state.XXXXXX)
+cleanup_auth_state() {{
+  case "$STATE_DIR" in
+    /tmp/dicloak_auth_state.*) rm -rf -- "$STATE_DIR" ;;
+    *) printf 'AUTH_STATE_UNSAFE_TEMP_PATH=%s\n' "$STATE_DIR" >&2 ;;
+  esac
+  case "$REMOTE_ARCHIVE" in
+    /tmp/dicloak_auth_state_*.tar.gz) rm -f -- "$REMOTE_ARCHIVE" ;;
+    *) printf 'AUTH_STATE_UNSAFE_ARCHIVE_PATH=%s\n' "$REMOTE_ARCHIVE" >&2 ;;
+  esac
+}}
+trap cleanup_auth_state EXIT
+tar -xzf "$REMOTE_ARCHIVE" -C "$STATE_DIR"
+for rel in "$OVERRIDE_PATH" "$CREDENTIALS_PATH" "$DATABASE_PATH"; do
+  if [ ! -f "$STATE_DIR/$rel" ]; then
+    printf 'AUTH_STATE_MISSING=%s\n' "$rel" >&2
+    exit 21
+  fi
+  mkdir -p "$PROJECT/$(dirname "$rel")"
+  install -m 600 "$STATE_DIR/$rel" "$PROJECT/$rel"
+done
+cd "$PROJECT"
+{python_prepare_block}
+DICLOAK_EXPECTED_KEY_ID="$EXPECTED_KEY_ID" DICLOAK_EXPECTED_DB_SHA256="$EXPECTED_DB_SHA256" DICLOAK_REMOTE_CONFIG="$REMOTE_CONFIG" "$PYTHON_BIN" - <<'PY'
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+
+from core.config import load_config
+from core.local_auth_lab.database import LocalAuthDatabase, SCHEMA_VERSION
+from core.local_auth_lab.security import signing_key_id
+from core.local_auth_lab.server import LocalAuthLabServer
+from core.local_auth_lab.settings import LocalAuthLabSettings
+
+config = load_config(Path(os.environ["DICLOAK_REMOTE_CONFIG"]))
+settings = LocalAuthLabSettings.from_config(config).ensure_persistent_credentials()
+settings.validate_for_start()
+actual_key_id = signing_key_id(settings.signing_secret)
+if actual_key_id != os.environ["DICLOAK_EXPECTED_KEY_ID"]:
+    raise SystemExit("AUTH_STATE_KEY_MISMATCH")
+digest = hashlib.sha256(settings.database_path.read_bytes()).hexdigest()
+if digest != os.environ["DICLOAK_EXPECTED_DB_SHA256"]:
+    raise SystemExit("AUTH_STATE_DATABASE_HASH_MISMATCH")
+database = LocalAuthDatabase(settings.database_path)
+database.initialize()
+summary = database.state_summary()
+probe = LocalAuthLabServer(settings)
+existing = probe._existing_health()
+if existing:
+    raise SystemExit("AUTH_STATE_SERVICE_RUNNING")
+print(
+    "AUTH_STATE_READY "
+    f"key_id={{actual_key_id}} schema={{SCHEMA_VERSION}} "
+    f"users={{summary['users']}} sessions={{summary['sessions']}}"
+)
+PY
 """
 
 

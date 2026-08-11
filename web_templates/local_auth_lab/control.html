@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DICloak 本地登录存储模拟站</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="card">
+      <p class="eyebrow">DICloak Local Auth Lab</p>
+      <h1>DICloak 本地登录存储模拟站</h1>
+      <p>一个本地服务承载三个独立 Origin。控制首页不保存任何登录令牌。</p>
+      <nav class="site-links">
+        <a href="{{COOKIE_URL}}">Cookie 模拟站</a>
+        <a href="{{LOCALSTORAGE_URL}}">Local Storage 模拟站</a>
+        <a href="{{INDEXEDDB_URL}}">IndexedDB 模拟站</a>
+      </nav>
+    </section>
+  </main>
+</body>
+</html>

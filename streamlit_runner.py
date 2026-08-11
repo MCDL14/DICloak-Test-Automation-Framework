@@ -1,11 +1,9 @@
 """Streamlit UI 专用执行器。
 
 ==== 设计原则 ====
-- 尽量复用 AutomationRunner 的用例发现、优先级排序、APP 生命周期、CDP 校验能力。
-- 通过 AutomationRunner._run_suite() 复用 CLI 的恢复钩子、失败截图、重试、flaky 统计。
-- 通过自定义 IO 流 + logging Handler 将输出实时推送到 UI。
-- 执行结束后调用 FeishuNotifier.send_summary() 保持飞书通知不变。
-- UI 执行在进程内串行化，避免多个 Streamlit 会话同时抢占同一个 APP/CDP 和全局 logger。
+- 用例发现复用 AutomationRunner；本机执行通过 run.py 子进程复用完整 CLI 链路。
+- 子进程 stdout/stderr 实时推送到 UI，并允许 Streamlit Stop 安全中断当前任务。
+- UI 执行在进程内串行化，避免多个 Streamlit 会话同时抢占同一个 APP/CDP。
 
 ==== 使用方式 ====
     from streamlit_runner import discover_cases, run_selected_tests
@@ -17,26 +15,28 @@
 
 from __future__ import annotations
 
-import io
 import logging
+import os
 import queue
+import signal
+import subprocess
 import sys
 import threading
+import uuid
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
-from core.app import AppManager, AppStartupError
+from core.app import AppManager
 from core.case_module import get_test_case_module
-from core.cdp_driver import CDPConnectionError, CDPDriver
 from core.config import ConfigError, load_config
-from core.logger import setup_logger
 from core.remote_runner import (
     RemoteConfigError,
     RemoteHost,
+    RemoteRunCancelled,
     RemoteRunError,
     RemoteRunRequest,
     build_remote_command,
@@ -48,10 +48,9 @@ from core.remote_runner import (
 from core.remote_sync import (
     check_remote_code_status,
     remote_release_root,
+    sync_remote_local_auth_lab_state,
     sync_remote_project,
 )
-from core.result import RunResult
-from core.run_metadata import log_run_end, log_run_start
 from core.runner import AutomationRunner
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -65,10 +64,13 @@ _RUN_STATE: dict[str, Any] = {
     "task": "",
     "started_at": "",
     "thread_ident": None,
+    "stop_requested": False,
+    "stop_event": None,
+    "cancel_callback": None,
 }
 
 
-def _mark_task_started(task: str) -> None:
+def _mark_task_started(task: str, stop_event: threading.Event) -> None:
     with _RUN_STATE_LOCK:
         _RUN_STATE.update(
             {
@@ -76,6 +78,9 @@ def _mark_task_started(task: str) -> None:
                 "task": task,
                 "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "thread_ident": threading.get_ident(),
+                "stop_requested": False,
+                "stop_event": stop_event,
+                "cancel_callback": None,
             }
         )
 
@@ -88,13 +93,20 @@ def _mark_task_finished() -> None:
                 "task": "",
                 "started_at": "",
                 "thread_ident": None,
+                "stop_requested": False,
+                "stop_event": None,
+                "cancel_callback": None,
             }
         )
 
 
 def _state_snapshot() -> dict[str, Any]:
     with _RUN_STATE_LOCK:
-        return dict(_RUN_STATE)
+        return {
+            key: value
+            for key, value in _RUN_STATE.items()
+            if key not in {"stop_event", "cancel_callback"}
+        }
 
 
 def _thread_alive(thread_ident: int | None) -> bool:
@@ -127,7 +139,53 @@ def reset_stale_ui_task_lock() -> bool:
     return True
 
 
-def _acquire_run_lock(log_queue: queue.Queue, busy_message: str, task: str) -> bool:
+def create_ui_stop_event() -> threading.Event:
+    """Create one cancellation token shared by the page and its worker."""
+    return threading.Event()
+
+
+def request_ui_task_stop(stop_event: threading.Event | None = None) -> bool:
+    """Request cancellation of the active UI task and interrupt its current transport."""
+    callback: Callable[[], None] | None = None
+    with _RUN_STATE_LOCK:
+        active_event = _RUN_STATE.get("stop_event")
+        if active_event is None:
+            target_event = stop_event
+        elif stop_event is None or stop_event is active_event:
+            target_event = active_event
+        else:
+            return False
+        if target_event is None:
+            return False
+        target_event.set()
+        if active_event is target_event:
+            _RUN_STATE["stop_requested"] = True
+            callback = _RUN_STATE.get("cancel_callback")
+    if callback is not None:
+        try:
+            callback()
+        except Exception:
+            pass
+    return True
+
+
+def _set_cancel_callback(stop_event: threading.Event, callback: Callable[[], None] | None) -> None:
+    invoke_now = False
+    with _RUN_STATE_LOCK:
+        if _RUN_STATE.get("stop_event") is not stop_event:
+            return
+        _RUN_STATE["cancel_callback"] = callback
+        invoke_now = callback is not None and stop_event.is_set()
+    if invoke_now:
+        callback()
+
+
+def _acquire_run_lock(
+    log_queue: queue.Queue,
+    busy_message: str,
+    task: str,
+    stop_event: threading.Event | None = None,
+) -> threading.Event | None:
     if not _RUN_LOCK.acquire(blocking=False):
         status = ui_task_status()
         detail = ""
@@ -135,9 +193,10 @@ def _acquire_run_lock(log_queue: queue.Queue, busy_message: str, task: str) -> b
             detail = f" 当前任务={status.get('task') or '-'} 开始={status.get('started_at') or '-'}"
         log_queue.put(f"{busy_message}{detail}")
         log_queue.put(None)
-        return False
-    _mark_task_started(task)
-    return True
+        return None
+    active_stop_event = stop_event or create_ui_stop_event()
+    _mark_task_started(task, active_stop_event)
+    return active_stop_event
 
 
 def _release_run_lock() -> None:
@@ -146,43 +205,6 @@ def _release_run_lock() -> None:
         _RUN_LOCK.release()
     except RuntimeError:
         pass
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 自定义 IO 流：截获 unittest 输出 → 推送到 UI 的 queue
-# ═══════════════════════════════════════════════════════════════════
-
-class _QueueStream(io.StringIO):
-    """写入时同时推送到 queue 的字符串流。
-
-    unittest.TextTestRunner 默认输出到 stream，此类在 write() 时
-    额外将非空行推送到 log_queue，供 UI 实时读取。
-    """
-
-    def __init__(self, log_queue: queue.Queue) -> None:
-        super().__init__()
-        self._log_queue = log_queue
-
-    def write(self, s: str) -> int:
-        text = s.rstrip()
-        if text:
-            self._log_queue.put(text)
-        return super().write(s)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# logging Handler：截获框架日志 → 推送到 UI 的 queue
-# ═══════════════════════════════════════════════════════════════════
-
-class _QueueLogHandler(logging.Handler):
-    """将日志记录格式化后推送到 queue，供 UI 实时展示."""
-
-    def __init__(self, log_queue: queue.Queue) -> None:
-        super().__init__()
-        self._log_queue = log_queue
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self._log_queue.put(self.format(record))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -439,149 +461,218 @@ def run_selected_tests(
     log_queue: queue.Queue,
     *,
     attach_existing_app: bool = True,
+    account_profile: dict[str, Any] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> None:
-    """后台执行选中用例（供 threading.Thread 调用）。
-
-    执行流程（对齐 AutomationRunner.run()）：
-    1. 环境预检
-    2. APP 生命周期（启动 or 连接已有）
-    3. CDP 连通性校验 → 释放
-    4. 构建 suite → 过滤选中用例 → 优先级排序
-    5. 通过 AutomationRunner._run_suite() 执行（含恢复/截图/重试/flaky 统计）
-    6. FeishuNotifier.send_summary() 飞书通知
-    7. 关闭 APP / 释放 CDP
-
-    参数：
-        test_ids: 要执行的 test_id 列表。
-        log_queue: 实时日志推送队列，结束时放入 None 作为哨兵。
-        attach_existing_app: True=连接已打开 APP，False=自动启动新 APP。
-    """
-    if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。", "本机用例执行"):
+    """Run selected cases in a cancellable CLI child process for the Streamlit UI."""
+    active_stop_event = _acquire_run_lock(
+        log_queue,
+        "已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。",
+        "本机用例执行",
+        stop_event,
+    )
+    if active_stop_event is None:
         return
 
-    logger: logging.Logger | None = None
-    ui_handler: _QueueLogHandler | None = None
+    try:
+        _run_selected_tests_unlocked(
+            test_ids,
+            log_queue,
+            attach_existing_app=attach_existing_app,
+            account_profile=account_profile,
+            stop_event=active_stop_event,
+        )
+    except Exception as exc:
+        log_queue.put(f"执行器内部异常：{exc}")
+    finally:
+        _set_cancel_callback(active_stop_event, None)
+        _release_run_lock()
+        log_queue.put(None)
 
+
+def _run_selected_tests_unlocked(
+    test_ids: list[str],
+    log_queue: Any,
+    *,
+    attach_existing_app: bool,
+    account_profile: dict[str, Any] | None,
+    stop_event: threading.Event,
+) -> int:
+    if stop_event.is_set():
+        log_queue.put("本机用例执行已停止（尚未启动）")
+        return 130
+    if not test_ids:
+        log_queue.put("没有匹配到任何用例")
+        return 0
+
+    profile_path: Path | None = None
+    try:
+        command = [
+            sys.executable,
+            "-u",
+            str(PROJECT_ROOT / "run.py"),
+            "--config",
+            str(CONFIG_PATH),
+        ]
+        if account_profile:
+            profile_path = _write_local_account_profile(account_profile)
+            command.extend(["--account-profile", str(profile_path)])
+            log_queue.put(f"本机账号组：{account_profile.get('group_name', '-')}")
+        for test_id in test_ids:
+            command.extend(["--case", test_id])
+        if attach_existing_app:
+            command.append("--attach-existing-app")
+        log_queue.put(f"已选择 {len(test_ids)} 条用例，开始执行")
+        exit_code = _run_streaming_subprocess(
+            command,
+            log_queue,
+            stop_event,
+            cwd=PROJECT_ROOT,
+        )
+        if stop_event.is_set():
+            if not attach_existing_app:
+                _close_managed_app_after_cancel(log_queue)
+            log_queue.put("本机用例执行已停止")
+        elif exit_code != 0:
+            log_queue.put(f"本机用例执行失败：退出码={exit_code}")
+        return exit_code
+    finally:
+        if profile_path is not None:
+            try:
+                profile_path.unlink(missing_ok=True)
+                log_queue.put("本机账号组临时配置已清理")
+            except OSError as exc:
+                log_queue.put(f"本机账号组临时配置清理失败：{exc}")
+
+
+def _write_local_account_profile(profile: dict[str, Any]) -> Path:
+    profile_path = CONFIG_PATH.parent / f".ui_account_profile_{uuid.uuid4().hex}.yaml"
+    try:
+        with profile_path.open("w", encoding="utf-8") as file_obj:
+            yaml.safe_dump(profile, file_obj, allow_unicode=True, sort_keys=False)
+        if os.name != "nt":
+            profile_path.chmod(0o600)
+        return profile_path
+    except Exception:
+        profile_path.unlink(missing_ok=True)
+        raise
+
+
+def _run_streaming_subprocess(
+    command: list[str],
+    log_queue: queue.Queue,
+    stop_event: threading.Event,
+    *,
+    cwd: Path,
+) -> int:
+    output_queue: queue.Queue[str | None] = queue.Queue()
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(cwd),
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "bufsize": 1,
+        "env": {
+            **os.environ,
+            "PYTHONUNBUFFERED": "1",
+            "DICLOAK_RUN_SOURCE": "UI_LOCAL",
+        },
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(command, **popen_kwargs)
+
+    def read_output() -> None:
+        assert process.stdout is not None
+        try:
+            for line in process.stdout:
+                text = line.rstrip()
+                if text:
+                    output_queue.put(text)
+        finally:
+            process.stdout.close()
+            output_queue.put(None)
+
+    reader = threading.Thread(target=read_output, name="ui-local-output-reader", daemon=True)
+    reader.start()
+    _set_cancel_callback(stop_event, lambda: _signal_process_interrupt(process))
+
+    output_finished = False
+    stop_handled = False
+    while process.poll() is None or not output_finished:
+        if stop_event.is_set() and process.poll() is None and not stop_handled:
+            stop_handled = True
+            log_queue.put("收到停止请求，正在终止本机用例执行...")
+            _stop_process_tree(process)
+        try:
+            line = output_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        if line is None:
+            output_finished = True
+        else:
+            log_queue.put(line)
+
+    reader.join(timeout=1)
+    return int(process.returncode or 0)
+
+
+def _close_managed_app_after_cancel(log_queue: queue.Queue) -> None:
     try:
         config = _build_config()
-        logger = setup_logger(config, reset=True)
-        log_run_start(
-            logger,
-            source="UI_LOCAL",
-            scope="cases",
-            selected_count=len(test_ids),
-            attach_existing_app=attach_existing_app,
-        )
-
-        # ── 挂载 UI 日志 Handler ──
-        ui_handler = _QueueLogHandler(log_queue)
-        ui_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-        logger.addHandler(ui_handler)
-
-        # ── 1. 环境预检 ──
-        from core.precheck import EnvironmentPrechecker
-
-        if config.get("run", {}).get("precheck_before_run", True):
-            precheck = EnvironmentPrechecker(config, logger).run()
-            if not precheck.passed:
-                failed_items = "\n".join(
-                    f"  - {item.name}: {item.message}" for item in precheck.failed_items
-                )
-                logger.error("环境预检失败:\n%s", failed_items)
-                log_run_end(logger, source="UI_LOCAL", exit_code=2, success=False)
-                return
-
-        # ── 2. 构建 filtered suite ──
-        runner = AutomationRunner(config=config, logger=logger)
-        suite = runner._build_suite(level=None, module=None, case=None)
-        import unittest
-
-        selected_ids = set(test_ids)
-        filtered = unittest.TestSuite()
-        for test in runner._iter_tests(suite):
-            if test.id() in selected_ids:
-                filtered.addTest(test)
-
-        filtered = runner._prioritize_suite(filtered)
-        case_count = filtered.countTestCases()
-        logger.info("已选择 %s 条用例，开始执行", case_count)
-
-        if case_count == 0:
-            logger.warning("没有匹配到任何用例")
-            log_run_end(logger, source="UI_LOCAL", exit_code=0, success=True, total=0)
-            return
-
-        # ── 3. APP 生命周期 + CDP 校验 ──
-        app_manager = AppManager(config, logger)
-        cdp_driver = CDPDriver(config, logger)
-        app_started = False
-        try:
-            if attach_existing_app:
-                logger.info("调试模式：连接已打开的 APP")
-            else:
-                app_started = app_manager.launch_fresh()
-                if not app_started:
-                    runner.notifier.send_failure(
-                        "Dicloak APP 进程检测失败",
-                        "启动后 30 秒内未检测到 APP 进程，将继续尝试 CDP 连接。",
-                    )
-            cdp_driver.connect()
-            cdp_driver.close()
-            logger.info("CDP 连通性校验通过，连接已释放")
-        except (AppStartupError, CDPConnectionError, OSError) as exc:
-            logger.error("APP 启动或 CDP 连接失败: %s", exc)
-            runner.notifier.send_failure("Dicloak APP 启动或 CDP 连接失败", str(exc))
-            log_run_end(logger, source="UI_LOCAL", exit_code=3, success=False)
-            return
-
-        # ── 4. 执行 suite ──
-        try:
-            stream = _QueueStream(log_queue)
-            run_result: RunResult = runner._run_suite(filtered, stream=stream)
-
-            # ── 5. 飞书通知 ──
-            runner.notifier.send_summary(run_result)
-
-            # ── 6. 结构化总结日志（UI 用正则解析） ──
-            logger.info(
-                "运行完成 → 总计=%s 通过=%s 失败=%s 错误=%s 跳过=%s flaky=%s 通过率=%s%%",
-                run_result.total,
-                run_result.passed,
-                run_result.failed,
-                run_result.errors,
-                run_result.skipped,
-                run_result.flaky,
-                run_result.pass_rate,
-            )
-            if run_result.failures:
-                logger.warning("失败详情:\n%s", run_result.failed_summary())
-            log_run_end(
-                logger,
-                source="UI_LOCAL",
-                exit_code=0 if run_result.success else 1,
-                success=run_result.success,
-                total=run_result.total,
-                passed=run_result.passed,
-                failed=run_result.failed,
-                errors=run_result.errors,
-                skipped=run_result.skipped,
-                flaky=run_result.flaky,
-            )
-        finally:
-            cdp_driver.close()
-            if not attach_existing_app:
-                app_manager.close()
+        logger = logging.getLogger("dicloak_automation.ui.cancel")
+        AppManager(config, logger).close()
     except Exception as exc:
-        if logger:
-            log_run_end(logger, source="UI_LOCAL", exit_code=1, success=False, error="internal_exception")
-            logger.error("执行器内部异常: %s", exc, exc_info=True)
+        log_queue.put(f"停止后清理 APP 失败：{exc}")
+
+
+def _signal_process_interrupt(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            process.send_signal(signal.CTRL_BREAK_EVENT)
         else:
-            log_queue.put(f"执行器启动失败: {exc}")
-    finally:
-        if logger and ui_handler:
-            logger.removeHandler(ui_handler)
-        _release_run_lock()
-        log_queue.put(None)  # 哨兵：通知 UI 执行结束
+            os.killpg(process.pid, signal.SIGINT)
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def _stop_process_tree(process: subprocess.Popen, graceful_timeout: float = 5.0) -> None:
+    _signal_process_interrupt(process)
+    try:
+        process.wait(timeout=graceful_timeout)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def run_remote_cli(
@@ -598,52 +689,201 @@ def run_remote_cli(
     ssh_username: str = "",
     ssh_password: str = "",
     case_ids: list[str] | None = None,
+    account_profile: dict[str, Any] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> None:
     """后台通过 SSH 在远程节点执行 run.py，并把远程日志推送到 UI."""
-    if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。", "远程用例执行"):
+    active_stop_event = _acquire_run_lock(
+        log_queue,
+        "已有 UI 执行任务正在运行，请等待当前任务结束后再启动新的执行。",
+        "远程用例执行",
+        stop_event,
+    )
+    if active_stop_event is None:
         return
 
     try:
-        host = _remote_host_by_name(
+        _run_remote_cli_unlocked(
             host_name,
+            scope,
+            value,
+            log_queue,
+            attach_existing_app=attach_existing_app,
+            collect_artifacts=collect_artifacts,
+            sync_before_run=sync_before_run,
             ssh_host=ssh_host,
             ssh_port=ssh_port,
             ssh_username=ssh_username,
             ssh_password=ssh_password,
+            case_ids=case_ids,
+            account_profile=account_profile,
+            stop_event=active_stop_event,
         )
-        if host is None:
-            log_queue.put(f"远程节点不存在或未启用：{host_name}")
-            return
-
-        if sync_before_run:
-            sync_remote_project(host, log_queue, project_root=PROJECT_ROOT)
-
-        request = RemoteRunRequest(
-            scope=scope,
-            value=value,
-            values=tuple(case_ids or ()),
-            attach_existing_app=attach_existing_app,
-        )
-        result = run_remote_tests(host, request, log_queue)
-        duration = round(result.finished_at - result.started_at, 2)
-        log_queue.put(f"远程执行完成 → 节点={result.host_name} 退出码={result.exit_code} 耗时={duration}s")
-        if collect_artifacts:
-            try:
-                artifact_result = collect_remote_artifacts(host, result.started_at, log_queue)
-                log_queue.put(
-                    "远程产物归档 → "
-                    f"文件数={artifact_result.files_copied} "
-                    f"本地目录={artifact_result.local_dir}"
-                )
-            except RemoteRunError as exc:
-                log_queue.put(f"远程产物拉取失败：{exc}")
-        if result.exit_code != 0:
-            log_queue.put(f"远程执行失败：退出码={result.exit_code}")
+    except RemoteRunCancelled:
+        log_queue.put("远程用例执行已停止")
     except (RemoteConfigError, RemoteRunError) as exc:
         log_queue.put(f"远程执行器错误：{exc}")
     except Exception as exc:
         log_queue.put(f"远程执行器内部异常：{exc}")
     finally:
+        _release_run_lock()
+        log_queue.put(None)
+
+
+def _run_remote_cli_unlocked(
+    host_name: str,
+    scope: str,
+    value: str,
+    log_queue: Any,
+    *,
+    attach_existing_app: bool,
+    collect_artifacts: bool,
+    sync_before_run: bool,
+    ssh_host: str,
+    ssh_port: int | None,
+    ssh_username: str,
+    ssh_password: str,
+    case_ids: list[str] | None,
+    account_profile: dict[str, Any] | None,
+    stop_event: threading.Event,
+) -> int:
+    if stop_event.is_set():
+        log_queue.put("远程用例执行已停止（尚未启动）")
+        return 130
+    host = _remote_host_by_name(
+        host_name,
+        ssh_host=ssh_host,
+        ssh_port=ssh_port,
+        ssh_username=ssh_username,
+        ssh_password=ssh_password,
+    )
+    if host is None:
+        log_queue.put(f"远程节点不存在或未启用：{host_name}")
+        return 2
+
+    if sync_before_run:
+        sync_remote_project(host, log_queue, project_root=PROJECT_ROOT)
+        sync_remote_local_auth_lab_state(host, log_queue, project_root=PROJECT_ROOT)
+
+    request = RemoteRunRequest(
+        scope=scope,
+        value=value,
+        values=tuple(case_ids or ()),
+        attach_existing_app=attach_existing_app,
+        account_profile=account_profile,
+    )
+    result = run_remote_tests(host, request, log_queue, stop_event=stop_event)
+    duration = round(result.finished_at - result.started_at, 2)
+    log_queue.put(f"远程执行完成 → 节点={result.host_name} 退出码={result.exit_code} 耗时={duration}s")
+    if collect_artifacts:
+        try:
+            artifact_result = collect_remote_artifacts(host, result.started_at, log_queue)
+            log_queue.put(
+                "远程产物归档 → "
+                f"文件数={artifact_result.files_copied} "
+                f"本地目录={artifact_result.local_dir}"
+            )
+        except RemoteRunError as exc:
+            log_queue.put(f"远程产物拉取失败：{exc}")
+    if result.exit_code != 0:
+        log_queue.put(f"远程执行失败：退出码={result.exit_code}")
+    return result.exit_code
+
+
+class _PrefixedLogQueue:
+    def __init__(self, target: queue.Queue, label: str):
+        self.target = target
+        self.label = label
+
+    def put(self, value: Any) -> None:
+        if value is not None:
+            self.target.put(f"[{self.label}] {value}")
+
+
+def run_local_and_remote(
+    test_ids: list[str],
+    log_queue: queue.Queue,
+    *,
+    local_attach_existing_app: bool,
+    local_account_profile: dict[str, Any],
+    remote_host_name: str,
+    remote_attach_existing_app: bool,
+    remote_collect_artifacts: bool,
+    remote_sync_before_run: bool,
+    remote_ssh_host: str,
+    remote_ssh_port: int | None,
+    remote_ssh_username: str,
+    remote_ssh_password: str,
+    remote_account_profile: dict[str, Any],
+    stop_event: threading.Event | None = None,
+) -> None:
+    active_stop_event = _acquire_run_lock(
+        log_queue,
+        "已有 UI 执行任务正在运行，请等待当前任务结束后再启动同步执行。",
+        "Windows 本机 + macOS 远程同步执行",
+        stop_event,
+    )
+    if active_stop_event is None:
+        return
+
+    local_log = _PrefixedLogQueue(log_queue, "Windows")
+    remote_log = _PrefixedLogQueue(log_queue, "macOS")
+    errors: list[tuple[str, Exception]] = []
+
+    def run_local() -> None:
+        try:
+            _run_selected_tests_unlocked(
+                test_ids,
+                local_log,
+                attach_existing_app=local_attach_existing_app,
+                account_profile=local_account_profile,
+                stop_event=active_stop_event,
+            )
+        except Exception as exc:
+            errors.append(("Windows", exc))
+            local_log.put(f"执行器内部异常：{exc}")
+
+    def run_remote() -> None:
+        try:
+            _run_remote_cli_unlocked(
+                remote_host_name,
+                "cases",
+                "",
+                remote_log,
+                attach_existing_app=remote_attach_existing_app,
+                collect_artifacts=remote_collect_artifacts,
+                sync_before_run=remote_sync_before_run,
+                ssh_host=remote_ssh_host,
+                ssh_port=remote_ssh_port,
+                ssh_username=remote_ssh_username,
+                ssh_password=remote_ssh_password,
+                case_ids=test_ids,
+                account_profile=remote_account_profile,
+                stop_event=active_stop_event,
+            )
+        except RemoteRunCancelled:
+            remote_log.put("远程用例执行已停止")
+        except Exception as exc:
+            errors.append(("macOS", exc))
+            remote_log.put(f"远程执行器异常：{exc}")
+
+    try:
+        local_thread = threading.Thread(target=run_local, name="ui-windows-run", daemon=True)
+        remote_thread = threading.Thread(target=run_remote, name="ui-macos-run", daemon=True)
+        log_queue.put("开始 Windows 本机与 macOS 远程同步执行")
+        local_thread.start()
+        remote_thread.start()
+        local_thread.join()
+        remote_thread.join()
+        if errors:
+            labels = "、".join(label for label, _ in errors)
+            log_queue.put(f"同步执行结束，以下执行端发生异常：{labels}")
+        elif active_stop_event.is_set():
+            log_queue.put("Windows 本机与 macOS 远程同步执行已停止")
+        else:
+            log_queue.put("Windows 本机与 macOS 远程同步执行完成")
+    finally:
+        _set_cancel_callback(active_stop_event, None)
         _release_run_lock()
         log_queue.put(None)
 
@@ -656,9 +896,16 @@ def check_remote_code(
     ssh_port: int | None = None,
     ssh_username: str = "",
     ssh_password: str = "",
+    stop_event: threading.Event | None = None,
 ) -> None:
     """后台检查远端当前代码快照是否和本地工作区一致."""
-    if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再检查远程代码。", "检查远端代码"):
+    active_stop_event = _acquire_run_lock(
+        log_queue,
+        "已有 UI 执行任务正在运行，请等待当前任务结束后再检查远程代码。",
+        "检查远端代码",
+        stop_event,
+    )
+    if active_stop_event is None:
         return
 
     try:
@@ -690,9 +937,16 @@ def sync_remote_code(
     ssh_port: int | None = None,
     ssh_username: str = "",
     ssh_password: str = "",
+    stop_event: threading.Event | None = None,
 ) -> None:
     """后台把本地当前工作区同步为远端新的可回退快照."""
-    if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再同步远程代码。", "同步远端代码"):
+    active_stop_event = _acquire_run_lock(
+        log_queue,
+        "已有 UI 执行任务正在运行，请等待当前任务结束后再同步远程代码。",
+        "同步远端代码",
+        stop_event,
+    )
+    if active_stop_event is None:
         return
 
     try:
@@ -724,9 +978,16 @@ def check_remote_host(
     ssh_port: int | None = None,
     ssh_username: str = "",
     ssh_password: str = "",
+    stop_event: threading.Event | None = None,
 ) -> None:
     """后台通过 SSH 检查远程节点是否具备执行自动化的基础条件."""
-    if not _acquire_run_lock(log_queue, "已有 UI 执行任务正在运行，请等待当前任务结束后再检查远程节点。", "检查远程节点"):
+    active_stop_event = _acquire_run_lock(
+        log_queue,
+        "已有 UI 执行任务正在运行，请等待当前任务结束后再检查远程节点。",
+        "检查远程节点",
+        stop_event,
+    )
+    if active_stop_event is None:
         return
 
     try:
@@ -741,11 +1002,13 @@ def check_remote_host(
             log_queue.put(f"远程节点不存在或未启用：{host_name}")
             return
 
-        result = run_remote_health_check(host, log_queue)
+        result = run_remote_health_check(host, log_queue, stop_event=active_stop_event)
         duration = round(result.finished_at - result.started_at, 2)
         log_queue.put(f"远程健康检查结束 → 节点={result.host_name} 退出码={result.exit_code} 耗时={duration}s")
         if result.exit_code != 0:
             log_queue.put(f"远程健康检查未通过：失败项数量={result.exit_code}")
+    except RemoteRunCancelled:
+        log_queue.put("远程健康检查已停止")
     except (RemoteConfigError, RemoteRunError) as exc:
         log_queue.put(f"远程健康检查错误：{exc}")
     except Exception as exc:

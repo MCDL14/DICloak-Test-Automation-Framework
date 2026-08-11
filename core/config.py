@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from core.account_groups import (
+    ACCOUNT_PROFILE_ENV,
+    AccountGroupError,
+    apply_runtime_account_profile,
+    load_runtime_account_profile,
+)
 
 
 class ConfigError(Exception):
@@ -37,6 +45,37 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "fallback_driver": "",
         "connect_timeout": 30,
         "default_page_url_keyword": "",
+    },
+    # 独立的本地登录存储模拟站。默认关闭；只有显式依赖它的用例才会启动。
+    "local_auth_lab": {
+        "enabled": False,
+        "origin_mode": "localhost",
+        "host": "127.0.0.1",
+        "port": 18080,
+        "database_path": "test_data/local_auth_lab/auth.db",
+        "credentials_path": "test_data/local_auth_lab/credentials.json",
+        "template_dir": "web_templates/local_auth_lab",
+        "domains": {
+            "control": "sync.dicloak.localhost",
+            "cookie": "cookie.dicloak.localhost",
+            "localstorage": "localstorage.dicloak.localhost",
+            "indexeddb": "indexeddb.dicloak.localhost",
+        },
+        "session": {
+            "ttl_seconds": 15552000,
+            "signing_secret_env": "DICLOAK_AUTH_LAB_SIGNING_SECRET",
+        },
+        "cookie": {
+            "name": "dicloak_auth",
+            "http_only": True,
+            "same_site": "Lax",
+            "secure": False,
+            "path": "/",
+        },
+        "automation_api": {
+            "enabled": True,
+            "admin_key_env": "DICLOAK_AUTH_LAB_ADMIN_KEY",
+        },
     },
     "account": {
         "username": "",
@@ -152,10 +191,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "append_rows": [],
         },
         "member_export": {
-            "expected_file_full_path": "",
             "export_dir": "",
             "export_file_name": "",
             "export_file_regex": r"^导出成员列表 - \d{12}\.xlsx$",
+        },
+        "case_external_member": {
+            "name": "外部成员1",
+            "email": "oytrhsjwe@tempmail.cn",
         },
         "api_member_edit": {
             "base_url": "https://app.dicloak.com/gin/v1/api/member/open/edit?",
@@ -232,6 +274,13 @@ def load_config(path: Path) -> dict[str, Any]:
     validate_required_sections(loaded)
     loaded = _merge_external_test_data(config_path, loaded)
     merged = deep_merge(DEFAULT_CONFIG, loaded)
+    profile_file = str(os.environ.get(ACCOUNT_PROFILE_ENV, "") or "").strip()
+    if profile_file:
+        try:
+            profile = load_runtime_account_profile(profile_file)
+            merged = apply_runtime_account_profile(merged, profile, profile_file=profile_file)
+        except AccountGroupError as exc:
+            raise ConfigError(str(exc)) from exc
     validate_config(merged)
     merged["_config_file"] = str(config_path.resolve())
     test_data_file = str(merged.get("_test_data_file", "")).strip()
@@ -311,6 +360,24 @@ def validate_config(config: dict[str, Any]) -> None:
     cdp_port = config["cdp"].get("port")
     if not isinstance(cdp_port, int) or not 1 <= cdp_port <= 65535:
         raise ConfigError("cdp.port must be an integer between 1 and 65535")
+
+    local_auth_lab = config.get("local_auth_lab", {})
+    if not isinstance(local_auth_lab, dict):
+        raise ConfigError("local_auth_lab must be a YAML mapping")
+    if not isinstance(local_auth_lab.get("enabled", False), bool):
+        raise ConfigError("local_auth_lab.enabled must be a boolean")
+    if local_auth_lab.get("enabled", False):
+        origin_mode = str(local_auth_lab.get("origin_mode", "")).strip().lower()
+        if origin_mode not in {"localhost", "custom_domains"}:
+            raise ConfigError(
+                "local_auth_lab.origin_mode must be localhost or custom_domains"
+            )
+        lab_port = local_auth_lab.get("port")
+        if not isinstance(lab_port, int) or not 1 <= lab_port <= 65535:
+            raise ConfigError("local_auth_lab.port must be an integer between 1 and 65535")
+        lab_host = str(local_auth_lab.get("host", "")).strip().lower()
+        if lab_host not in {"127.0.0.1", "localhost"}:
+            raise ConfigError("local_auth_lab.host must be a loopback address")
 
     process_timeout = config["app"].get("process_check_timeout")
     if not isinstance(process_timeout, int) or process_timeout <= 0:

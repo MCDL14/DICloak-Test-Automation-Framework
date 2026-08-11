@@ -9,12 +9,13 @@
 当前实现状态：
 
 1. 框架骨架、配置、预检、日志、APP 生命周期、CDP 连接、UIAutomation、飞书通知、用例运行编排已完成。
-2. 当前 `tests/p0` 可发现 62 条 P0 用例：环境管理 25 条、全局设置 12 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
+2. 当前 `tests/p0` 可发现 68 条 P0 用例：环境管理 31 条、全局设置 12 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
 3. P0 用例已按业务模块移动到 `tests/p0/` 下的对应模块目录，并支持按级别、文件/目录模块、业务模块、单条用例运行。
 4. 已接入用例前后恢复机制：全局 APP 稳定态恢复不做业务导航，模块级恢复由各模块自行进入模块首页并清理模块状态，当前已实现环境管理和环境分组管理模块恢复入口。
 5. 已接入 Streamlit 本地 UI，用于用例发现、模块筛选、批量选择、实时日志、运行结果统计和历史日志查看，UI 执行复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路。
 6. 成员管理已覆盖创建/编辑/筛选/导出/权限/API 停用与到期停用等 P0 场景；四条成员 open API 用例已具备接口非 200 重试和异常兜底恢复能力。
 7. 代理管理已覆盖创建自定义代理、批量创建、创建 NodeMaven 动态代理、批量创建后批量检测 4 条 P0 用例；扩展管理等模块目录已预留，后续按业务优先级继续补充。
+8. 环境管理新增 Cookie、Local Storage、IndexedDB 三条预置环境数据恢复校验，以及三条新环境持续保持用例；后三条严格沿用原有默认创建流程，当前只完成静态验证，默认创建问题的处理方式待确认。
 
 第一阶段需要达成以下结果：
 
@@ -215,26 +216,24 @@ log:
 3. `test_data.bookmark.append_file_name`：追加书签场景使用的文件名。
 4. `test_data.bookmark.overwrite_rows`：覆盖书签场景使用的数据表内容，按行维护。
 5. `test_data.bookmark.append_rows`：追加书签场景使用的数据表内容，按行维护。
-6. `test_data.member_export.expected_file_full_path`：导出成员场景中预先准备的正确文件完整路径。
-7. `test_data.member_export.export_dir`：导出成员文件输出路径。
-8. `test_data.member_export.export_file_name`：导出成员固定文件名；如果导出文件名带时间戳，则保持为空。
-9. `test_data.member_export.export_file_regex`：导出成员文件名正则，例如 `^导出成员列表 - \d{12}\.xlsx$`。
-10. `test_data.batch_import.file_dir`：批量导入文件所在路径。
-11. `test_data.batch_import.file_name`：批量导入文件名。
-12. `test_data.batch_export.export_dir`：批量导出文件路径。
-13. `test_data.batch_export.export_file_name`：批量导出文件名。
-14. `test_data.packet_capture.process_name`：抓包工具进程名称。
-15. `test_data.packet_capture.startup_path`：抓包工具启动路径。
-16. `test_data.local_extension.package_name`：本地扩展包名称。
-17. `test_data.local_extension.package_path`：本地扩展包所在目录；如果直接配置 zip 完整路径，也兼容。
+6. `test_data.member_export.export_dir`：导出成员文件输出路径。
+7. `test_data.member_export.export_file_name`：导出成员固定文件名；如果导出文件名带时间戳，则保持为空。
+8. `test_data.member_export.export_file_regex`：导出成员文件名正则，例如 `^导出成员列表 - \d{12}\.xlsx$`。
+9. `test_data.batch_import.file_dir`：批量导入文件所在路径。
+10. `test_data.batch_import.file_name`：批量导入文件名。
+11. `test_data.batch_export.export_dir`：批量导出文件路径。
+12. `test_data.batch_export.export_file_name`：批量导出文件名。
+13. `test_data.packet_capture.process_name`：抓包工具进程名称。
+14. `test_data.packet_capture.startup_path`：抓包工具启动路径。
+15. `test_data.local_extension.package_name`：本地扩展包名称。
+16. `test_data.local_extension.package_path`：本地扩展包所在目录；如果直接配置 zip 完整路径，也兼容。
 
 路径和文件名规则：
 
 1. 导入、导出、书签、本地扩展包等文件都按全路径匹配。
 2. 配置中拆分为路径和文件名的场景，实际使用时用 `路径 + 文件名` 拼接为完整路径。
-3. 配置中已经是完整路径的字段，例如 `expected_file_full_path`，直接按完整路径校验。
-4. 本地扩展包优先按 `package_path + package_name` 拼接完整路径；如果 `package_path` 直接配置为 zip 文件完整路径，也兼容。
-5. 文件存在性检查放入环境预检，运行用例前先暴露路径错误。
+3. 本地扩展包优先按 `package_path + package_name` 拼接完整路径；如果 `package_path` 直接配置为 zip 文件完整路径，也兼容。
+4. 文件存在性检查放入环境预检，运行用例前先暴露路径错误。
 
 ## 六、框架功能设计
 
@@ -646,7 +645,7 @@ resp.status_code == 200 and resp.json().get("code") == 0
 2. 批量导出文件完整路径由 `test_data.batch_export.export_dir` 和 `test_data.batch_export.export_file_name` 拼接得到。
 3. 成员导出文件如果 `test_data.member_export.export_file_name` 不为空，则由 `export_dir + export_file_name` 拼接得到。
 4. 成员导出文件如果 `export_file_name` 为空，则在 `export_dir` 中按 `test_data.member_export.export_file_regex` 匹配，例如 `导出成员列表 - 202604281947.xlsx`。
-5. 成员导出预期文件直接使用 `test_data.member_export.expected_file_full_path`。
+5. 成员导出预期数据来自清空筛选时监听到的 `GET /gin/v1/member` 响应，不维护固定预期 Excel。
 6. 自动化校验时需要同时匹配路径和文件名。
 7. 导出类用例需要等待文件生成完成，再进行断言。
 8. 文件生成完成的判断可结合文件是否存在、文件大小是否大于 0、短时间内文件大小是否稳定。
@@ -797,7 +796,7 @@ DICloak自动化框架/
 
 ## 八、P0 用例设计
 
-当前第一阶段已完成环境管理模块 25 条 P0 用例，并已开始补充全局设置模块和环境分组管理模块 P0 用例。
+当前第一阶段已完成环境管理模块 31 条 P0 用例，并已完成全局设置 12 条、环境分组管理 6 条、成员管理 15 条和代理管理 4 条 P0 用例。
 
 已实现用例：
 
@@ -826,6 +825,12 @@ DICloak自动化框架/
 23. `test_23_batch_edit_environment_tags.py`：批量编辑环境标签。
 24. `test_24_edit_environment_tags.py`：编辑环境标签。
 25. `test_25_filter_environment_tag.py`：筛选标签。
+26. `test_26_cookie_data_validation.py`：预置环境 Cookie 云端数据恢复校验。
+27. `test_27_local_storage_data_validation.py`：预置环境 Local Storage 云端数据恢复校验。
+28. `test_28_indexeddb_data_validation.py`：预置环境 IndexedDB 云端数据恢复校验。
+29. `test_29_new_environment_cookie_persistence.py`：新环境 Cookie 持续保持，沿用原有默认创建流程；创建问题待确认，尚未按当前代码真实通过。
+30. `test_30_new_environment_local_storage_persistence.py`：新环境 Local Storage 持续保持，沿用原有默认创建流程；尚未真实运行。
+31. `test_31_new_environment_indexeddb_persistence.py`：新环境 IndexedDB 持续保持，沿用原有默认创建流程；尚未真实运行。
 
 全局设置模块：
 
@@ -1139,7 +1144,7 @@ Electron 可能暴露多个页面，自动化连接错页面会导致操作失�
 12. 页面对象模板。
 13. 导入导出文件完整路径校验。
 14. 用例数据后置清理机制。
-15. 环境管理模块 25 条 P0 用例。
+15. 环境管理模块 31 条 P0 用例；其中三条预置环境数据校验已完成 Windows 真实串行验证，三条新环境持续保持用例已完成静态验证，待原有默认创建流程问题确定处理方式后再实跑。
 16. 全局设置模块 12 条 P0 用例。
 17. 环境分组管理模块 6 条 P0 用例。
 18. 成员管理模块 15 条 P0 用例。

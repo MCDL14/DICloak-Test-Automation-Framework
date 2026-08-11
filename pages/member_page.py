@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from core.config import timeout_seconds as config_timeout_seconds
+from core.member_export import extract_target_member_records
 from core.ui_driver import UIDriver
 from pages.base_page import BasePage
 
@@ -21,18 +22,29 @@ class MemberPage(BasePage):
         self._expand_team_management_if_needed()
         self.cdp.click_element_by_script(self._visible_menu_item_script("成员列表"))
         self._wait_for_member_list()
+        self._wait_for_member_table_not_loading()
 
     def open_member_edit_dialog(self, member_name: str) -> None:
         self.cdp.click_element_by_script(self._member_row_edit_button_script(member_name))
         self._wait_for_edit_member_dialog(member_name)
 
-    def rename_member(self, current_name: str, new_name: str, supervisor: str = "") -> None:
+    def rename_member(
+        self,
+        current_name: str,
+        new_name: str,
+        supervisor: str = "",
+        environment_group_if_empty: str = "",
+    ) -> None:
         self.open_member_edit_dialog(current_name)
         self.cdp.fill_element_by_script(self._dialog_input_by_label_script("成员名称"), new_name)
+        if environment_group_if_empty and not self.selected_environment_groups_in_edit_dialog():
+            self._select_environment_group_in_edit_dialog(environment_group_if_empty)
+            self._wait_edit_dialog_environment_group_selected(environment_group_if_empty)
         if supervisor and self.cdp.evaluate(self._dialog_select_label_exists_script("上级经理")):
             self._select_dialog_option_by_label("上级经理", supervisor)
         self.cdp.click_element_by_script(self._active_dialog_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_member_table_not_loading()
         self.wait_member_visible(new_name)
         self.wait_member_absent(current_name)
 
@@ -115,6 +127,28 @@ class MemberPage(BasePage):
             return {}
         return {str(key): str(item or "").strip() for key, item in value.items()}
 
+    def member_identity_type_tooltip(self, member_name: str, expected_type: str = "") -> str:
+        expected = str(expected_type or "").strip()
+        self.cdp.hover_element_by_script(self._member_identity_cell_script(member_name))
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        last_texts: list[str] = []
+        while time.time() < deadline:
+            value = self.cdp.evaluate(self._visible_member_identity_tooltip_texts_script())
+            last_texts = [str(item or "").strip() for item in value] if isinstance(value, list) else []
+            if expected:
+                for text in last_texts:
+                    if expected in text:
+                        return text
+            else:
+                for text in last_texts:
+                    if "内部成员" in text or "外部成员" in text:
+                        return text
+            time.sleep(0.2)
+        raise TimeoutError(
+            f"member identity type tooltip was not visible: member={member_name}, "
+            f"expected={expected or '内部成员/外部成员'}, actual={last_texts}"
+        )
+
     def filter_by_member_group(self, group_name: str) -> None:
         clean_name = str(group_name or "").strip()
         if not clean_name:
@@ -159,6 +193,39 @@ class MemberPage(BasePage):
             return
         self.cdp.click_element_by_script(self._clear_filter_button_script())
         self.wait_member_filters_cleared()
+        self._wait_for_member_table_not_loading()
+
+    def capture_members_from_clear_filter_response(
+        self,
+        member_names: list[str] | tuple[str, ...],
+    ) -> list[dict[str, object]]:
+        clean_names = [str(name or "").strip() for name in member_names if str(name or "").strip()]
+        if not clean_names:
+            raise ValueError("target member names are empty")
+
+        # Ensure the clear-filter action is available so the listener can wrap the
+        # exact GET /gin/v1/member request triggered by that click.
+        if not bool(self.cdp.evaluate(self._clear_filter_button_script())):
+            self.filter_by_member_name_or_id(clean_names[0])
+        if not bool(self.cdp.evaluate(self._clear_filter_button_script())):
+            raise RuntimeError("member clear-filter button did not become available")
+
+        response = self.cdp.click_element_by_script_and_wait_for_response(
+            self._clear_filter_button_script(),
+            "/gin/v1/member",
+            method="GET",
+            exact_path=True,
+        )
+        self.wait_member_filters_cleared()
+        if int(response.get("status") or 0) != 200:
+            raise AssertionError(
+                f"member list response status mismatch: status={response.get('status')}, "
+                f"url={response.get('url')}"
+            )
+        return extract_target_member_records(
+            str(response.get("response_body") or ""),
+            clean_names,
+        )
 
     def member_name_id_values_in_current_list(self) -> list[dict[str, str]]:
         return [
@@ -189,11 +256,13 @@ class MemberPage(BasePage):
                 continue
             visible_record = {
                 "id": str(row.get("id") or "").strip(),
-                "name": str(row.get("name") or "").strip(),
+                "name": self._normalize_member_name(row.get("name")),
                 "raw": str(row.get("raw") or "").strip(),
                 "remark": str(row.get("remark") or "").strip(),
                 "created_time": str(row.get("created_time") or "").strip(),
                 "text": str(row.get("text") or "").strip(),
+                "row_index": str(row.get("row_index") or "").strip(),
+                "is_current_account": "true" if bool(row.get("is_current_account")) else "false",
             }
             matched_record = self._match_member_api_record(visible_record, api_records)
             if matched_record:
@@ -225,20 +294,47 @@ class MemberPage(BasePage):
                 return record
         return None
 
+    def member_environment_groups_from_api(self, member_id: str) -> list[str]:
+        clean_id = str(member_id or "").strip()
+        if not clean_id:
+            raise ValueError("member id is empty")
+        api_rows = self.cdp.evaluate(self._member_api_records_script())
+        if not isinstance(api_rows, list):
+            raise TimeoutError("member API did not return a member list")
+        for row in api_rows:
+            if not isinstance(row, dict) or str(row.get("id") or "").strip() != clean_id:
+                continue
+            all_env_group = str(row.get("all_env_group") or "").strip().lower()
+            if row.get("all_env_group") is True or all_env_group in {"1", "true", "yes", "on"}:
+                return ["全部分组"]
+            env_group_list = row.get("env_group_list")
+            if not isinstance(env_group_list, list):
+                return []
+            return self._normalize_environment_group_values(
+                [
+                    group.get("env_group_name")
+                    for group in env_group_list
+                    if isinstance(group, dict)
+                ]
+            )
+        raise TimeoutError(f"member API record was not found by id: {clean_id}")
+
     def _normalize_member_api_records(self, rows: list[object]) -> list[dict[str, str]]:
         records: list[dict[str, str]] = []
-        for row in rows:
+        for row_index, row in enumerate(rows):
             if not isinstance(row, dict):
                 continue
             records.append(
                 {
                     "id": str(row.get("id") or "").strip(),
-                    "name": str(row.get("name") or "").strip(),
+                    "name": self._normalize_member_name(row.get("name")),
                     "remark": self._member_list_display_value(row.get("remark")),
                     "created_time": str(row.get("create_time") or "").strip(),
                     "creator": str(row.get("create_by_name") or "").strip(),
                     "email": str(row.get("email") or "").strip(),
                     "raw": str(row.get("name") or "").strip(),
+                    "row_index": str(row_index),
+                    "is_current_account": "true" if self._member_api_row_is_current_account(row) else "false",
                 }
             )
         return records
@@ -254,12 +350,25 @@ class MemberPage(BasePage):
             if len(matched_by_id) == 1:
                 return matched_by_id[0]
 
-        name = visible_record.get("name", "")
+        name = self._normalize_member_name(visible_record.get("name", ""))
         if not name:
             return None
-        candidates = [record for record in api_records if record["name"] == name]
+        candidates = [
+            record
+            for record in api_records
+            if self._normalize_member_name(record["name"]) == name
+        ]
         if len(candidates) == 1:
             return candidates[0]
+
+        if visible_record.get("is_current_account") == "true":
+            current_account_matches = [
+                record for record in candidates if record.get("is_current_account") == "true"
+            ]
+            if len(current_account_matches) == 1:
+                return current_account_matches[0]
+            if current_account_matches:
+                candidates = current_account_matches
 
         remark = visible_record.get("remark", "")
         if remark:
@@ -277,11 +386,47 @@ class MemberPage(BasePage):
             if created_matches:
                 candidates = created_matches
 
+        row_index = visible_record.get("row_index", "")
+        if row_index:
+            index_matches = [record for record in candidates if record.get("row_index") == row_index]
+            if len(index_matches) == 1:
+                return index_matches[0]
+
         return None
 
     def _member_list_display_value(self, value: object) -> str:
         text = str(value or "").strip()
         return text if text else "--"
+
+    def _normalize_environment_group_values(self, values: list[object]) -> list[str]:
+        ignored_values = {
+            "--",
+            "环境分组",
+            "请选择",
+            "请选择环境分组",
+            "需要指定环境分组",
+        }
+        normalized: list[str] = []
+        for value in values:
+            clean_value = str(value or "").strip()
+            if not clean_value or clean_value in ignored_values:
+                continue
+            normalized.append("全部分组" if clean_value.lower() == "all" else clean_value)
+        return self._unique_non_empty(normalized)
+
+    def _normalize_member_name(self, value: object) -> str:
+        text = str(value or "").strip()
+        for marker in ("(本账号)", "（本账号）"):
+            if text.endswith(marker):
+                return text[: -len(marker)].strip()
+        return text
+
+    def _member_api_row_is_current_account(self, row: dict[str, object]) -> bool:
+        for key in ("is_self", "is_current", "current", "self"):
+            if str(row.get(key) or "").strip().lower() in {"1", "true"}:
+                return True
+        configured_username = str(self.config.get("account", {}).get("username") or "").strip().lower()
+        return bool(configured_username) and str(row.get("email") or "").strip().lower() == configured_username
 
     def member_id_by_exact_name(self, member_name: str) -> str:
         clean_name = str(member_name or "").strip()
@@ -292,6 +437,22 @@ class MemberPage(BasePage):
             if value["name"] == clean_name and value["id"]:
                 return value["id"]
         raise TimeoutError(f"member id was not found by exact name: {clean_name}")
+
+    def member_name_by_id(self, member_id: str) -> str:
+        clean_id = str(member_id or "").strip()
+        if not clean_id:
+            raise ValueError("member id is empty")
+        record = self._member_record_by_id_in_current_list(clean_id)
+        if record and record.get("name"):
+            return str(record["name"]).strip()
+        self.filter_by_member_name_or_id(clean_id)
+        record = self._member_record_by_id_in_current_list(clean_id)
+        if record and record.get("name"):
+            return str(record["name"]).strip()
+        api_record = self._member_api_record_by_id(clean_id)
+        if api_record and api_record.get("name"):
+            return str(api_record["name"]).strip()
+        raise TimeoutError(f"member name was not found by id: {clean_id}")
 
     def member_remark_values_in_current_list(self) -> list[str]:
         values = self.cdp.evaluate(self._member_remark_values_in_current_list_script())
@@ -334,14 +495,21 @@ class MemberPage(BasePage):
                 last_error = exc
         raise TimeoutError(f"secondary dialog confirm button was not found: {preferred_texts}") from last_error
 
-    def assign_environment_group_to_member(self, member_name: str, group_name: str) -> list[str]:
+    def assign_environment_group_to_member(
+        self,
+        member_name: str,
+        group_name: str,
+        *,
+        member_id: str,
+    ) -> list[str]:
+        original_groups = self.member_environment_groups_from_api(member_id)
         self.open_member_edit_dialog(member_name)
-        original_groups = self.selected_environment_groups_in_edit_dialog()
         if group_name not in original_groups:
             self._select_environment_group_in_edit_dialog(group_name)
         self._wait_edit_dialog_environment_group_selected(group_name)
         self.cdp.click_element_by_script(self._active_dialog_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_member_table_not_loading()
         self.wait_member_environment_groups_contain(member_name, group_name)
         return original_groups
 
@@ -349,13 +517,13 @@ class MemberPage(BasePage):
         values = self.cdp.evaluate(self._edit_dialog_environment_group_values_script())
         if not isinstance(values, list):
             return []
-        return self._unique_non_empty([str(value) for value in values])
+        return self._normalize_environment_group_values(values)
 
     def member_authorized_environment_groups(self, member_name: str) -> list[str]:
         values = self.cdp.evaluate(self._member_row_authorized_group_values_script(member_name))
         if not isinstance(values, list):
             return []
-        return self._unique_non_empty([str(value) for value in values])
+        return self._normalize_environment_group_values(values)
 
     def edit_dialog_field_value(self, field_label: str) -> str:
         return str(self.cdp.evaluate(self._dialog_field_value_script(field_label)) or "").strip()
@@ -508,7 +676,7 @@ class MemberPage(BasePage):
         expected_groups: list[str],
         timeout_seconds: int | None = None,
     ) -> None:
-        expected = set(self._unique_non_empty(expected_groups))
+        expected = set(self._normalize_environment_group_values(expected_groups))
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
@@ -638,6 +806,31 @@ class MemberPage(BasePage):
                 return
             time.sleep(0.2)
         raise RuntimeError("member list did not appear")
+
+    def _wait_for_member_table_not_loading(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if not self.cdp.evaluate(self._member_table_loading_visible_script()):
+                return
+            time.sleep(0.3)
+        raise TimeoutError("member table is still loading")
+
+    def _member_table_loading_visible_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            return Array.from(document.querySelectorAll(".el-loading-mask"))
+                .some((mask) => visible(mask));
+        }
+        """
 
     def _wait_for_filter_drawer_visible(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -1639,10 +1832,13 @@ class MemberPage(BasePage):
             const parseNameId = (value) => {{
                 const raw = clean(value);
                 const match = raw.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
+                const displayedName = match ? clean(match[1]) : raw;
+                const isCurrentAccount = /[（(]本账号[）)]\\s*$/.test(displayedName);
                 return {{
                     raw,
-                    name: match ? clean(match[1]) : raw,
+                    name: displayedName.replace(/\\s*[（(]本账号[）)]\\s*$/, "").trim(),
                     id: match ? match[2] : "",
+                    is_current_account: isCurrentAccount,
                 }};
             }};
             const headers = Array.from(document.querySelectorAll({self.locator("table_header")!r}))
@@ -1667,6 +1863,7 @@ class MemberPage(BasePage):
                         created_time: clean(cells[createdIndex]?.innerText || cells[createdIndex]?.textContent || ""),
                         text: clean(row.innerText || row.textContent || ""),
                         row_index: String(rowIndex),
+                        is_current_account: parsed.is_current_account,
                     }};
                 }})
                 .filter((item) => item.raw);
@@ -1888,6 +2085,67 @@ class MemberPage(BasePage):
         }}
         """
 
+    def _member_identity_cell_script(self, member_name: str) -> str:
+        return f"""
+        () => {{
+            const expectedName = {member_name!r};
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const headers = Array.from(document.querySelectorAll({self.locator("table_header")!r}))
+                .filter(visible)
+                .map((header) => clean(header.innerText || header.textContent));
+            const headerKeys = headers.map((header) => header.replace(/\\s+/g, ""));
+            let nameIndex = headerKeys.findIndex((header) => header.includes("成员名称"));
+            if (nameIndex < 0) nameIndex = 1;
+            let identityIndex = headerKeys.findIndex((header) => header.includes("成员身份"));
+            if (identityIndex < 0) identityIndex = 4;
+            const rows = Array.from(document.querySelectorAll({self.locator("table_row")!r})).filter(visible);
+            for (const row of rows) {{
+                const cells = Array.from(row.querySelectorAll({self.locator("table_cell")!r})).filter(visible);
+                const nameCell = cells[nameIndex] || cells[1] || cells[0] || row;
+                const nameText = clean(nameCell.innerText || nameCell.textContent);
+                const match = nameText.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
+                const actualName = match ? clean(match[1]) : nameText;
+                if (actualName !== expectedName) continue;
+                const identityCell = cells[identityIndex];
+                return identityCell?.querySelector(".el-tooltip__trigger") || identityCell || null;
+            }}
+            return null;
+        }}
+        """
+
+    def _visible_member_identity_tooltip_texts_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && Number(style.opacity || "1") > 0.01
+                    && el.getAttribute("aria-hidden") !== "true"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.right > 0
+                    && rect.bottom > 0
+                    && rect.left < window.innerWidth
+                    && rect.top < window.innerHeight;
+            };
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            return Array.from(document.querySelectorAll(".el-popper, .el-popover, .el-tooltip__popper"))
+                .filter(visible)
+                .map((el) => clean(el.innerText || el.textContent))
+                .filter((text) => text.includes("内部成员") || text.includes("外部成员"));
+        }
+        """
+
     def _member_list_visible_script(self) -> str:
         return """
         () => {
@@ -2094,10 +2352,13 @@ class MemberPage(BasePage):
             const parseNameId = (value) => {{
                 const raw = clean(value);
                 const match = raw.match(/^(.*?)\\s*ID:\\s*(\\d+)/);
+                const displayedName = match ? clean(match[1]) : raw;
+                const isCurrentAccount = /[（(]本账号[）)]\\s*$/.test(displayedName);
                 return {{
                     raw,
-                    name: match ? clean(match[1]) : raw,
+                    name: displayedName.replace(/\\s*[（(]本账号[）)]\\s*$/, "").trim(),
                     id: match ? match[2] : "",
+                    is_current_account: isCurrentAccount,
                 }};
             }};
             const headers = Array.from(document.querySelectorAll({self.locator("table_header")!r}))
@@ -2111,15 +2372,17 @@ class MemberPage(BasePage):
             if (createdIndex < 0) createdIndex = 12;
             const rows = Array.from(document.querySelectorAll({self.locator("table_row")!r}))
                 .filter((row) => visible(row));
-            for (const row of rows) {{
+            for (const [rowIndex, row] of rows.entries()) {{
+                if (expected.row_index !== "" && rowIndex !== Number(expected.row_index)) continue;
                 const cells = Array.from(row.querySelectorAll({self.locator("table_cell")!r})).filter(visible);
                 const parsed = parseNameId(cells[nameIndex]?.innerText || cells[nameIndex]?.textContent || "");
                 const remark = clean(cells[remarkIndex]?.innerText || cells[remarkIndex]?.textContent || "");
                 const createdTime = clean(cells[createdIndex]?.innerText || cells[createdIndex]?.textContent || "");
                 if (parsed.id && expected.id && parsed.id !== expected.id) continue;
                 if (parsed.name !== expected.name) continue;
-                if (expected.remark && remark !== expected.remark) continue;
-                if (expected.created_time && createdTime !== expected.created_time) continue;
+                if (expected.is_current_account === "true" && !parsed.is_current_account) continue;
+                if (expected.remark && remark && remark !== expected.remark) continue;
+                if (expected.created_time && createdTime && createdTime !== expected.created_time) continue;
                 const checkbox = Array.from(row.querySelectorAll(".el-checkbox, label"))
                     .find((el) => visible(el));
                 if (!checkbox) return null;

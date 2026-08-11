@@ -46,6 +46,66 @@ python run.py --config config/config.yaml --module test_01_kernel_integrity.py -
 
 这个模式只适合本地调试。正式自动化运行仍建议让框架按配置统一管理 APP 生命周期。
 
+## 本地登录存储模拟站
+
+框架已提供独立的 Local Auth Lab，用于验证 DICloak 对 Cookie、Local Storage、IndexedDB 的浏览器数据上传与恢复能力。Local Auth Lab 层只提供测试基础设施和可复用操作层；具体业务流程由环境管理用例独立编排。三个站点分别使用独立 Origin，并且每个站点只保存一种登录令牌：
+
+- `cookie.dicloak.localhost`：HttpOnly Cookie；
+- `localstorage.dicloak.localhost`：Local Storage；
+- `indexeddb.dicloak.localhost`：IndexedDB。
+
+三个页面均支持注册、登录、退出、当前账号和登录状态展示。账号按站点写入本地 SQLite，注册成功后不会自动登录，也不会创建 session 或写入浏览器令牌；令牌无效、过期、被撤销或不存在时统一显示“未登录”。密码使用 scrypt 派生值保存，session token 使用 HMAC-SHA256 签名。
+
+框架默认配置中的该能力保持关闭。旧的 `config.yaml` 没有 `local_auth_lab` 整段配置时仍按关闭处理，普通 `--precheck` 和所有未声明依赖的现有用例不会增加 DNS、端口、数据库、模板或密钥检查。当前工作区通过被 Git 忽略的 `config/local_auth_lab.yaml` 启用真实测试站；该文件可覆盖 Windows `config.yaml` 和 macOS `config.macos.yaml` 中的同名段。
+
+启用后首次启动会在 `test_data/local_auth_lab/credentials.json` 原子生成签名密钥和管理密钥，并始终优先读取该持久文件。文件、SQLite 数据库及 WAL/SHM 均被 Git 和普通代码快照强制排除。环境变量只用于首次生成文件时引导写入，后续改变环境变量不会轮换已经固化的密钥：
+
+```powershell
+$env:DICLOAK_AUTH_LAB_SIGNING_SECRET = "请使用仅供测试的高强度随机值"
+$env:DICLOAK_AUTH_LAB_ADMIN_KEY = "请使用另一个高强度随机值"
+```
+
+显式依赖 `local_auth_lab` 的 suite 会先检查固定端口是否已有版本、schema、域名、Origin 模式、Session TTL 和持久签名密钥指纹均兼容的服务；兼容服务存在时直接复用。端口没有兼容服务时，才按启用配置和持久凭据执行专项预检并启动新实例；端口存在旧随机密钥或旧 TTL 服务时会明确判为不兼容，不会误复用。该路径仍只作用于显式依赖的 suite。
+
+Session TTL 当前固定为 `15552000` 秒（180 天）。配置变化不会修改已经签发的旧令牌；从历史随机密钥切换到持久密钥时，服务只对“完整 token 哈希与 SQLite 记录精确相同、账号有效、Session 未撤销且旧 token 未过期”的请求自动换发 180 天新令牌。Cookie 通过 `Set-Cookie` 覆盖，Local Storage 和 IndexedDB 由页面适配层原位覆盖，因此已有云端登录数据可以无密码迁移，伪造 token 不能仅靠未校验 payload 通过迁移。
+
+默认 `origin_mode=localhost` 使用 `*.dicloak.localhost`。Chromium/GinsBrowser 会将这些地址识别为本地主机并隐式绕过代理，因此 Windows、macOS、Linux 均不需要修改 hosts，也不依赖系统 DNS 或代理 Fake-IP 的解析结果。服务仍只监听 `127.0.0.1:18080`。
+
+2026-08-03 Windows 实机验证已完成：固定端口 `18080` 下，控制首页和三个模拟站均可直接通过 `*.dicloak.localhost` 打开，用户人工确认页面正常；验证过程没有修改 hosts、系统 DNS、系统代理或 DICloak APP 配置。Google Chrome 151 + 原生 CDP 三站冒烟也已通过，覆盖“注册后不自动登录、登录后目标存储存在令牌、服务端撤销后被动掉登并清除令牌”。macOS 和 Linux 当前完成了跨平台实现与配置设计，尚未记录对应平台实机结论。
+
+如果产品侧明确过滤 `.localhost` 浏览器数据，可以切换到 `origin_mode=custom_domains` 并配置自定义域名。只有该兼容模式需要让所有域名在运行节点解析到回环地址，例如：
+
+```text
+127.0.0.1 sync.dicloak.test
+127.0.0.1 cookie.sync.dicloak.test
+127.0.0.1 localstorage.sync.dicloak.test
+127.0.0.1 indexeddb.sync.dicloak.test
+```
+
+框架不会自动修改系统 hosts、代理或 DNS。`localhost` 模式通过静态域名约束和真实 Chromium/CDP 页面访问验证连通性；`custom_domains` 模式额外执行操作系统 DNS 回环检查。
+
+用例接入只需在测试类上显式声明运行时依赖：
+
+```python
+class TestBrowserDataCloudRestore(unittest.TestCase):
+    REQUIRED_RUNTIME_SERVICES = {"local_auth_lab"}
+```
+
+Runner 会在普通环境预检和 suite 筛选完成后，仅为该 suite 启动服务；退出、异常或中断时只停止本次运行拥有的服务实例。用例可组合以下组件，不需要修改现有 APP Page Object 或 `core/kernel_cdp.py`：
+
+- `LocalAuthLabClient`：准备账号、查询状态、撤销 session、按 `siteId/username/runId/jti` 精确清理；
+- `KernelCDPSession`：通过 GinsBrowser 动态 CDP 端口创建并独占一个临时页面 target；
+- `LocalAuthLabPage`：封装三个页面的打开、注册、登录、退出和状态读取；
+- `BrowserStorageInspector`：直接读取 Cookie、Local Storage 或 IndexedDB，供测试建立前后置证据。
+
+需要单独调试服务时，在准备好 `config/local_auth_lab.yaml` 后运行：
+
+```bash
+python -m core.local_auth_lab --config config/config.yaml
+```
+
+服务数据库、SQLite WAL/SHM、持久凭据和本机覆盖配置均已从 Git 与普通代码快照排除；版本化页面模板会随远端代码同步。macOS 勾选“远程执行前同步当前代码”时，不区分所选用例是否依赖账号站：UI 固定在代码快照成功后通过认证状态专用 SFTP 通道发送覆盖配置、持久凭据和 SQLite 在线备份，远端校验数据库哈希、schema 与密钥指纹全部通过后才启动用例。认证状态同步不等于启动后端；只有 suite 声明 `local_auth_lab` 依赖时远端 Runner 才启动服务，并在执行结束后关闭本次 Runner 拥有的服务。完整架构、接口和隔离约束见 `本地登录存储模拟站技术方案.md`。
+
 ## Linux 远端启动
 
 当前已在远端 Ubuntu 24.04 机器完成第一轮 Linux 真机调通。远端项目目录为：
@@ -121,7 +181,7 @@ Mac 当前已验证：
 - `python run.py --config config/config.macos.yaml --level P0` 通过，结果 `total=59 passed=58 failed=0 errors=0 skipped=1 flaky=1`。
 - UI 远程节点模式已完成“同步当前代码”后执行 `P0 全量` 验证，结果 `total=59 passed=57 failed=0 errors=1 skipped=1 flaky=0`；唯一错误为代理创建弹窗确认后未关闭，保留为 Mac 远端代理业务/环境问题继续排查。
 
-以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 62 条，最新状态见“最近验证记录”。
+以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 68 条，最新状态见“最近验证记录”。
 
 Mac 当前跳过项：
 
@@ -142,7 +202,28 @@ Mac 当前跳过项：
 streamlit run ui/app.py
 ```
 
-UI 支持用例发现、按模块筛选、批量选择、实时日志、运行结果统计和历史日志查看，并复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路。同一 UI 进程内执行任务串行化；不要同时用 CLI 和 UI 对同一个 APP、CDP 端口、测试账号或业务数据执行自动化。详细说明见 `UI使用文档.md`。
+UI 支持用例发现、按模块筛选、批量选择、实时日志、运行结果统计和历史日志查看，并复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路。用例运行中点击 Streamlit 右上角 `Stop` 会同步取消后台执行：本机任务中断独立 CLI 子进程，远程任务向 SSH PTY 发送 `Ctrl+C`。UI 还支持把 Windows 本机和 macOS 远程执行作为一个同步任务并行启动、统一停止，并分别展示两端结果。不要在 UI 任务之外再用 CLI 抢占同一个 APP、CDP 端口、测试账号或业务数据。详细说明见 `UI使用文档.md`。
+
+### 自动化账号组与同步执行
+
+首次使用前，打开 UI 的“自动化账号组”页面维护固定的两组数据。每组包含：
+
+- 自动化主账号、密码、自动化团队名称和主账号成员 ID；该 ID 只供主账号停用/到期停用接口用例使用。
+- 普通 UI 用例使用的外部成员名称和邮箱，与自动化主账号严格区分。
+- 内部成员账号、密码和内部成员 ID。
+- 该团队的成员 Open API token；停用/到期用例跨团队执行时不能共用另一个团队的 token。
+
+保存位置为 `config/account_groups.yaml`。该文件会记住密码和 token，已加入 `.gitignore`；编辑页面提供“显示密码和 Open API token”开关。仓库只提交不含真实凭据的 `config/account_groups.example.yaml`。
+
+执行页提供三种位置：
+
+- **本机**：选择一组账号后在 Windows 本机执行。
+- **远程节点**：选择一组账号后在远端执行。
+- **本机 + Mac 远程**：Windows 和 macOS 必须选择不同账号组，同时执行相同的已勾选用例。
+
+两个团队还需要准备一致的业务基线数据。当前全量用例会直接使用成员组 `运营组/管理组`、环境组 `未分组/分组二/分组三`、固定成员备注和环境标签等数据；某个团队缺少这些数据时，只会影响依赖该数据的用例，不代表同步执行通道失败。成员创建用例使用按账号组稳定生成的测试邮箱和内部登录账号，避免双端同时创建时发生平台级唯一值冲突。上级经理、外部成员编辑、邮箱筛选和成员导出从账号组的“用例所需外部成员”读取名称/邮箱，不读取自动化主账号及其 ID；成员导出还会监听 `GET /gin/v1/member`，实时获取 `自动化成员1` 和该外部成员的接口记录及真实 ID，再与导出 Excel 的 14 列逐列比较。
+
+执行时只把当前执行端选中的一组写入临时运行配置。Windows 临时文件在子进程结束后删除；macOS 临时文件通过 SFTP 以 `0600` 权限上传，SSH 命令结束后删除。密码和 token 不会拼入命令预览或运行日志。远端代码快照同步强制排除 `account_groups.yaml` 和 `.ui_account_profile_*.yaml`，即使自定义同步规则包含整个 `config/` 也不会上传两组凭据。
 
 ### UI 远程节点执行
 
@@ -201,8 +282,11 @@ python run.py --config <remote-config> --case <test_id_1> --case <test_id_2>
 远端代码同步：
 
 - “检查远端代码”会比较远端当前 `.remote_manifest.json` 和本地当前工作区快照，避免误跑旧代码。
-- “同步当前代码”会通过 SFTP 发布本地当前工作区到远端新快照目录，不依赖远端安装 Git。
-- 同步会排除本地真实配置、远程连接缓存和运行产物，保留远端已有的 `config/*.yaml` 运行配置和 `.venv`。
+- “同步当前代码”会通过 SFTP 发布本地当前工作区到远端新快照目录，包含本地 `config/` 和 `test_data/`，不依赖远端安装 Git。
+- 勾选“远程执行前同步当前代码”后，不再按 level/module/business-module/case 区分是否需要账号站，固定严格按“代码快照 → Local Auth Lab 认证状态 → 远程用例”串行执行；认证状态同步失败时不会继续执行任何远程用例。认证状态使用独立 SFTP 包，不进入 `.remote_manifest.json`，包含 `config/local_auth_lab.yaml`、持久凭据及通过 SQLite backup API 生成的一致性数据库快照。
+- 认证状态在远端以 `0600` 权限安装，并校验数据库 SHA-256、schema 和非敏感签名密钥指纹；同步时若远端认证站仍在运行会明确失败，避免新快照误复用仍绑定旧 release 数据库的进程。完整密钥、token 和密码不写入同步日志。该链路让 macOS 后端使用与 Windows 相同的签名密钥和 Session 记录，已同步到云端的登录令牌才能在 Mac 浏览器中免登。
+- 2026-08-04 修复 macOS 认证状态同步阶段 `zsh: command not found: python`：独立认证状态安装脚本现在会在远端项目目录内先执行节点 `command_prefix`、再 source `venv_activate`，随后校验 `PYTHON_BIN`；当节点仍配置为 `python` 且系统没有该命令时，会自动回退到 `python3`，仍找不到解释器才以 `PYTHON_BIN_NOT_FOUND` 明确失败。建议 macOS 节点在 `config/remote_hosts.yaml` 中显式配置为 `.venv/bin/python`、`python3` 或 pyenv 的绝对解释器路径。
+- 同步会让远端使用当前本地运行配置和测试数据；仅在本地快照缺少某个 `config/*.yaml` 时才保留远端旧配置。远程连接配置、连接缓存、账号组凭据、运行时账号临时文件和运行产物始终排除，远端 `.venv` 会保留。
 - 如果远端 `project_dir` 是真实目录，首次同步会先把它改名为 `.backup_<release>`，再创建指向新快照的软链接；旧目录保留可回退。
 - 默认发布目录为 `<project_dir>_releases`，可在 `config/remote_hosts.yaml` 中通过 `sync_release_root` 覆盖。
 - `config/remote_sync.example.yaml` 描述同步包含/排除规则；真实 `config/remote_sync.yaml` 已加入 `.gitignore`，仅在需要本机覆盖规则时创建。
@@ -210,7 +294,7 @@ python run.py --config <remote-config> --case <test_id_1> --case <test_id_2>
 当前限制：
 
 - 远程模式选择“执行用例”时，会按执行页下方已勾选的 test id 执行；显示模块和搜索显示只影响列表可见性，不改变已勾选状态。
-- 远端虚拟环境、依赖、APP 图形会话和运行配置文件仍需提前准备好；同步代码不会安装依赖或生成真实配置。
+- 远端虚拟环境、依赖和 APP 图形会话仍需提前准备好；同步代码不会安装依赖。
 - 远程日志进入 UI 前会做基础脱敏，隐藏 `apiSecret`、`BOOT_TOKEN`、`USER_PASSWD`、`password`、`token` 等字段。
 
 远程节点能力矩阵会在“高级信息”中展示当前平台边界：
@@ -326,11 +410,11 @@ CDP 9222: none
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 62 条 P0 用例：环境管理 25 条、全局设置 12 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 68 条 P0 用例：环境管理 31 条、全局设置 12 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
 
-当前已完成并验证环境管理模块 25 条 P0 用例，文件位于 `tests/p0/environment_management/`：
+当前环境管理模块已接入 31 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
-- `test_01_kernel_integrity.py`
+- `test_01_kernel_integrity.py`：按独立阶段校验 142 内核首次启动、缓存拷贝、缓存启动路径、134 内核下载和 134 环境启动；中间阶段失败会记录原因并继续执行后续阶段，最后统一汇总断言，避免 134 下载被前置断言阻断。
 - `test_02_create_default_environment.py`
 - `test_03_batch_create_environments.py`
 - `test_04_create_134_kernel_environment.py`
@@ -355,8 +439,16 @@ CDP 9222: none
 - `test_23_batch_edit_environment_tags.py`
 - `test_24_edit_environment_tags.py`
 - `test_25_filter_environment_tag.py`
+- `test_26_cookie_data_validation.py`：先回到环境管理页，再通过全局设置统一入口进入页面；该入口不监听配置接口，而是等待 `#/setting` 页面可见、“正在加载中...”文案与 loading 遮罩消失、数据同步区域呈现且复选框状态稳定，再检查页面至少有 3 个复选框处于已勾选状态。不满足时会先重新进入环境管理页，再进入全局设置，最多重新进入 2 次；重试两次后仍不足 3 个时直接以断言异常结束当前用例。随后确保“数据设置 → 数据同步 → Cookie”已勾选，精确搜索并三次打开预置环境 `Cookie数据校验`；每次通过内核 CDP 访问 `http://cookie.dicloak.localhost:18080`、读取登录状态、关闭环境并校验按钮恢复为“打开”。第二次校验后读取 APP 基础设置中的环境缓存目录，只删除其直接子级中名称为 19 位纯数字、且不是链接或重解析点的目录，确认删除完成后第三次打开环境，断言 Cookie 登录状态仍为“已登录”。该用例显式声明 `local_auth_lab` 运行时依赖。
+- `test_27_local_storage_data_validation.py`：复用同一全局设置加载保护，确保“数据设置 → 数据同步 → Local Storage”已勾选；未勾选时只允许该项从未勾选变为已勾选，检测到其他复选框同时变化会在保存前失败。随后精确搜索并三次打开预置环境 `Local Storage数据校验`，通过内核 CDP 访问 `http://localstorage.dicloak.localhost:18080` 并读取登录状态；每次关闭环境并校验按钮恢复为“打开”，前两次分别断言“已登录”，中间保留 3 秒业务等待。第二次后安全删除缓存根目录直接子级中的 19 位纯数字普通目录并确认无残留，第三次打开后再次断言云端恢复的 Local Storage 登录状态为“已登录”。该用例显式声明 `local_auth_lab` 运行时依赖；2026-08-03 三用例串行真实回归中一次通过。
+- `test_28_indexeddb_data_validation.py`：确保“数据设置 → 数据同步 → IndexedDB”已勾选；未勾选时只允许 `IndexedDB` 一个复选框变化，保存后重新进入页面确认持久状态。随后精确搜索并三次打开预置环境 `IndexedDB数据校验`，通过内核 CDP 访问 `http://indexeddb.dicloak.localhost:18080` 并读取登录状态；每次关闭环境、等待内核停止并确认按钮恢复为“打开”，前两次状态任一次不是“已登录”即结束当前用例，第一次和第二次之间保留 3 秒业务等待。第二次后读取基础设置中的缓存目录，安全删除直接子级中的 19 位纯数字普通目录并确认无残留，第三次打开后断言 IndexedDB 登录状态仍为“已登录”。该用例显式声明 `local_auth_lab` 运行时依赖；2026-08-03 三用例串行真实回归中一次通过。
+- `test_29_new_environment_cookie_persistence.py`：确保 Cookie 数据同步已勾选后，先删除可能由中断运行留下的同名自动化环境，再沿用原有 `create_environment()` 流程创建默认配置环境 `自动化-新环境Cookie持续保持`，不额外选择环境分组，也不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://cookie.dicloak.localhost:18080`，使用 `config/test_data.yaml` 中的本地账号 `MCDL004` 登录，等待 2 秒并读取状态；关闭环境且按钮恢复“打开”后断言账号和状态。等待 3 秒再次打开并断言 Cookie 仍保持登录；随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录，第三次打开并断言云端恢复后仍为 `MCDL004 / 已登录`。最后删除环境并确认列表中不存在；任一阶段失败时也会尝试关闭并清理该专用环境。当前真实运行会停在默认环境创建阶段，创建问题的处理方式待确认，因此不将此前显式选择 `未分组` 后的通过结果作为当前代码验证结论。
+- `test_30_new_environment_local_storage_persistence.py`：确保 Local Storage 数据同步已勾选后，清理可能由异常中断留下的同名环境，并沿用原有 `create_environment()` 创建默认配置环境 `自动化-新环境Local Storage持续保持`；不额外选择环境分组，不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://localstorage.dicloak.localhost:18080`，使用本地测试数据中的 `MCDL005` 登录，等待 2 秒后读取状态；每次均先关闭环境、等待内核退出并确认按钮恢复为“打开”，再断言账号和状态。等待 3 秒后二次验证，随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录并确认无残留，第三次打开验证 Local Storage 云端恢复，最后删除环境并确认不存在。当前仅完成配置加载、编译、发现和 P1 回归；由于默认创建问题的解决方式仍待确认，未启动 APP 进行真实运行。
+- `test_31_new_environment_indexeddb_persistence.py`：确保 IndexedDB 数据同步已勾选后，清理可能由异常中断留下的同名环境，并沿用原有 `create_environment()` 创建默认配置环境 `自动化-新环境IndexedDB持续保持`；不额外选择环境分组，不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://indexeddb.dicloak.localhost:18080`，使用本地测试数据中的 `MCDL006` 登录，等待 2 秒后读取状态；每次均先关闭环境、等待内核退出并确认按钮恢复为“打开”，再断言账号和状态。等待 3 秒后二次验证，随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录并确认无残留，第三次打开验证 IndexedDB 云端恢复，最后删除环境并确认不存在。当前仅完成配置加载、编译、发现和 P1 回归；由于默认创建问题的解决方式仍待确认，未启动 APP 进行真实运行。
 
 当前全局设置模块已完成并验证 12 条 P0 用例，文件位于 `tests/p0/global_settings/`：
+
+所有全局设置用例统一通过 `GlobalSettingsPage.open()` 进入，且不监听任何配置接口。当前路由不在 `#/setting` 时才点击“全局设置”；当前已经位于全局设置页时不重复点击。入口会等待页面标识、loading 状态、`#AsyncData` 和复选框状态稳定，并要求至少 3 个复选框已勾选；首次检查不满足时，按“环境管理 → 全局设置”完整重新进入，最多重试 2 次。第三次检查仍不满足时抛出 `AssertionError`，当前用例直接失败，不再触发 Runner 的瞬时错误重试。
 
 - `test_01_disable_view_password.py`：校验禁止查看网站密码。
 - `test_02_disable_browser_devtools.py`：禁止打开浏览器开发者工具。
@@ -367,7 +459,7 @@ CDP 9222: none
 - `test_07_disable_packet_capture_software.py`：禁用抓包软件，校验抓包进程存在时禁止打开环境，关闭抓包软件后环境可正常打开。
 - `test_08_bookmark_setting_overwrite.py`：书签设置-覆盖，校验上传书签文件覆盖内核现有书签。
 - `test_09_bookmark_setting_append.py`：书签设置-追加，校验上传书签文件追加到内核现有书签，并覆盖清空书签。
-- `test_10_environment_field_display_limit.py`：环境列表字段权限，校验环境列表只展示指定字段并恢复列表字段设置能力。
+- `test_10_environment_field_display_limit.py`：环境列表字段权限，校验环境列表按设置展示 `环境序号`、`环境名称`，并兼容新版固定保留的 `环境状态` 列，最后恢复列表字段设置能力。
 - `test_11_environment_list_pagination_setting.py`：环境列表分页设置，校验固定分页条数后隐藏分页选择器，并可恢复默认分页。
 - `test_12_environment_list_sort_limit.py`：环境列表排序设置，校验全局固定排序后隐藏列表排序按钮，并可恢复手动排序。
 
@@ -375,13 +467,13 @@ CDP 9222: none
 
 - `python run.py --config config/config.yaml --module global_settings --attach-existing-app`：`total=12 passed=12 failed=0 errors=0 skipped=0 flaky=0`。
 
-全局设置模块已兼容新版文案和元素入口：`禁止打开浏览器开发者工具` 支持新旧长短文案，网站限制快捷项支持 `Chrome 应用商店` / `谷歌应用商店`，环境列表字段权限支持 `环境列表字段权限` / `环境字段显示限制` 和 `列表字段` / `列表字段设置` 弹窗标题。`test_07_disable_packet_capture_software.py` 仍依赖 Windows 抓包工具能以当前权限启动；若工具本身需要管理员权限，需以管理员身份运行自动化进程或调整该用例的环境前置策略。
+全局设置模块已兼容新版文案和元素入口：`禁止打开浏览器开发者工具` 支持新旧长短文案，网站限制快捷项支持 `Chrome 应用商店` / `谷歌应用商店`，环境列表字段权限支持 `环境列表字段权限` / `环境字段显示限制` 和 `列表字段` / `列表字段设置` 弹窗标题，并兼容新版环境列表强制展示的 `环境状态` 列。`test_07_disable_packet_capture_software.py` 仍依赖 Windows 抓包工具能以当前权限启动；若工具本身需要管理员权限，需以管理员身份运行自动化进程或调整该用例的环境前置策略。
 
 当前已开始编写并验证环境分组管理模块 6 条 P0 用例，文件位于 `tests/p0/environment_group_management/`：
 
 - `test_01_create_environment_group.py`：创建环境分组，校验创建成功后删除并校验删除成功。
 - `test_02_group_containing_environment.py`：包含环境的分组，创建分组和归属该分组的环境，通过“包含环境”筛选框校验筛选结果并清除筛选，删除分组时勾选删除分组下环境，并校验分组和环境都被删除。
-- `test_03_group_authorized_member.py`：授权成员的分组，创建环境分组后给 `自动化成员1` 追加授权，校验授权成员弹窗和“授权成员”筛选结果，删除分组后校验成员授权环境分组恢复为原始分组。
+- `test_03_group_authorized_member.py`：授权成员的分组，通过 `/gin/v1/member` 实时解析预置成员 `自动化成员1` 在当前团队的真实 ID，并从同一接口记录读取原授权环境分组，再定位该成员并追加授权；追加成功和删除分组后的恢复结果继续通过成员列表校验，前端显示的 `all` 与 `全部分组` 按相同语义处理。
 - `test_04_filter_group_name.py`：环境分组名称筛选，切换筛选模式到“备注”并搜索 `勿动！！！`，校验列表结果均匹配备注后切回“分组名称”并清除筛选。
 - `test_05_edit_group_name.py`：修改环境分组名称，记录首个可编辑分组的名称和 ID，修改为 `自动化-修改环境分组名称` 后按 ID 校验，再还原原名称并按 ID 校验。
 - `test_06_edit_group_remark.py`：修改环境分组备注，记录首个可编辑分组的备注和 ID，修改为 `自动化-修改环境分组备注` 后按 ID 校验，再还原原备注并按 ID 校验。
@@ -392,27 +484,27 @@ CDP 9222: none
 
 当前已开始编写并验证成员管理模块 15 条 P0 用例，文件位于 `tests/p0/member_management/`：
 
-- `test_01_create_external_member.py`：创建外部成员，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段和编辑弹窗邮箱后删除并校验删除成功。
+- `test_01_create_external_member.py`：创建外部成员，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段、悬浮 `成员身份` 后展示的 `外部成员` tooltip 和编辑弹窗邮箱后删除并校验删除成功。
 - `test_02_edit_external_member_name.py`：编辑外部成员名称，将 `外部成员1` 修改为 `自动化-编辑外部成员名称` 后校验列表，再还原并校验。
-- `test_03_create_internal_member.py`：创建内部成员，填写登录账号和登录密码，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段和编辑弹窗账号后删除并校验删除成功。
-- `test_04_edit_internal_member_name.py`：编辑内部成员名称，将 `内部成员003` 修改为 `自动化-编辑内部成员名称` 后校验列表，再选择上级经理 `外部成员1` 并还原名称。
+- `test_03_create_internal_member.py`：创建内部成员，填写登录账号和登录密码，选择成员分组 `运营组`、环境分组 `未分组`、成员身份 `员工`、上级经理 `外部成员1`，关闭“到期停用”，校验列表字段、悬浮 `成员身份` 后展示的 `内部成员` tooltip 和编辑弹窗账号后删除并校验删除成功。
+- `test_04_edit_internal_member_name.py`：编辑内部成员名称，仅将 `内部成员003` 修改为 `自动化-编辑内部成员名称` 后校验列表，再还原名称；保留现有上级经理和已有环境分组，仅在环境分组为空、APP 阻止提交时补选 `未分组`。
 - `test_05_filter_member_group.py`：成员分组筛选，先创建临时 `运营组` 外部成员保证筛选结果非空，依次筛选 `运营组`、清空筛选、筛选 `管理组`、清空筛选，并校验列表“所属成员分组”列均匹配筛选值，最后删除临时成员。
-- `test_06_filter_member_name.py`：成员名称/ID 筛选，输入 `自动化成员` 并搜索，校验列表成员名称均包含该关键字；清空后输入 `1972494001272483841` 并搜索，校验列表成员 ID 均匹配该 ID。
+- `test_06_filter_member_name.py`：成员名称/ID 筛选，输入 `自动化成员` 并搜索，校验列表成员名称均包含该关键字；再通过 `/gin/v1/member` 实时解析 `自动化成员1` 在当前团队的真实 ID，清空后按该 ID 搜索并校验结果，不读取账号组主账号 ID。
 - `test_07_filter_member_remark.py`：成员备注筛选，通过“更多筛选”抽屉在 `备注` 输入 `必要数据` 并立即筛选，校验列表备注均包含该关键字后清空筛选。
-- `test_08_filter_member_login_account_email.py`：登录账号/邮箱筛选，通过“更多筛选”抽屉分别输入 `mcdl003` 和 `oytrhsjwe@tempmail.cn`，筛选后逐行打开编辑弹窗读取登录账号或成员邮箱并校验包含关键字，最后清空筛选。
+- `test_08_filter_member_login_account_email.py`：登录账号/邮箱筛选，内部登录账号从当前账号组内部成员读取，外部邮箱从当前账号组“用例所需外部成员”读取；筛选后逐行打开编辑弹窗读取对应字段并校验，最后清空筛选。
 - `test_09_batch_edit_member_remark.py`：批量编辑成员备注，按原备注定位预置成员，依次校验覆盖备注、追加备注和还原备注，并在失败清理中兜底还原原备注。
-- `test_10_export_member.py`：导出成员，按成员名称精确筛选获取 `自动化成员1` 和 `外部成员1` 的 ID 后勾选导出所选成员，校验导出文件名规则、xlsx 表头、导出范围仅包含所选成员、目标成员行和预置文件内容一致，并清理临时导出文件。
+- `test_10_export_member.py`：导出成员，目标为 `自动化成员1` 和当前账号组配置的用例外部成员；监听成员接口获取两者真实 ID 后勾选导出所选成员，校验文件名规则并将 Excel 14 列与接口快照逐列比较，最后清理临时文件。
 - `test_11_no_edit_permission_member.py`：无编辑权限成员环境操作校验，使用 MCDL007 登录后校验环境列表所有编辑入口（快捷编辑五列、下拉编辑、批量编辑备注、批量更多三项）均不可见，最后切回自动化账号并兜底还原。
 - `test_12_api_disable_external_member.py`：API 编辑外部成员-停用成员，通过成员 open API 将指定外部成员置为停用，校验接口状态码和 `msg=success`，再在 APP 内切换页面触发强制退出弹窗，点击“退出登录”后校验回到登录页，最后调用接口启用成员、重新登录自动化账号、确认团队并回到成员列表。
 - `test_13_api_disuse_external_member.py`：API 编辑外部成员-到期停用成员，通过成员 open API 设置 `disuse_enable=true`、过期时间和时区，校验接口状态码和 `msg=success`，在 APP 内点击刷新后检查强制退出弹窗；若页面内刷新未触发会话失效，则执行页面级刷新触发检查，点击“退出登录”后校验回到登录页，随后按步骤调用 `status=ENABLED` 重新启用成员，并额外清理到期停用开关，重新登录、确认自动化团队并回到成员列表。
 - `test_14_api_disable_internal_member.py`：API 编辑内部成员-停用成员，退出自动化账号后登录内部成员 `MCDL007`，通过成员 open API 将该内部成员置为停用，校验接口状态码和 `msg=success`；在 APP 内切换环境分组/环境管理触发自动退登并校验回到登录页，再直接点击“立即登录”校验停用账号提示且未登录成功；最后调用接口启用成员、验证内部成员可重新登录，并切回自动化账号、确认团队后回到成员列表。
 - `test_15_api_disuse_internal_member.py`：API 编辑内部成员-到期停用成员，登录内部成员 `MCDL007` 后通过成员 open API 设置 `disuse_enable=true`、过期时间和时区，校验接口状态码和 `msg=success`；点击 APP 刷新按钮后校验回到登录页，若页面内刷新未触发则用页面级刷新兜底；直接点击“立即登录”校验停用账号提示且未登录成功；最后调用 `status=ENABLED` 启用成员、额外清理到期停用开关，验证内部成员可重新登录，并切回自动化账号、确认团队后回到成员列表。
 
-成员 open API 用例统一使用 `MemberEditApiClient` 调用接口；请求地址、目标外部成员 ID、内部成员信息、到期停用参数和状态码重试参数统一维护在 `test_data.api_member_edit`，其中内部成员与重试参数采用 `internal_member`、`disuse`、`status_retry` 小块分组，避免 YAML 过度膨胀。真实 token 不写入仓库，优先通过 `DICLOAK_API_MEMBER_EDIT_TOKEN` 环境变量注入；目标外部成员 ID 可用 `DICLOAK_API_MEMBER_EDIT_MEMBER_ID` 临时覆盖。当 HTTP 状态码不是 200 时会额外重试 3 次，重试间隔默认 1 秒，可通过 `test_data.api_member_edit.status_retry.times` 和 `status_retry.interval_seconds` 调整。
+成员 open API 用例统一使用 `MemberEditApiClient` 调用接口；请求地址、自动化主账号成员 ID、内部成员信息、到期停用参数和状态码重试参数统一维护在 `test_data.api_member_edit`，其中内部成员与重试参数采用 `internal_member`、`disuse`、`status_retry` 小块分组。主账号成员 ID 只允许用于 `test_12`、`test_13` 停用/到期停用接口流程，普通 UI 用例不得读取。真实 token 不写入仓库，优先通过 `DICLOAK_API_MEMBER_EDIT_TOKEN` 环境变量注入；目标主账号 ID 可用 `DICLOAK_API_MEMBER_EDIT_MEMBER_ID` 临时覆盖。
 
 四条成员 open API 用例在异常路径增加了 `api_case_recovery.py` 兜底恢复：用例出现问题后会 best-effort 调用接口恢复自动化账号 `status=ENABLED`、`disuse_enable=false`，再尝试重新登录配置中的自动化账号、确认自动化团队并回到成员列表。恢复失败不会覆盖原始用例失败原因，但会写入 warning 日志，方便排查现场。
 
-成员管理新版列表不再稳定展示成员 ID 时，`MemberPage` 会通过当前 APP 登录态读取成员列表接口数据，并结合可见行的姓名、备注、创建时间匹配真实成员 ID。批量编辑、导出、筛选和编辑成员等用例继续按成员 ID 做精确行操作，复杂 DOM 查询和接口补全逻辑都封装在 Page Object 内。
+成员管理新版列表不再稳定展示成员 ID 时，`MemberPage` 会通过当前 APP 登录态读取成员列表接口数据，并结合可见行的归一化姓名、当前列表索引和“本账号”标记匹配真实成员 ID；DOM 名称末尾的 `(本账号)` 会在映射时移除，同名成员优先使用本账号身份和列表顺序消歧。新版列表不直接显示 `内部成员/外部成员` 时，创建成员用例会先断言列表 `成员身份` 为 `员工`，再 hover 对应单元格读取 tooltip 中的成员类型。
 
 当前已新增代理管理模块 4 条 P0 用例，文件位于 `tests/p0/proxy_management/`：
 
@@ -427,10 +519,22 @@ CDP 9222: none
 
 最近验证记录：
 
+- `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-08-04 修复 macOS 远端 Local Auth Lab 认证状态同步脚本未加载 venv 且裸跑 `python` 的问题后通过，`Ran 100 tests ... OK`；定向 `python -m unittest tests.p1.test_remote_sync -v` 通过，`Ran 7 tests ... OK`。
+- `python run.py --config config/config.yaml --module test_02_create_default_environment.py --attach-existing-app` 与 `python run.py --config config/config.yaml --module test_03_batch_create_environments.py --attach-existing-app`：2026-08-04 为创建环境抽屉“确定”按钮增加二次提交保护后均通过，结果分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。当前逻辑为：点击“确定”后若抽屉未关闭且按钮未进入 loading，则等待 2 秒后再次点击“确定”；第二次仍未关闭且未进入 loading 时才重新打开创建抽屉，最多重新打开 2 次，每次重开后都保留同样的 2 秒后二次点击。
+- `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-08-04 创建环境抽屉二次提交保护加入后通过，`Ran 99 tests ... OK`。
+- `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-08-04 为环境列表进入/创建后/搜索后的 loading 等待增加搜索刷新重试保护后通过，`Ran 97 tests ... OK`；真实页面非变更烟测 `open_list()`、`search_environment_without_assert("_tmp_refresh_probe_")`、`clear_search()` 输出 `REAL_LIST_WAIT_SMOKE_OK`。当时真实创建用例 `test_02_create_default_environment.py --attach-existing-app` 被创建抽屉提交按钮未进入 loading 的保护拦截，未走到创建成功后的列表刷新阶段，因此不作为本次列表 loading 改动的通过结论；该提交问题已在后续二次提交保护中修复。
+- `python run.py --config config/config.yaml --module test_02_create_default_environment.py --attach-existing-app` 与 `python run.py --config config/config.yaml --module test_03_batch_create_environments.py --attach-existing-app`：2026-08-04 为创建环境/批量创建环境抽屉增加默认 `未分组` 回显等待与提交 loading 状态保护后均通过，结果分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。进入创建抽屉后会等待 `环境分组` 回显 `未分组`，20 秒未回显则最多重新打开抽屉 2 次；点击“确定”后若抽屉未关闭且按钮未进入 loading，也最多重新打开抽屉 2 次，仍未满足时按用例异常处理。
+- `python run.py --config config/config.yaml --module test_02_create_default_environment.py --attach-existing-app`：2026-07-09 通过 `127.0.0.1:9222` CDP 确认环境列表真实 DOM 后，补强表格 loading 等待，单跑通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_10_environment_field_display_limit.py --attach-existing-app`：2026-07-09 兼容新版强制展示 `环境状态` 列后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_01_create_external_member.py --attach-existing-app`：2026-07-09 兼容成员类型改为 hover `成员身份` tooltip 展示后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_03_create_internal_member.py --attach-existing-app`：2026-07-09 兼容成员类型改为 hover `成员身份` tooltip 展示后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python run.py --config config/config.yaml --module test_11_no_edit_permission_member.py --attach-existing-app`：2026-07-09 兼容退出登录头像点击被 tooltip 拦截后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `python -m compileall -q pages tests` 和 `git diff --check`：2026-07-09 静态验证通过，`git diff --check` 仅有当前 Windows 工作区 LF/CRLF 换行提示。
 - `python run.py --config config/config.yaml --module environment_group_management --attach-existing-app`：2026-07-01 环境分组新版无 ID 行 key 兼容后通过，`total=6 passed=6 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module environment_management --attach-existing-app`：2026-07-01 环境管理元素修复后模块通过，`total=25 passed=25 failed=0 errors=0 skipped=0 flaky=1`。
 - `python run.py --config config/config.yaml --module member_management --attach-existing-app`：2026-07-01 成员管理真实 ID 匹配修复后通过，`total=15 passed=15 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --attach-existing-app`：2026-07-01 P0 全量结果 `total=62 passed=57 failed=1 errors=4 skipped=0 flaky=1`；剩余问题已归类为抓包工具管理员权限、`127.0.0.1:7897` 本地代理不可用和 NodeMaven/IP 查询环境波动，未发现新的元素定位失败。
+- `python run.py --config config/config.yaml --case <Cookie> --case <Local Storage> --case <IndexedDB>`：2026-08-03 使用单一 Runner 按 Cookie → Local Storage → IndexedDB 串行真实回归通过，`total=3 passed=3 failed=0 errors=0 skipped=0 flaky=0`，三种数据同步项均为 `changed=False`；三站三次读取全部为“已登录”，账号依次为 `MCDL001`、`MCDL002`、`MCDL003`，每次关闭环境后操作按钮均恢复为“打开”，每条用例删除合规缓存目录后第三次恢复成功。
 - `python run.py --config config/config.yaml --module test_10_environment_field_display_limit.py --attach-existing-app`：2026-06-30 兼容全局设置“环境列表字段权限”和环境列表“列表字段”新文案后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_04_create_134_kernel_environment.py --attach-existing-app`：2026-06-30 兼容创建环境抽屉内层“指纹设置”（旧版“更多指纹”）入口后通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_02_batch_create_proxy.py --attach-existing-app`：2026-06-30 代理列表新版不直接展示 ID 后改为按表格序号定位、选择和批量删除，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
@@ -468,7 +572,7 @@ CDP 9222: none
 - `git diff --check`：2026-06-09 新增代理管理“创建自定义代理”用例后通过，仅提示 `config/test_data.example.yaml`、`core/config.py` 工作区 LF/CRLF 转换。
 - `python run.py --config config/config.yaml --module test_01_create_custom_proxy.py --attach-existing-app`：2026-06-09 将 ping/F5 预检改为开启配置中的 Windows 系统代理后通过，默认配置为 `127.0.0.1:7897`；日志确认用例开始时开启系统代理、结束时关闭系统代理，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_01_create_custom_proxy.py --attach-existing-app`：2026-06-09 代理管理“创建自定义代理”补充 HTTP 类型选择和类型校验后通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；日志确认创建行 `type=HTTP`、执行行内检测、删除单条新代理，运行后注册表确认 `ProxyEnable=0`。
-- `python -c "from streamlit_runner import discover_cases; cases=discover_cases(); print(len(cases))"`：新增代理管理用例后的早期发现数量为 59 条；当前 P0 可发现数量为 62 条。
+- `python -c "from streamlit_runner import discover_cases; cases=discover_cases(); print(len(cases))"`：新增代理管理用例后的早期发现数量为 59 条；当前 P0 可发现数量为 68 条。
 - `python run.py --config config/config.yaml --attach-existing-app`：早期全量 P0 运行通过，`total=54 passed=54 failed=0 errors=0 skipped=0 flaky=0`（2026-05-29 两次验证）；当前全量状态见 2026-07-01 记录。
 
 已预留扩展管理等模块目录，后续新增用例时按业务模块放入对应目录。

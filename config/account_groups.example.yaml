@@ -1,0 +1,35 @@
+version: 1
+groups:
+  group_1:
+    name: "Windows 自动化账号组"
+    automation_account:
+      username: "automation-account-1@example.com"
+      password: "your_password"
+      team_name: "Windows 自动化团队"
+      # 仅供自动化主账号停用/到期停用接口用例使用
+      member_id: "automation_account_member_id_1"
+    case_external_member:
+      name: "外部成员1"
+      email: "case-external-member-1@example.com"
+    internal_member:
+      username: "INTERNAL001"
+      password: "your_password"
+      member_id: "internal_member_id_1"
+    # 停用/到期用例使用的团队 Open API token；不同团队必须分别配置
+    member_api_token: "team_1_open_api_token"
+
+  group_2:
+    name: "macOS 自动化账号组"
+    automation_account:
+      username: "automation-account-2@example.com"
+      password: "your_password"
+      team_name: "macOS 自动化团队"
+      member_id: "automation_account_member_id_2"
+    case_external_member:
+      name: "外部成员1"
+      email: "case-external-member-2@example.com"
+    internal_member:
+      username: "INTERNAL002"
+      password: "your_password"
+      member_id: "internal_member_id_2"
+    member_api_token: "team_2_open_api_token"

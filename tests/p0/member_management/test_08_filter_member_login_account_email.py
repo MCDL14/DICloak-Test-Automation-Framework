@@ -3,12 +3,14 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from core.account_groups import case_external_member_email
 from core.assertions import assert_true
 from core.cdp_driver import CDPDriver
 from core.config import load_config
 from core.logger import setup_logger
 from pages.login_page import LoginPage
 from pages.member_page import MemberPage
+from tests.p0.member_management.member_open_api import internal_member_username
 
 
 CASE_MODULE = "成员管理"
@@ -28,8 +30,8 @@ class TestFilterMemberLoginAccountEmail(unittest.TestCase):
         cls.cdp.close()
 
     def test_filter_member_login_account_and_email(self) -> None:
-        login_account_keyword = "mcdl003"
-        email_keyword = "oytrhsjwe@tempmail.cn"
+        login_account_keyword = internal_member_username(self.config)
+        email_keyword = case_external_member_email(self.config)
         member_page = MemberPage(cdp_driver=self.cdp, config=self.config)
 
         try:

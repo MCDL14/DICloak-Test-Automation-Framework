@@ -8,6 +8,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from core.config import timeout_ms
 
@@ -494,6 +495,7 @@ class CDPDriver:
         url_contains: str,
         method: str | None = None,
         timeout: int | None = None,
+        exact_path: bool = False,
     ) -> dict[str, str | int]:
         timeout = timeout if timeout is not None else self._request_timeout_ms()
         page = self._page()
@@ -501,7 +503,11 @@ class CDPDriver:
 
         def matches(response) -> bool:
             request = response.request
-            if url_contains not in request.url:
+            if exact_path:
+                url_matches = urlsplit(request.url).path == url_contains
+            else:
+                url_matches = url_contains in request.url
+            if not url_matches:
                 return False
             if expected_method and request.method.upper() != expected_method:
                 return False

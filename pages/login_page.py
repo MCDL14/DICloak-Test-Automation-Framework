@@ -340,13 +340,46 @@ class LoginPage(BasePage):
     def _open_account_menu(self) -> None:
         if self._is_account_menu_open():
             return
-        self.click("account_menu")
+        self._dismiss_intercepting_tooltips()
+        try:
+            self.click("account_menu")
+        except Exception:
+            self._dismiss_intercepting_tooltips()
+            self.click("account_menu")
         deadline = time.time() + 5
         while time.time() < deadline:
             if self._is_account_menu_open():
                 return
             time.sleep(0.2)
         raise LoginStateError("account menu did not open")
+
+    def _dismiss_intercepting_tooltips(self) -> None:
+        try:
+            self.cdp.press("Escape")
+            self.cdp.evaluate(
+                """
+                () => {
+                    const visible = (el) => {
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== "none"
+                            && style.visibility !== "hidden"
+                            && rect.width > 0
+                            && rect.height > 0;
+                    };
+                    for (const el of Array.from(document.querySelectorAll(".el-popper, .el-tooltip__popper"))) {
+                        const role = el.getAttribute("role") || "";
+                        if (role !== "tooltip" && !el.classList.contains("el-tooltip__popper")) continue;
+                        if (!visible(el)) continue;
+                        el.setAttribute("aria-hidden", "true");
+                        el.style.setProperty("display", "none", "important");
+                        el.style.setProperty("pointer-events", "none", "important");
+                    }
+                }
+                """
+            )
+        except Exception:
+            pass
 
     def _is_account_menu_open(self) -> bool:
         script = """

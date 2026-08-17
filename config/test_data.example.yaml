@@ -206,3 +206,15 @@ test_data:
   environment_new_indexeddb_persistence:
     username: "MCDL006"
     password: "请在本地 config/test_data.yaml 中填写"
+
+  # 四条单向同步用例共用的本地模拟站账号
+  environment_one_way_sync:
+    cookie:
+      username: "MCDL004"
+      password: "请在本地 config/test_data.yaml 中填写"
+    localstorage:
+      username: "MCDL005"
+      password: "请在本地 config/test_data.yaml 中填写"
+    indexeddb:
+      username: "MCDL006"
+      password: "请在本地 config/test_data.yaml 中填写"

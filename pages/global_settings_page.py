@@ -11,6 +11,12 @@ class GlobalSettingsPage(BasePage):
     locator_file = "global_settings_locators.yaml"
     MINIMUM_CHECKED_CHECKBOXES = 3
     GLOBAL_SETTINGS_REENTRY_RETRIES = 2
+    DATA_SYNC_COOKIE_LABEL = "Cookie"
+    DATA_SYNC_LOCAL_STORAGE_LABEL = "Local Storage"
+    DATA_SYNC_INDEXEDDB_LABEL = "IndexedDB"
+    DATA_SYNC_ONE_WAY_SYNC_TEXT = "防止成员覆盖云端数据，导致环境内账号退出登录"
+    DATA_SYNC_ONE_WAY_SYNC_STATE_NAME = "数据同步"
+    DATA_SYNC_ONE_WAY_SYNC_WHITELIST_LABEL = "白名单"
     DISABLE_DEVTOOLS_LABELS = ("禁止打开浏览器开发者工具", "禁止打开浏览器开发者工具界面")
     ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS = ("环境列表字段权限", "环境字段显示限制")
     ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG_TITLES = ("列表字段", "列表字段设置")
@@ -25,12 +31,12 @@ class GlobalSettingsPage(BasePage):
         "降序": ("降序",),
     }
 
-    def open(self) -> None:
+    def open(self, *, force_reentry: bool = False) -> None:
         """Open a fully loaded global-settings page, retrying through Environment Management."""
         observations: list[dict[str, object]] = []
         total_attempts = self.GLOBAL_SETTINGS_REENTRY_RETRIES + 1
         for attempt_index in range(total_attempts):
-            if attempt_index > 0:
+            if force_reentry or attempt_index > 0:
                 self._open_environment_management_for_retry()
 
             self._dismiss_blocking_overlays()
@@ -165,6 +171,151 @@ class GlobalSettingsPage(BasePage):
         if value is None:
             raise RuntimeError("数据同步 IndexedDB checkbox was not found")
         return bool(value)
+
+    def data_sync_one_way_state(self) -> dict[str, object]:
+        """Return persisted global 数据同步 state from the rendered page."""
+        self._wait_for_data_sync_settings()
+        whitelist_groups: list[str] = []
+        if self.data_sync_one_way_enabled():
+            self._wait_data_sync_one_way_whitelist_visible()
+            whitelist_groups = self.data_sync_one_way_whitelist_values()
+        return {
+            "cookie": self.cookie_data_sync_enabled(),
+            "local_storage": self.local_storage_data_sync_enabled(),
+            "indexeddb": self.indexeddb_data_sync_enabled(),
+            "one_way_enabled": self.data_sync_one_way_enabled(),
+            "whitelist_groups": whitelist_groups,
+        }
+
+    def configure_data_sync_one_way(
+        self,
+        sync_items: list[str],
+        whitelist_groups: list[str],
+    ) -> dict[str, object]:
+        """Configure global 数据同步 one-way sync and verify the saved state after re-entry."""
+        expected_sync_items = self._unique_non_empty(sync_items)
+        expected_whitelist = self._unique_non_empty(whitelist_groups)
+        if not expected_sync_items:
+            raise ValueError("global data sync items must not be empty")
+        if not expected_whitelist:
+            raise ValueError("global data sync one-way whitelist groups must not be empty")
+
+        self._wait_for_data_sync_settings()
+        before_checkboxes, before_switches = self._wait_global_setting_states_stable()
+        for item in expected_sync_items:
+            self._set_data_sync_checked(item, True)
+        self._set_data_sync_one_way_enabled(True)
+        self._wait_data_sync_one_way_whitelist_visible()
+        self._clear_data_sync_one_way_whitelist()
+        self._select_data_sync_one_way_whitelist(expected_whitelist)
+        self._assert_no_unexpected_existing_state_changes(
+            before_checkboxes=before_checkboxes,
+            before_switches=before_switches,
+            allowed_checkbox_names=set(expected_sync_items),
+            allowed_switch_names={
+                self.DATA_SYNC_ONE_WAY_SYNC_TEXT,
+                self.DATA_SYNC_ONE_WAY_SYNC_STATE_NAME,
+            },
+        )
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+
+        self.open(force_reentry=True)
+        final_state = self.data_sync_one_way_state()
+        missing_items = [
+            item
+            for item in expected_sync_items
+            if not bool(final_state.get(self._data_sync_state_key(item)))
+        ]
+        if missing_items:
+            raise AssertionError(f"global data sync items were not saved as checked: {missing_items}")
+        if not bool(final_state.get("one_way_enabled")):
+            raise AssertionError("global data sync one-way switch was not saved as enabled")
+        actual_whitelist = self._unique_non_empty(final_state.get("whitelist_groups", []))
+        if set(actual_whitelist) != set(expected_whitelist):
+            raise AssertionError(
+                "global data sync one-way whitelist was not saved as expected: "
+                f"expected={expected_whitelist}, actual={actual_whitelist}"
+            )
+        return final_state
+
+    def restore_data_sync_one_way_state(self, state: dict[str, object]) -> None:
+        """Restore global 数据同步 state captured by data_sync_one_way_state()."""
+        self._wait_for_data_sync_settings()
+        for item in (
+            self.DATA_SYNC_COOKIE_LABEL,
+            self.DATA_SYNC_LOCAL_STORAGE_LABEL,
+            self.DATA_SYNC_INDEXEDDB_LABEL,
+        ):
+            key = self._data_sync_state_key(item)
+            if key in state:
+                self._set_data_sync_checked(item, bool(state.get(key)))
+
+        expected_one_way = bool(state.get("one_way_enabled"))
+        self._set_data_sync_one_way_enabled(expected_one_way)
+        expected_whitelist = self._unique_non_empty(state.get("whitelist_groups", []))
+        if expected_one_way:
+            self._wait_data_sync_one_way_whitelist_visible()
+            self._clear_data_sync_one_way_whitelist()
+            if expected_whitelist:
+                self._select_data_sync_one_way_whitelist(expected_whitelist)
+
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self.open(force_reentry=True)
+
+        final_state = self.data_sync_one_way_state()
+        mismatched_items = {}
+        for item in (
+            self.DATA_SYNC_COOKIE_LABEL,
+            self.DATA_SYNC_LOCAL_STORAGE_LABEL,
+            self.DATA_SYNC_INDEXEDDB_LABEL,
+        ):
+            key = self._data_sync_state_key(item)
+            if key in state and bool(final_state.get(key)) != bool(state.get(key)):
+                mismatched_items[key] = (state.get(key), final_state.get(key))
+        if mismatched_items:
+            raise AssertionError(f"global data sync restore mismatch: {mismatched_items}")
+        if bool(final_state.get("one_way_enabled")) != expected_one_way:
+            raise AssertionError(
+                "global data sync one-way restore mismatch: "
+                f"expected={expected_one_way}, actual={final_state.get('one_way_enabled')}"
+            )
+        if expected_one_way:
+            actual_whitelist = self._unique_non_empty(final_state.get("whitelist_groups", []))
+            if set(actual_whitelist) != set(expected_whitelist):
+                raise AssertionError(
+                    "global data sync one-way whitelist restore mismatch: "
+                    f"expected={expected_whitelist}, actual={actual_whitelist}"
+                )
+
+    def disable_data_sync_one_way(self) -> dict[str, object]:
+        """Disable global 数据同步 one-way sync, save, and verify the page finished loading."""
+        self._wait_for_data_sync_settings()
+        self._set_data_sync_one_way_enabled(False)
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self.open(force_reentry=True)
+
+        final_state = self.data_sync_one_way_state()
+        if bool(final_state.get("one_way_enabled")):
+            raise AssertionError(
+                "global data sync one-way switch was not disabled after save: "
+                f"actual={final_state}"
+            )
+        return final_state
+
+    def data_sync_one_way_enabled(self) -> bool:
+        value = self.cdp.evaluate(self._data_sync_one_way_enabled_script())
+        if value is None:
+            raise RuntimeError("数据同步单向同步 switch was not found")
+        return bool(value)
+
+    def data_sync_one_way_whitelist_values(self) -> list[str]:
+        value = self.cdp.evaluate(self._data_sync_one_way_whitelist_values_script())
+        if not isinstance(value, list):
+            return []
+        return self._unique_non_empty([str(item).strip() for item in value])
 
     def configure_packet_capture_blocking(self, process_name: str) -> None:
         """Enable packet capture blocking and save the configured process name."""
@@ -930,7 +1081,37 @@ class GlobalSettingsPage(BasePage):
                 exact=True,
             )
         )
+        self._confirm_leave_unsaved_settings_if_present()
         self._wait_for_environment_management_page()
+
+    def _confirm_leave_unsaved_settings_if_present(self) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            message_visible = bool(
+                self.cdp.evaluate(
+                    """
+                    () => {
+                        const visible = (el) => {
+                            const style = window.getComputedStyle(el);
+                            const rect = el.getBoundingClientRect();
+                            return style.display !== "none"
+                                && style.visibility !== "hidden"
+                                && rect.width > 0
+                                && rect.height > 0;
+                        };
+                        const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                        return Array.from(document.querySelectorAll(__MESSAGE_BOX_SELECTOR__))
+                            .filter(visible)
+                            .some((item) => clean(item.innerText || item.textContent).includes("设置未保存"));
+                    }
+                    """.replace("__MESSAGE_BOX_SELECTOR__", repr(self.locator("message_box")))
+                )
+            )
+            if not message_visible:
+                return
+            self.cdp.click_element_by_script(self._active_dialog_button_script("确定"))
+            self._wait_for_overlay_closed()
+            return
 
     def _wait_for_environment_management_page(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -1059,6 +1240,144 @@ class GlobalSettingsPage(BasePage):
                 return
             time.sleep(0.2)
         raise TimeoutError(f"数据同步 IndexedDB checkbox state did not become expected: {expected}")
+
+    def _wait_for_data_sync_settings(self) -> None:
+        self._wait_for_cookie_data_sync()
+        self._wait_for_local_storage_data_sync()
+        self._wait_for_indexeddb_data_sync()
+        self._wait_for_data_sync_one_way_sync()
+
+    def _wait_for_data_sync_one_way_sync(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._data_sync_one_way_exists_script()):
+                return
+            time.sleep(0.2)
+        raise TimeoutError("数据同步单向同步 switch did not appear")
+
+    def _wait_data_sync_checked(
+        self,
+        item_text: str,
+        expected: bool,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._data_sync_enabled_script(item_text)) is expected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"数据同步 {item_text} checkbox state did not become expected: {expected}")
+
+    def _wait_data_sync_one_way_enabled(
+        self,
+        expected: bool,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._data_sync_one_way_enabled_script()) is expected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"数据同步单向同步 switch state did not become expected: {expected}")
+
+    def _wait_data_sync_one_way_whitelist_visible(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._data_sync_one_way_whitelist_visible_script()):
+                return
+            time.sleep(0.2)
+        raise TimeoutError("数据同步单向同步白名单 did not appear")
+
+    def _set_data_sync_checked(self, item_text: str, expected: bool) -> None:
+        current = self.cdp.evaluate(self._data_sync_enabled_script(item_text))
+        if current is None:
+            raise RuntimeError(f"数据同步 {item_text} checkbox was not found")
+        if bool(current) is expected:
+            return
+        self.cdp.click_element_by_script(self._data_sync_checkbox_script(item_text))
+        self._wait_data_sync_checked(item_text, expected)
+
+    def _set_data_sync_one_way_enabled(self, expected: bool) -> None:
+        current = self.cdp.evaluate(self._data_sync_one_way_enabled_script())
+        if current is None:
+            raise RuntimeError("数据同步单向同步 switch was not found")
+        if bool(current) is expected:
+            return
+        self.cdp.click_element_by_script(self._data_sync_one_way_switch_script())
+        self._wait_data_sync_one_way_enabled(expected)
+
+    def _clear_data_sync_one_way_whitelist(self) -> None:
+        self._close_select_dropdowns()
+        for _ in range(12):
+            selected_groups = self.data_sync_one_way_whitelist_values()
+            if not selected_groups:
+                return
+            clicked = bool(self.cdp.evaluate(self._click_first_data_sync_one_way_whitelist_close_script()))
+            if not clicked:
+                raise TimeoutError(
+                    "数据同步单向同步白名单 close button was not found: "
+                    f"selected={selected_groups}"
+                )
+            time.sleep(0.3)
+            self._close_select_dropdowns()
+        remaining_groups = self.data_sync_one_way_whitelist_values()
+        if remaining_groups:
+            raise TimeoutError(f"数据同步单向同步白名单 was not cleared: actual={remaining_groups}")
+
+    def _select_data_sync_one_way_whitelist(self, group_names: list[str]) -> None:
+        expected_groups = self._unique_non_empty(group_names)
+        for group_name in expected_groups:
+            if group_name in self.data_sync_one_way_whitelist_values():
+                continue
+            selected = False
+            for _ in range(3):
+                if not self._dropdown_option_visible(group_name):
+                    self.cdp.click_element_by_script(self._data_sync_one_way_whitelist_select_script())
+                    time.sleep(0.3)
+                try:
+                    self.cdp.click_element_by_script(self._select_dropdown_option_script(group_name), timeout=3000)
+                    self._wait_data_sync_one_way_whitelist_selected([group_name])
+                    selected = True
+                    break
+                except TimeoutError:
+                    time.sleep(0.3)
+            if not selected:
+                raise TimeoutError(f"数据同步单向同步白名单 group was not selected: {group_name}")
+        self._wait_data_sync_one_way_whitelist_exact(expected_groups)
+
+    def _wait_data_sync_one_way_whitelist_selected(self, expected_groups: list[str]) -> None:
+        timeout_seconds = config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        expected = set(self._unique_non_empty(expected_groups))
+        last_groups: list[str] = []
+        while time.time() < deadline:
+            last_groups = self.data_sync_one_way_whitelist_values()
+            if expected.issubset(set(last_groups)):
+                return
+            time.sleep(0.2)
+        raise TimeoutError(
+            "数据同步单向同步白名单 groups were not selected: "
+            f"expected={sorted(expected)}, actual={last_groups}"
+        )
+
+    def _wait_data_sync_one_way_whitelist_exact(self, expected_groups: list[str]) -> None:
+        timeout_seconds = config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        expected = set(self._unique_non_empty(expected_groups))
+        last_groups: list[str] = []
+        while time.time() < deadline:
+            last_groups = self.data_sync_one_way_whitelist_values()
+            if set(last_groups) == expected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(
+            "数据同步单向同步白名单 was not exact: "
+            f"expected={sorted(expected)}, actual={last_groups}"
+        )
 
     def _wait_for_website_restriction(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -1824,6 +2143,53 @@ class GlobalSettingsPage(BasePage):
                 self.cdp.press("Escape")
             time.sleep(0.3)
 
+    def _close_select_dropdowns(self) -> None:
+        for _ in range(3):
+            open_dropdown = bool(
+                self.cdp.evaluate(
+                    """
+                    () => {
+                        const visible = (el) => {
+                            const style = window.getComputedStyle(el);
+                            const rect = el.getBoundingClientRect();
+                            return style.display !== "none"
+                                && style.visibility !== "hidden"
+                                && rect.width > 0
+                                && rect.height > 0;
+                        };
+                        return Array.from(document.querySelectorAll(".el-select__popper, .el-popper"))
+                            .some(visible);
+                    }
+                    """
+                )
+            )
+            if not open_dropdown:
+                return
+            self.cdp.press("Escape")
+            time.sleep(0.2)
+
+    def _dropdown_option_visible(self, text: str) -> bool:
+        return bool(self.cdp.evaluate(self._dropdown_option_visible_script(text)))
+
+    def _data_sync_state_key(self, item_text: str) -> str:
+        normalized = str(item_text or "").strip().lower().replace(" ", "_")
+        if normalized == "cookie":
+            return "cookie"
+        if normalized == "local_storage":
+            return "local_storage"
+        if normalized == "indexeddb":
+            return "indexeddb"
+        raise ValueError(f"unsupported global data sync item: {item_text}")
+
+    @staticmethod
+    def _unique_non_empty(values) -> list[str]:
+        result: list[str] = []
+        for value in values or []:
+            text = str(value or "").strip()
+            if text and text not in result:
+                result.append(text)
+        return result
+
     def _checkbox_exists_script(self, label_text: str) -> str:
         return """
         () => Boolean((() => {
@@ -2083,6 +2449,296 @@ class GlobalSettingsPage(BasePage):
             "__CHECKBOX_STATE_SELECTOR__",
             repr(self.locator("checkbox_state")),
         )
+
+    def _data_sync_checkbox_script(self, item_text: str) -> str:
+        return """
+        () => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const expectedText = __ITEM_TEXT__;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .filter(visible)
+                .find((item) => clean(item.innerText || item.textContent) === expectedText) || null;
+            if (!checkbox) return null;
+            const clickTarget = checkbox.querySelector(__CHECKBOX_STATE_SELECTOR__) || checkbox;
+            clickTarget.scrollIntoView({ block: "center", inline: "center" });
+            return clickTarget;
+        }
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__ITEM_TEXT__",
+            repr(item_text),
+        ).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__CHECKBOX_STATE_SELECTOR__",
+            repr(self.locator("checkbox_state")),
+        )
+
+    def _data_sync_enabled_script(self, item_text: str) -> str:
+        return """
+        () => {
+            const root = document.querySelector(__ROOT_SELECTOR__);
+            if (!root) return null;
+            const expectedText = __ITEM_TEXT__;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const checkbox = Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__))
+                .filter(visible)
+                .find((item) => clean(item.innerText || item.textContent) === expectedText) || null;
+            if (!checkbox) return null;
+            const input = checkbox.querySelector(__CHECKBOX_INPUT_SELECTOR__);
+            if (input) return Boolean(input.checked);
+            const state = checkbox.querySelector(__CHECKBOX_STATE_SELECTOR__) || checkbox;
+            return state.classList.contains("is-checked") || checkbox.classList.contains("is-checked");
+        }
+        """.replace("__ROOT_SELECTOR__", repr(self.locator("data_sync_root"))).replace(
+            "__ITEM_TEXT__",
+            repr(item_text),
+        ).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__CHECKBOX_INPUT_SELECTOR__",
+            repr(self.locator("checkbox_input")),
+        ).replace(
+            "__CHECKBOX_STATE_SELECTOR__",
+            repr(self.locator("checkbox_state")),
+        )
+
+    def _data_sync_one_way_exists_script(self) -> str:
+        return """
+        () => Boolean((() => {
+            const finder = __ONE_WAY_SWITCH_SCRIPT__;
+            return finder();
+        })())
+        """.replace("__ONE_WAY_SWITCH_SCRIPT__", self._data_sync_one_way_switch_script())
+
+    def _data_sync_one_way_switch_script(self) -> str:
+        return f"""
+        () => {{
+            const root = document.querySelector({self.locator("data_sync_root")!r});
+            if (!root) return null;
+            const expectedText = {self.DATA_SYNC_ONE_WAY_SYNC_TEXT!r};
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const candidates = Array.from(root.querySelectorAll(".el-form-item, label, div, span"))
+                .filter(visible)
+                .filter((el) => clean(el.innerText || el.textContent).includes(expectedText))
+                .map((el) => {{
+                    const item = el.closest(".el-form-item") || el;
+                    const rect = item.getBoundingClientRect();
+                    return {{ item, area: rect.width * rect.height }};
+                }})
+                .filter((candidate) => candidate.item.querySelector({self.locator("switch")!r}))
+                .sort((left, right) => left.area - right.area);
+            for (const candidate of candidates) {{
+                const switchEl = candidate.item.querySelector({self.locator("switch")!r});
+                if (!switchEl || !visible(switchEl)) continue;
+                const clickTarget = switchEl.querySelector({self.locator("switch_core")!r}) || switchEl;
+                clickTarget.scrollIntoView({{ block: "center", inline: "center" }});
+                return clickTarget;
+            }}
+            return null;
+        }}
+        """
+
+    def _data_sync_one_way_enabled_script(self) -> str:
+        return """
+        () => {
+            const finder = __ONE_WAY_SWITCH_SCRIPT__;
+            const target = finder();
+            if (!target) return null;
+            const switchEl = target.classList.contains("el-switch") ? target : target.closest(".el-switch");
+            if (!switchEl) return null;
+            const input = switchEl.querySelector("input");
+            const ariaChecked = switchEl.getAttribute("aria-checked") || input?.getAttribute("aria-checked") || "";
+            if (ariaChecked === "true") return true;
+            if (ariaChecked === "false") return false;
+            return switchEl.classList.contains("is-checked") || Boolean(input?.checked);
+        }
+        """.replace("__ONE_WAY_SWITCH_SCRIPT__", self._data_sync_one_way_switch_script())
+
+    def _data_sync_one_way_whitelist_form_item_script(self) -> str:
+        return f"""
+        () => {{
+            const root = document.querySelector({self.locator("data_sync_root")!r});
+            if (!root) return null;
+            const expectedLabel = {self.DATA_SYNC_ONE_WAY_SYNC_WHITELIST_LABEL!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.left < window.innerWidth
+                    && rect.right > 0;
+            }};
+            const labels = Array.from(root.querySelectorAll("label, .el-form-item__label")).filter(visible);
+            for (const label of labels) {{
+                if (clean(label.innerText || label.textContent) !== expectedLabel) continue;
+                const item = label.closest(".el-form-item");
+                if (item && visible(item)) return item;
+            }}
+            return null;
+        }}
+        """
+
+    def _data_sync_one_way_whitelist_visible_script(self) -> str:
+        return """
+        () => {
+            const finder = __WHITELIST_FORM_ITEM_SCRIPT__;
+            return Boolean(finder());
+        }
+        """.replace("__WHITELIST_FORM_ITEM_SCRIPT__", self._data_sync_one_way_whitelist_form_item_script())
+
+    def _data_sync_one_way_whitelist_select_script(self) -> str:
+        return """
+        () => {
+            const finder = __WHITELIST_FORM_ITEM_SCRIPT__;
+            const item = finder();
+            if (!item) return null;
+            const select = item.querySelector(__SELECT_CONTROL_SELECTOR__);
+            if (!select) return null;
+            select.scrollIntoView({ block: "center", inline: "center" });
+            return select;
+        }
+        """.replace("__WHITELIST_FORM_ITEM_SCRIPT__", self._data_sync_one_way_whitelist_form_item_script()).replace(
+            "__SELECT_CONTROL_SELECTOR__",
+            repr(self.locator("select_control")),
+        )
+
+    def _data_sync_one_way_whitelist_values_script(self) -> str:
+        return """
+        () => {
+            const finder = __WHITELIST_FORM_ITEM_SCRIPT__;
+            const item = finder();
+            if (!item) return [];
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const values = [];
+            for (const selector of [
+                ".el-tag__content",
+                ".el-select__tags-text",
+                ".el-select__selected-item",
+                ".el-select__selection span",
+                ".el-select__wrapper",
+            ]) {
+                for (const el of Array.from(item.querySelectorAll(selector)).filter(visible)) {
+                    const text = clean(el.innerText || el.textContent);
+                    if (text && text !== "×" && text !== "请选择" && !values.includes(text)) values.push(text);
+                }
+            }
+            return values;
+        }
+        """.replace("__WHITELIST_FORM_ITEM_SCRIPT__", self._data_sync_one_way_whitelist_form_item_script())
+
+    def _click_first_data_sync_one_way_whitelist_close_script(self) -> str:
+        return """
+        () => {
+            const finder = __WHITELIST_FORM_ITEM_SCRIPT__;
+            const item = finder();
+            if (!item) return false;
+            const visible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const fireClick = (el) => {
+                for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+                    el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+                }
+            };
+            const close = Array.from(item.querySelectorAll(".el-tag .el-tag__close, .el-tag .el-icon-close"))
+                .find((el) => visible(el) && !el.closest(".el-select-dropdown__item"));
+            if (!close) return false;
+            fireClick(close);
+            return true;
+        }
+        """.replace("__WHITELIST_FORM_ITEM_SCRIPT__", self._data_sync_one_way_whitelist_form_item_script())
+
+    def _dropdown_option_visible_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {text!r};
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const poppers = Array.from(document.querySelectorAll(".el-select__popper, .el-popper"))
+                .filter(visible);
+            for (const popper of poppers) {{
+                const item = Array.from(popper.querySelectorAll(".el-select-dropdown__item, li, span, div"))
+                    .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText);
+                if (item) return true;
+            }}
+            return false;
+        }}
+        """
+
+    def _select_dropdown_option_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {text!r};
+            const visible = (el) => {{
+                if (!el) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            const poppers = Array.from(document.querySelectorAll(".el-select__popper, .el-popper"))
+                .filter(visible);
+            for (const popper of poppers) {{
+                const item = Array.from(popper.querySelectorAll(".el-select-dropdown__item, li, span, div"))
+                    .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === expectedText);
+                if (item) return item.closest(".el-select-dropdown__item") || item;
+            }}
+            return null;
+        }}
+        """
 
     def _website_restriction_exists_script(self) -> str:
         return """

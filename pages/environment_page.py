@@ -25,6 +25,16 @@ class EnvironmentPage(BasePage):
     CREATE_ENVIRONMENT_SECOND_SUBMIT_DELAY_SECONDS = 2
     ENVIRONMENT_LIST_LOADING_SECONDS = 20
     ENVIRONMENT_LIST_LOADING_REFRESH_RETRIES = 2
+    CREATE_ENVIRONMENT_ONE_WAY_SYNC_TEXT = "防止成员覆盖云端数据，导致环境内账号退出登录"
+    CREATE_ENVIRONMENT_ONE_WAY_SYNC_WHITELIST_LABEL = "白名单"
+    CREATE_ENVIRONMENT_DATA_SYNC_OPTIONS = (
+        "Cookie",
+        "账号密码",
+        "标签",
+        "Local Storage",
+        "IndexedDB",
+        "扩展数据",
+    )
     _ENVIRONMENT_HEADER_ALIASES = {
         "环境序号": ("环境序号", "序号"),
         "环境名称": ("环境名称", "名称"),
@@ -77,6 +87,58 @@ class EnvironmentPage(BasePage):
             self.fill("environment_name_input", name)
 
         self._run_create_environment_drawer_flow(open_drawer, populate_drawer, context=f"create environment: {name}")
+
+    def create_environment_with_custom_data_sync(self, name: str, sync_items: list[str]) -> list[str]:
+        expected_items = self._unique_non_empty(sync_items)
+
+        def open_drawer() -> None:
+            self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+
+        def populate_drawer() -> list[str]:
+            self.fill("environment_name_input", name)
+            self._expand_create_environment_advanced_settings()
+            self._select_create_environment_data_sync_mode("自定义")
+            self._set_create_environment_data_sync_options(expected_items)
+            return self.create_environment_selected_data_sync_options()
+
+        return self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context=f"create environment with custom data sync: {name}",
+        )
+
+    def create_environment_with_custom_data_sync_and_one_way_sync(
+        self,
+        name: str,
+        sync_items: list[str],
+        whitelist_groups: list[str],
+    ) -> tuple[list[str], list[str]]:
+        expected_items = self._unique_non_empty(sync_items)
+        expected_whitelist = self._unique_non_empty(whitelist_groups)
+
+        def open_drawer() -> None:
+            self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+
+        def populate_drawer() -> tuple[list[str], list[str]]:
+            self.fill("environment_name_input", name)
+            self._expand_create_environment_advanced_settings()
+            self._select_create_environment_data_sync_mode("自定义")
+            self._set_create_environment_data_sync_options(expected_items)
+            self._enable_create_environment_one_way_sync()
+            self._wait_create_environment_one_way_sync_whitelist_visible()
+            self._clear_create_environment_one_way_sync_whitelist()
+            self._select_create_environment_one_way_sync_whitelist(expected_whitelist)
+            self._close_select_dropdowns()
+            return (
+                self.create_environment_selected_data_sync_options(),
+                self.create_environment_one_way_sync_whitelist_values(),
+            )
+
+        return self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context=f"create environment with custom data sync and one-way sync: {name}",
+        )
 
     def create_environment_with_kernel(self, name: str, kernel_label: str) -> None:
         def open_drawer() -> None:
@@ -972,8 +1034,15 @@ class EnvironmentPage(BasePage):
         self.wait_environment_deleted(name)
 
     def delete_environment_from_current_list(self, name: str) -> None:
-        self.click_environment_more(name)
-        self.click_visible_dropdown_item("删除")
+        for _ in range(3):
+            self.click_environment_more(name)
+            self.click_visible_dropdown_item("删除")
+            if self._wait_active_overlay_visible(timeout_seconds=2):
+                break
+            self.cdp.press("Escape")
+            time.sleep(0.3)
+        else:
+            raise TimeoutError(f"delete environment secondary dialog did not appear: {name}")
         self.confirm_secondary_dialog()
         self.wait_environment_absent_in_current_list(name)
 
@@ -1015,6 +1084,15 @@ class EnvironmentPage(BasePage):
         if not self._active_overlay_visible():
             return
         self.confirm_secondary_dialog()
+
+    def _wait_active_overlay_visible(self, timeout_seconds: int | None = None) -> bool:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self._active_overlay_visible():
+                return True
+            time.sleep(0.2)
+        return False
 
     def wait_environment_deleted(self, name: str) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "search_result_seconds", 10)
@@ -3090,6 +3168,165 @@ class EnvironmentPage(BasePage):
             time.sleep(0.2)
         raise TimeoutError("select dropdown did not close")
 
+    def _expand_create_environment_advanced_settings(self) -> None:
+        if self._create_environment_advanced_settings_expanded():
+            return
+        self.cdp.click_element_by_script(self._collapsed_active_drawer_collapse_header_script("高级设置"))
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self._create_environment_advanced_settings_expanded():
+                return
+            time.sleep(0.2)
+        raise TimeoutError("create environment advanced settings did not expand")
+
+    def _create_environment_advanced_settings_expanded(self) -> bool:
+        return bool(self.cdp.evaluate(self._active_drawer_collapse_item_expanded_script("高级设置", "数据同步")))
+
+    def _select_create_environment_data_sync_mode(self, mode: str) -> None:
+        if self._create_environment_data_sync_mode_selected(mode):
+            return
+        self.cdp.click_element_by_script(self._active_drawer_form_radio_button_script("数据同步", mode))
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self._create_environment_data_sync_mode_selected(mode):
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"create environment data sync mode was not selected: {mode}")
+
+    def _create_environment_data_sync_mode_selected(self, mode: str) -> bool:
+        return bool(self.cdp.evaluate(self._active_drawer_form_radio_button_selected_script("数据同步", mode)))
+
+    def _set_create_environment_data_sync_options(self, enabled_options: list[str]) -> None:
+        expected = set(self._unique_non_empty(enabled_options))
+        unknown = expected - set(self.CREATE_ENVIRONMENT_DATA_SYNC_OPTIONS)
+        if unknown:
+            raise ValueError(f"unsupported create environment data sync options: {sorted(unknown)}")
+
+        for option in self.CREATE_ENVIRONMENT_DATA_SYNC_OPTIONS:
+            should_enable = option in expected
+            if self._create_environment_data_sync_option_checked(option) == should_enable:
+                continue
+            self.cdp.click_element_by_script(self._active_drawer_form_checkbox_script("数据同步", option))
+            self._wait_create_environment_data_sync_option_checked(option, should_enable)
+
+        selected = set(self.create_environment_selected_data_sync_options())
+        if selected != expected:
+            raise AssertionError(
+                "create environment custom data sync options were not exact: "
+                f"expected={sorted(expected)}, actual={sorted(selected)}"
+            )
+
+    def create_environment_selected_data_sync_options(self) -> list[str]:
+        value = self.cdp.evaluate(self._create_environment_data_sync_selected_options_script())
+        if not isinstance(value, list):
+            return []
+        return self._unique_non_empty([str(item).strip() for item in value])
+
+    def _create_environment_data_sync_option_checked(self, option: str) -> bool:
+        return bool(self.cdp.evaluate(self._active_drawer_form_checkbox_checked_script("数据同步", option)))
+
+    def _wait_create_environment_data_sync_option_checked(self, option: str, expected: bool) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self._create_environment_data_sync_option_checked(option) == expected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"create environment data sync option state did not become expected: {option}={expected}")
+
+    def _enable_create_environment_one_way_sync(self) -> None:
+        if self._create_environment_one_way_sync_enabled():
+            return
+        self.cdp.click_element_by_script(self._create_environment_one_way_sync_switch_script())
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self._create_environment_one_way_sync_enabled():
+                return
+            time.sleep(0.2)
+        raise TimeoutError("create environment one-way sync switch was not enabled")
+
+    def _create_environment_one_way_sync_enabled(self) -> bool:
+        return bool(self.cdp.evaluate(self._create_environment_one_way_sync_enabled_script()))
+
+    def _wait_create_environment_one_way_sync_whitelist_visible(self) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._create_environment_one_way_sync_whitelist_visible_script()):
+                return
+            time.sleep(0.2)
+        raise TimeoutError("create environment one-way sync whitelist did not appear")
+
+    def _clear_create_environment_one_way_sync_whitelist(self) -> None:
+        self._close_select_dropdowns()
+        for _ in range(12):
+            selected_groups = self.create_environment_one_way_sync_whitelist_values()
+            if not selected_groups:
+                return
+            clicked = bool(self.cdp.evaluate(self._click_first_create_environment_one_way_sync_whitelist_close_script()))
+            if not clicked:
+                raise TimeoutError(
+                    "create environment one-way sync whitelist close button was not found: "
+                    f"selected={selected_groups}"
+                )
+            time.sleep(0.3)
+            self._close_select_dropdowns()
+        remaining_groups = self.create_environment_one_way_sync_whitelist_values()
+        if remaining_groups:
+            raise TimeoutError(f"create environment one-way sync whitelist was not cleared: actual={remaining_groups}")
+
+    def _select_create_environment_one_way_sync_whitelist(self, group_names: list[str]) -> None:
+        for group_name in self._unique_non_empty(group_names):
+            if group_name in self.create_environment_one_way_sync_whitelist_values():
+                continue
+            selected = False
+            for _ in range(3):
+                if not self._dropdown_option_visible(group_name):
+                    self.cdp.click_element_by_script(self._create_environment_one_way_sync_whitelist_select_script())
+                    time.sleep(0.3)
+                try:
+                    self.cdp.click_element_by_script(self._select_dropdown_option_script(group_name), timeout=3000)
+                    self._wait_create_environment_one_way_sync_whitelist_selected([group_name])
+                    selected = True
+                    break
+                except TimeoutError:
+                    time.sleep(0.3)
+            if not selected:
+                raise TimeoutError(f"create environment one-way sync whitelist group was not selected: {group_name}")
+        self._wait_create_environment_one_way_sync_whitelist_exact(group_names)
+
+    def create_environment_one_way_sync_whitelist_values(self) -> list[str]:
+        value = self.cdp.evaluate(self._create_environment_one_way_sync_whitelist_values_script())
+        if not isinstance(value, list):
+            return []
+        return self._unique_non_empty([str(item).strip() for item in value])
+
+    def _wait_create_environment_one_way_sync_whitelist_selected(self, expected_groups: list[str]) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        expected = set(self._unique_non_empty(expected_groups))
+        last_groups: list[str] = []
+        while time.time() < deadline:
+            last_groups = self.create_environment_one_way_sync_whitelist_values()
+            if expected.issubset(set(last_groups)):
+                return
+            time.sleep(0.2)
+        raise TimeoutError(
+            "create environment one-way sync whitelist groups were not selected: "
+            f"expected={sorted(expected)}, actual={last_groups}"
+        )
+
+    def _wait_create_environment_one_way_sync_whitelist_exact(self, expected_groups: list[str]) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        expected = set(self._unique_non_empty(expected_groups))
+        last_groups: list[str] = []
+        while time.time() < deadline:
+            last_groups = self.create_environment_one_way_sync_whitelist_values()
+            if set(last_groups) == expected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(
+            "create environment one-way sync whitelist was not exact: "
+            f"expected={sorted(expected)}, actual={last_groups}"
+        )
+
     def _expand_edit_environment_advanced_settings(self) -> None:
         if self._active_drawer_form_control_visible("固定打开网页"):
             return
@@ -3200,6 +3437,287 @@ class EnvironmentPage(BasePage):
                 }}
             }}
             return null;
+        }}
+        """
+
+    def _active_drawer_collapse_item_expanded_script(self, header_text: str, content_text: str) -> str:
+        return f"""
+        () => {{
+            const expectedHeader = {header_text!r};
+            const expectedContent = {content_text!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.left < window.innerWidth
+                    && rect.right > 0;
+            }};
+            const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
+            for (const drawer of drawers.reverse()) {{
+                const items = Array.from(drawer.querySelectorAll(".el-collapse-item"));
+                for (const item of items) {{
+                    const header = item.querySelector(".el-collapse-item__header");
+                    if (!header || !visible(header)) continue;
+                    if (clean(header.innerText || header.textContent) !== expectedHeader) continue;
+                    if (!item.classList.contains("is-active") && !header.classList.contains("is-active")) {{
+                        return false;
+                    }}
+                    const content = item.querySelector(".el-collapse-item__content") || item;
+                    return Boolean(visible(content) && clean(content.innerText || content.textContent).includes(expectedContent));
+                }}
+            }}
+            return false;
+        }}
+        """
+
+    def _active_drawer_form_item_script(self, label_text: str) -> str:
+        return f"""
+        () => {{
+            const expectedLabel = {label_text!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.left < window.innerWidth
+                    && rect.right > 0;
+            }};
+            const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
+            for (const drawer of drawers.reverse()) {{
+                const items = Array.from(drawer.querySelectorAll(".el-form-item"));
+                for (const item of items) {{
+                    const label = item.querySelector("label, .el-form-item__label");
+                    if (!label || clean(label.innerText || label.textContent) !== expectedLabel) continue;
+                    return item;
+                }}
+            }}
+            return null;
+        }}
+        """
+
+    def _active_drawer_form_radio_button_script(self, label_text: str, option_text: str) -> str:
+        return f"""
+        () => {{
+            const finder = {self._active_drawer_form_item_script(label_text)};
+            const item = finder();
+            if (!item) return null;
+            const expectedOption = {option_text!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            return Array.from(item.querySelectorAll(".el-radio-button, label, span"))
+                .find((el) => visible(el) && clean(el.innerText || el.textContent) === expectedOption) || null;
+        }}
+        """
+
+    def _active_drawer_form_radio_button_selected_script(self, label_text: str, option_text: str) -> str:
+        return f"""
+        () => {{
+            const finder = {self._active_drawer_form_radio_button_script(label_text, option_text)};
+            const button = finder();
+            return Boolean(button && String(button.className || "").includes("is-active"));
+        }}
+        """
+
+    def _active_drawer_form_checkbox_script(self, label_text: str, option_text: str) -> str:
+        return f"""
+        () => {{
+            const finder = {self._active_drawer_form_item_script(label_text)};
+            const item = finder();
+            if (!item) return null;
+            const expectedOption = {option_text!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            return Array.from(item.querySelectorAll(".el-checkbox, label"))
+                .find((el) => visible(el) && clean(el.innerText || el.textContent) === expectedOption) || null;
+        }}
+        """
+
+    def _active_drawer_form_checkbox_checked_script(self, label_text: str, option_text: str) -> str:
+        return f"""
+        () => {{
+            const finder = {self._active_drawer_form_checkbox_script(label_text, option_text)};
+            const checkbox = finder();
+            return Boolean(checkbox && String(checkbox.className || "").includes("is-checked"));
+        }}
+        """
+
+    def _create_environment_data_sync_selected_options_script(self) -> str:
+        return f"""
+        () => {{
+            const finder = {self._active_drawer_form_item_script("数据同步")};
+            const item = finder();
+            if (!item) return [];
+            const knownOptions = {list(self.CREATE_ENVIRONMENT_DATA_SYNC_OPTIONS)!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }};
+            return Array.from(item.querySelectorAll(".el-checkbox"))
+                .filter((el) => visible(el) && String(el.className || "").includes("is-checked"))
+                .map((el) => clean(el.innerText || el.textContent))
+                .filter((text) => knownOptions.includes(text));
+        }}
+        """
+
+    def _create_environment_one_way_sync_switch_script(self) -> str:
+        return f"""
+        () => {{
+            const expectedText = {self.CREATE_ENVIRONMENT_ONE_WAY_SYNC_TEXT!r};
+            const finder = {self._active_drawer_form_item_script("数据同步")};
+            const item = finder();
+            if (!item) return null;
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.left < window.innerWidth
+                    && rect.right > 0;
+            }};
+            const candidates = Array.from(item.querySelectorAll(".el-switch, label, div, span"))
+                .filter((el) => visible(el) && clean(el.innerText || el.textContent).includes(expectedText));
+            for (const candidate of candidates) {{
+                const switchEl = candidate.classList.contains("el-switch")
+                    ? candidate
+                    : candidate.querySelector(".el-switch");
+                if (switchEl && visible(switchEl)) return switchEl;
+            }}
+            return null;
+        }}
+        """
+
+    def _create_environment_one_way_sync_enabled_script(self) -> str:
+        return f"""
+        () => {{
+            const finder = {self._create_environment_one_way_sync_switch_script()};
+            const switchEl = finder();
+            return Boolean(switchEl && String(switchEl.className || "").includes("is-checked"));
+        }}
+        """
+
+    def _create_environment_one_way_sync_whitelist_form_item_script(self) -> str:
+        return f"""
+        () => {{
+            const expectedLabel = {self.CREATE_ENVIRONMENT_ONE_WAY_SYNC_WHITELIST_LABEL!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.left < window.innerWidth
+                    && rect.right > 0;
+            }};
+            const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
+            for (const drawer of drawers.reverse()) {{
+                const items = Array.from(drawer.querySelectorAll(".el-form-item")).filter(visible);
+                for (const item of items) {{
+                    const label = item.querySelector("label, .el-form-item__label");
+                    if (label && clean(label.innerText || label.textContent) === expectedLabel) return item;
+                }}
+            }}
+            return null;
+        }}
+        """
+
+    def _create_environment_one_way_sync_whitelist_visible_script(self) -> str:
+        return f"""
+        () => {{
+            const finder = {self._create_environment_one_way_sync_whitelist_form_item_script()};
+            return Boolean(finder());
+        }}
+        """
+
+    def _create_environment_one_way_sync_whitelist_select_script(self) -> str:
+        return f"""
+        () => {{
+            const finder = {self._create_environment_one_way_sync_whitelist_form_item_script()};
+            const item = finder();
+            if (!item) return null;
+            return item.querySelector(".el-select, .el-select__wrapper");
+        }}
+        """
+
+    def _create_environment_one_way_sync_whitelist_values_script(self) -> str:
+        return f"""
+        () => {{
+            const finder = {self._create_environment_one_way_sync_whitelist_form_item_script()};
+            const item = finder();
+            if (!item) return [];
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const values = [];
+            for (const selector of [
+                ".el-tag__content",
+                ".el-select__tags-text",
+                ".el-select__selected-item",
+                ".el-select__wrapper",
+            ]) {{
+                for (const el of Array.from(item.querySelectorAll(selector)).filter(visible)) {{
+                    const text = clean(el.innerText || el.textContent);
+                    if (text && text !== "×" && text !== "请选择" && !values.includes(text)) values.push(text);
+                }}
+            }}
+            return values;
+        }}
+        """
+
+    def _click_first_create_environment_one_way_sync_whitelist_close_script(self) -> str:
+        return f"""
+        () => {{
+            const finder = {self._create_environment_one_way_sync_whitelist_form_item_script()};
+            const item = finder();
+            if (!item) return false;
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const fireClick = (el) => {{
+                for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {{
+                    el.dispatchEvent(new MouseEvent(type, {{bubbles: true, cancelable: true, view: window}}));
+                }}
+            }};
+            const close = Array.from(item.querySelectorAll(".el-tag .el-tag__close, .el-tag .el-icon-close"))
+                .find((el) => visible(el) && !el.closest(".el-select-dropdown__item"));
+            if (!close) return false;
+            fireClick(close);
+            return true;
         }}
         """
 

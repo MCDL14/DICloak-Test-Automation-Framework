@@ -181,7 +181,7 @@ Mac 当前已验证：
 - `python run.py --config config/config.macos.yaml --level P0` 通过，结果 `total=59 passed=58 failed=0 errors=0 skipped=1 flaky=1`。
 - UI 远程节点模式已完成“同步当前代码”后执行 `P0 全量` 验证，结果 `total=59 passed=57 failed=0 errors=1 skipped=1 flaky=0`；唯一错误为代理创建弹窗确认后未关闭，保留为 Mac 远端代理业务/环境问题继续排查。
 
-以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 68 条，最新状态见“最近验证记录”。
+以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 75 条，最新状态见“最近验证记录”。
 
 Mac 当前跳过项：
 
@@ -406,13 +406,22 @@ CDP 9222: none
 
 `account.team_name` 用于配置自动化账号必须切换到的团队。外部账号可能拥有多个团队，框架登录后会读取 `localStorage.basic:state.userInfo.orgName` 校验当前团队；如果不是目标团队，会点击账号菜单里的“切换团队”，等待团队列表加载后切换到目标团队。
 
+Local Auth Lab 相关环境管理用例复用同一组账号配置，避免在 `config/test_data.yaml` 中按用例重复维护：
+
+- `environment_new_cookie_persistence`：新环境 Cookie 持续保持用例与环境单独设置 Cookie 同步用例共用。
+- `environment_new_local_storage_persistence`：新环境 Local Storage 持续保持用例与环境单独设置 Local Storage 同步用例共用。
+- `environment_new_indexeddb_persistence`：新环境 IndexedDB 持续保持用例与环境单独设置 IndexedDB 同步用例共用。
+- `environment_one_way_sync`：四条单向同步用例共用，覆盖环境单独设置/全局设置，以及禁止/允许当前账号同步两个场景。
+
+版本化示例文件 `config/test_data.example.yaml` 不再保留 `environment_individual_cookie_sync`、`environment_individual_local_storage_sync`、`environment_individual_indexeddb_sync`、`environment_individual_one_way_sync_allow`、`environment_global_one_way_sync_forbid`、`environment_global_one_way_sync_allow` 等按场景拆分的重复配置。
+
 真实配置文件和真实测试数据文件可能包含敏感信息或本机路径，已在 `.gitignore` 中排除。
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 68 条 P0 用例：环境管理 31 条、全局设置 12 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 75 条 P0 用例：环境管理 38 条、全局设置 12 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
 
-当前环境管理模块已接入 31 条 P0 用例，文件位于 `tests/p0/environment_management/`：
+当前环境管理模块已接入 38 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
 - `test_01_kernel_integrity.py`：按独立阶段校验 142 内核首次启动、缓存拷贝、缓存启动路径、134 内核下载和 134 环境启动；中间阶段失败会记录原因并继续执行后续阶段，最后统一汇总断言，避免 134 下载被前置断言阻断。
 - `test_02_create_default_environment.py`
@@ -445,6 +454,14 @@ CDP 9222: none
 - `test_29_new_environment_cookie_persistence.py`：确保 Cookie 数据同步已勾选后，先删除可能由中断运行留下的同名自动化环境，再沿用原有 `create_environment()` 流程创建默认配置环境 `自动化-新环境Cookie持续保持`，不额外选择环境分组，也不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://cookie.dicloak.localhost:18080`，使用 `config/test_data.yaml` 中的本地账号 `MCDL004` 登录，等待 2 秒并读取状态；关闭环境且按钮恢复“打开”后断言账号和状态。等待 3 秒再次打开并断言 Cookie 仍保持登录；随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录，第三次打开并断言云端恢复后仍为 `MCDL004 / 已登录`。最后删除环境并确认列表中不存在；任一阶段失败时也会尝试关闭并清理该专用环境。当前真实运行会停在默认环境创建阶段，创建问题的处理方式待确认，因此不将此前显式选择 `未分组` 后的通过结果作为当前代码验证结论。
 - `test_30_new_environment_local_storage_persistence.py`：确保 Local Storage 数据同步已勾选后，清理可能由异常中断留下的同名环境，并沿用原有 `create_environment()` 创建默认配置环境 `自动化-新环境Local Storage持续保持`；不额外选择环境分组，不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://localstorage.dicloak.localhost:18080`，使用本地测试数据中的 `MCDL005` 登录，等待 2 秒后读取状态；每次均先关闭环境、等待内核退出并确认按钮恢复为“打开”，再断言账号和状态。等待 3 秒后二次验证，随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录并确认无残留，第三次打开验证 Local Storage 云端恢复，最后删除环境并确认不存在。当前仅完成配置加载、编译、发现和 P1 回归；由于默认创建问题的解决方式仍待确认，未启动 APP 进行真实运行。
 - `test_31_new_environment_indexeddb_persistence.py`：确保 IndexedDB 数据同步已勾选后，清理可能由异常中断留下的同名环境，并沿用原有 `create_environment()` 创建默认配置环境 `自动化-新环境IndexedDB持续保持`；不额外选择环境分组，不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://indexeddb.dicloak.localhost:18080`，使用本地测试数据中的 `MCDL006` 登录，等待 2 秒后读取状态；每次均先关闭环境、等待内核退出并确认按钮恢复为“打开”，再断言账号和状态。等待 3 秒后二次验证，随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录并确认无残留，第三次打开验证 IndexedDB 云端恢复，最后删除环境并确认不存在。当前仅完成配置加载、编译、发现和 P1 回归；由于默认创建问题的解决方式仍待确认，未启动 APP 进行真实运行。
+- `test_32_individual_environment_cookie_sync.py`：创建环境 `自动化-环境单独设置-cookie同步` 时展开“高级设置”，将“数据同步”从“全局设置”切换为“自定义”，并把已知同步项精确调整为仅勾选 `Cookie`。创建成功后首次打开环境访问 `http://cookie.dicloak.localhost:18080`，复用 `environment_new_cookie_persistence` 本地测试账号 `MCDL004` 登录并等待 2 秒读取状态；关闭环境并校验操作按钮恢复为“打开”后断言 `MCDL004 / 已登录`。等待 3 秒后二次打开验证 Cookie 仍保持登录；随后进入个人设置基础设置读取 APP 环境缓存目录，只删除名称为 19 位纯数字的直接子目录并确认无残留；第三次打开环境验证删除本地缓存后 Cookie 云端恢复仍为 `MCDL004 / 已登录`。最后删除该环境并确认列表中不存在；异常流程也会尝试关闭和清理同名环境。2026-08-17 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `test_33_individual_environment_local_storage_sync.py`：创建环境 `自动化-环境单独设置-Local Storage同步` 时展开“高级设置”，将“数据同步”从“全局设置”切换为“自定义”，并把已知同步项精确调整为仅勾选 `Local Storage`。创建成功后首次打开环境访问 `http://localstorage.dicloak.localhost:18080`，复用 `environment_new_local_storage_persistence` 本地测试账号 `MCDL005` 登录并等待 2 秒读取状态；关闭环境并校验操作按钮恢复为“打开”后断言 `MCDL005 / 已登录`。等待 3 秒后二次打开验证 Local Storage 仍保持登录；随后进入个人设置基础设置读取 APP 环境缓存目录，只删除名称为 19 位纯数字的直接子目录并确认无残留；第三次打开环境验证删除本地缓存后 Local Storage 云端恢复仍为 `MCDL005 / 已登录`。最后删除该环境并确认列表中不存在；异常流程也会尝试关闭和清理同名环境。2026-08-17 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `test_34_individual_environment_indexeddb_sync.py`：创建环境 `自动化-环境单独设置-IndexedDB同步` 时展开“高级设置”，将“数据同步”从“全局设置”切换为“自定义”，并把已知同步项精确调整为仅勾选 `IndexedDB`。创建成功后首次打开环境访问 `http://indexeddb.dicloak.localhost:18080`，复用 `environment_new_indexeddb_persistence` 本地测试账号 `MCDL006` 登录并等待 2 秒读取状态；关闭环境并校验操作按钮恢复为“打开”后断言 `MCDL006 / 已登录`。等待 3 秒后二次打开验证 IndexedDB 仍保持登录；随后进入个人设置基础设置读取 APP 环境缓存目录，只删除名称为 19 位纯数字的直接子目录并确认无残留；第三次打开环境验证删除本地缓存后 IndexedDB 云端恢复仍为 `MCDL006 / 已登录`。最后删除该环境并确认列表中不存在；异常流程也会尝试关闭和清理同名环境。2026-08-17 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+四条单向同步用例统一读取 `config/test_data.yaml` 中的 `environment_one_way_sync` 登录账号配置；版本化 `config/test_data.example.yaml` 只保留这一份共享配置。
+- `test_35_individual_environment_one_way_sync_forbid_current_account.py`：创建环境 `自动化-环境单独设置-单向同步-禁止当前账号同步` 时展开“高级设置”，将“数据同步”切为“自定义”，精确勾选 `Cookie`、`Local Storage`、`IndexedDB`，打开“防止成员覆盖云端数据，导致环境内账号退出登录”开关，等待“白名单”出现后先清空默认值再选择 `超管组`。首次打开环境依次访问 Cookie、Local Storage、IndexedDB 三个本地模拟站，分别登录 `MCDL004`、`MCDL005`、`MCDL006` 并等待 2 秒，逐项断言 `已登录`；关闭环境并确认按钮恢复为“打开”后，进入个人设置基础设置读取 APP 缓存目录，只删除名称为 19 位纯数字的直接子目录并确认无残留；再次打开环境后逐项断言三个站点均为 `未登录`。2026-08-17 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `test_36_individual_environment_one_way_sync_allow_current_account.py`：创建环境 `自动化-环境单独设置-单向同步-允许当前账号同步` 时展开“高级设置”，将“数据同步”切为“自定义”，精确勾选 `Cookie`、`Local Storage`、`IndexedDB`，打开“防止成员覆盖云端数据，导致环境内账号退出登录”开关，等待“白名单”出现后先清空默认值再选择 `管理组`。首次打开环境依次访问 Cookie、Local Storage、IndexedDB 三个本地模拟站，分别登录 `MCDL004`、`MCDL005`、`MCDL006` 并等待 2 秒，逐项断言 `已登录`；关闭环境并确认按钮恢复为“打开”后，进入个人设置基础设置读取 APP 缓存目录，只删除名称为 19 位纯数字的直接子目录并确认无残留；再次打开环境后逐项断言三个站点仍为对应账号的 `已登录`。2026-08-17 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `test_37_global_settings_one_way_sync_forbid_current_account.py`：先强制重新进入“全局设置”，再在“数据设置 → 数据同步”确保 `Cookie`、`Local Storage`、`IndexedDB` 已勾选，打开“防止成员覆盖云端数据，导致环境内账号退出登录”开关，等待“白名单”出现后清空并选择 `超管组`，点击“确定”保存且强制重新进入校验回显。随后返回环境管理，创建默认配置环境 `全局设置-单向同步-禁止当前账号同步`，首次打开后依次访问三个本地模拟站并登录 `MCDL004`、`MCDL005`、`MCDL006`，逐项断言 `已登录`；关闭环境并确认按钮恢复为“打开”后读取基础设置中的 APP 缓存目录，只删除 19 位纯数字直接子目录并确认无残留；再次打开后逐项断言三个站点均为 `未登录`，最后删除环境并校验不存在。用例 `finally` 会尝试删除同名环境，并无条件关闭全局数据同步单向同步开关、点击“确定”保存、强制重新进入全局设置等待页面加载完成并校验开关已关闭。2026-08-17 调整收尾逻辑后 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
+- `test_38_global_settings_one_way_sync_allow_current_account.py`：先强制重新进入“全局设置”，在“数据设置 → 数据同步”确保 `Cookie`、`Local Storage`、`IndexedDB` 已勾选，打开“防止成员覆盖云端数据，导致环境内账号退出登录”开关，等待“白名单”出现后清空并选择 `管理组`，点击“确定”保存且强制重新进入校验回显。随后返回环境管理，创建默认配置环境 `全局设置-单向同步-允许当前账号同步`，首次打开后依次访问三个本地模拟站并登录 `MCDL004`、`MCDL005`、`MCDL006`，逐项断言 `已登录`；关闭环境并确认按钮恢复为“打开”后读取基础设置中的 APP 缓存目录，只删除 19 位纯数字直接子目录并确认无残留；再次打开后逐项断言三个站点仍为对应账号的 `已登录`，最后删除环境并校验不存在。用例 `finally` 会尝试删除同名环境，并无条件关闭全局数据同步单向同步开关、点击“确定”保存、强制重新进入全局设置等待页面加载完成并校验开关已关闭。2026-08-17 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 
 当前全局设置模块已完成并验证 12 条 P0 用例，文件位于 `tests/p0/global_settings/`：
 
@@ -519,6 +536,7 @@ CDP 9222: none
 
 最近验证记录：
 
+- `python -m compileall -q pages tests`、`config/test_data.example.yaml` YAML 解析检查、`test_32`-`test_34` 和 `test_35`-`test_38` 配置读取验证、`git diff --check`：2026-08-17 收敛环境单独设置数据同步与单向同步用例测试数据配置后均通过；当前 example YAML 仅保留三条 `environment_new_*_persistence` 和一条 `environment_one_way_sync` 作为 Local Auth Lab 相关账号配置。
 - `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-08-04 修复 macOS 远端 Local Auth Lab 认证状态同步脚本未加载 venv 且裸跑 `python` 的问题后通过，`Ran 100 tests ... OK`；定向 `python -m unittest tests.p1.test_remote_sync -v` 通过，`Ran 7 tests ... OK`。
 - `python run.py --config config/config.yaml --module test_02_create_default_environment.py --attach-existing-app` 与 `python run.py --config config/config.yaml --module test_03_batch_create_environments.py --attach-existing-app`：2026-08-04 为创建环境抽屉“确定”按钮增加二次提交保护后均通过，结果分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。当前逻辑为：点击“确定”后若抽屉未关闭且按钮未进入 loading，则等待 2 秒后再次点击“确定”；第二次仍未关闭且未进入 loading 时才重新打开创建抽屉，最多重新打开 2 次，每次重开后都保留同样的 2 秒后二次点击。
 - `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-08-04 创建环境抽屉二次提交保护加入后通过，`Ran 99 tests ... OK`。
@@ -572,7 +590,7 @@ CDP 9222: none
 - `git diff --check`：2026-06-09 新增代理管理“创建自定义代理”用例后通过，仅提示 `config/test_data.example.yaml`、`core/config.py` 工作区 LF/CRLF 转换。
 - `python run.py --config config/config.yaml --module test_01_create_custom_proxy.py --attach-existing-app`：2026-06-09 将 ping/F5 预检改为开启配置中的 Windows 系统代理后通过，默认配置为 `127.0.0.1:7897`；日志确认用例开始时开启系统代理、结束时关闭系统代理，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
 - `python run.py --config config/config.yaml --module test_01_create_custom_proxy.py --attach-existing-app`：2026-06-09 代理管理“创建自定义代理”补充 HTTP 类型选择和类型校验后通过，结果 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`；日志确认创建行 `type=HTTP`、执行行内检测、删除单条新代理，运行后注册表确认 `ProxyEnable=0`。
-- `python -c "from streamlit_runner import discover_cases; cases=discover_cases(); print(len(cases))"`：新增代理管理用例后的早期发现数量为 59 条；当前 P0 可发现数量为 68 条。
+- `python -c "from streamlit_runner import discover_cases; cases=discover_cases(); print(len(cases))"`：新增代理管理用例后的早期发现数量为 59 条；当前 P0 可发现数量为 75 条。
 - `python run.py --config config/config.yaml --attach-existing-app`：早期全量 P0 运行通过，`total=54 passed=54 failed=0 errors=0 skipped=0 flaky=0`（2026-05-29 两次验证）；当前全量状态见 2026-07-01 记录。
 
 已预留扩展管理等模块目录，后续新增用例时按业务模块放入对应目录。

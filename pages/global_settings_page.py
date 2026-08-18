@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import re
 import time
 from pathlib import Path
 
@@ -21,6 +23,12 @@ class GlobalSettingsPage(BasePage):
     ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS = ("环境列表字段权限", "环境字段显示限制")
     ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG_TITLES = ("列表字段", "列表字段设置")
     GOOGLE_EXTENSION_SHORTCUT_LABELS = ("Chrome 应用商店", "谷歌应用商店")
+    SNAPSHOT_SIMPLE_CHECKBOXES = (
+        "禁止查看网站密码",
+        DISABLE_DEVTOOLS_LABELS,
+        "禁止管理/移除扩展，以及从本地安装扩展至浏览器",
+        "禁止成员访问谷歌扩展商店和扩展设置页面",
+    )
     _ENVIRONMENT_FIELD_ALIASES = {
         "环境序号": ("环境序号", "序号"),
         "环境名称": ("环境名称", "名称"),
@@ -70,13 +78,115 @@ class GlobalSettingsPage(BasePage):
             f"observations={observations}"
         )
 
+    def capture_global_settings_snapshot(self) -> dict[str, object]:
+        """Capture the global-setting fields that current P0 cases are allowed to mutate."""
+        self._wait_global_setting_states_stable()
+        return {
+            "schema_version": 1,
+            "simple_checkboxes": self._simple_checkbox_snapshot(),
+            "website_restriction": self.website_restriction_state(),
+            "packet_capture_blocking": self.packet_capture_blocking_state(),
+            "bookmark_setting": self.bookmark_setting_state(),
+            "environment_field_display_limit": self.environment_field_display_limit_state(),
+            "environment_list_pagination": self.environment_list_pagination_setting_state(),
+            "environment_list_sort": self.environment_list_sort_state(),
+            "data_sync": self.data_sync_one_way_state(),
+        }
+
+    def restore_global_settings_snapshot(self, snapshot: dict[str, object]) -> None:
+        """Restore a snapshot through the real global-settings UI and verify strong fields."""
+        if not isinstance(snapshot, dict):
+            raise TypeError(f"global settings snapshot must be a dict: {type(snapshot)!r}")
+
+        self._restore_simple_checkbox_snapshot(snapshot.get("simple_checkboxes", {}))
+        self.restore_website_restriction_state(snapshot.get("website_restriction", {}))
+        self.restore_packet_capture_blocking_state(snapshot.get("packet_capture_blocking", {}))
+        self.restore_bookmark_setting_state(snapshot.get("bookmark_setting", {}))
+        self.restore_environment_field_display_limit_state(snapshot.get("environment_field_display_limit", {}))
+        self.restore_environment_list_pagination_setting_state(snapshot.get("environment_list_pagination", {}))
+        self.restore_environment_list_sort_state(snapshot.get("environment_list_sort", {}))
+        self.restore_data_sync_one_way_state(snapshot.get("data_sync", {}))
+
+        self.open(force_reentry=True)
+        restored = self.capture_global_settings_snapshot()
+        self._assert_global_settings_snapshot_matches(snapshot, restored)
+
+    def _simple_checkbox_snapshot(self) -> dict[str, bool]:
+        states: dict[str, bool] = {}
+        for label_text in self.SNAPSHOT_SIMPLE_CHECKBOXES:
+            label = self._resolve_visible_checkbox_label(label_text)
+            states[label] = self.checkbox_checked(label)
+        return states
+
+    def _restore_simple_checkbox_snapshot(self, snapshot: object) -> None:
+        if not isinstance(snapshot, dict):
+            return
+        for label, expected in snapshot.items():
+            if bool(expected):
+                self.ensure_checkbox_enabled(str(label))
+            else:
+                self.ensure_checkbox_disabled(str(label))
+
+    def _assert_global_settings_snapshot_matches(
+        self,
+        expected: dict[str, object],
+        actual: dict[str, object],
+    ) -> None:
+        expected_compare = self._strong_global_settings_snapshot(expected)
+        actual_compare = self._strong_global_settings_snapshot(actual)
+        if expected_compare != actual_compare:
+            raise AssertionError(
+                "global settings snapshot restore mismatch: "
+                f"expected={expected_compare}, actual={actual_compare}"
+            )
+
+    def _strong_global_settings_snapshot(self, snapshot: dict[str, object]) -> dict[str, object]:
+        strong = copy.deepcopy(snapshot)
+
+        website_restriction = strong.get("website_restriction")
+        if isinstance(website_restriction, dict) and not bool(website_restriction.get("enabled")):
+            strong["website_restriction"] = {"enabled": False}
+
+        packet_capture = strong.get("packet_capture_blocking")
+        if isinstance(packet_capture, dict) and not bool(packet_capture.get("enabled")):
+            strong["packet_capture_blocking"] = {"enabled": False}
+
+        bookmark = strong.get("bookmark_setting")
+        if isinstance(bookmark, dict):
+            strong["bookmark_setting"] = {
+                "enabled": bool(bookmark.get("enabled")),
+                "restore_supported": bool(bookmark.get("restore_supported")),
+            }
+
+        field_limit = strong.get("environment_field_display_limit")
+        if isinstance(field_limit, dict) and not bool(field_limit.get("enabled")):
+            strong["environment_field_display_limit"] = {"enabled": False}
+
+        pagination = strong.get("environment_list_pagination")
+        if isinstance(pagination, dict) and not bool(pagination.get("enabled")):
+            strong["environment_list_pagination"] = {"enabled": False}
+
+        sort_limit = strong.get("environment_list_sort")
+        if isinstance(sort_limit, dict) and not bool(sort_limit.get("enabled")):
+            strong["environment_list_sort"] = {"enabled": False}
+
+        return strong
+
     def ensure_disable_view_password_enabled(self) -> bool:
         """Return True when this method changed the setting."""
         return self.ensure_checkbox_enabled("禁止查看网站密码")
 
+    def ensure_disable_view_password_disabled(self) -> bool:
+        """Return True when this method changed the setting."""
+        return self.ensure_checkbox_disabled("禁止查看网站密码")
+
     def ensure_disable_devtools_enabled(self) -> bool:
         """Return True when this method changed the setting."""
         return self.ensure_checkbox_enabled(self.DISABLE_DEVTOOLS_LABELS)
+
+    def ensure_disable_devtools_disabled(self) -> bool:
+        """Return True when this method changed the setting."""
+        return self.ensure_checkbox_disabled(self.DISABLE_DEVTOOLS_LABELS)
 
     def ensure_disable_extension_management_enabled(self) -> bool:
         """Return True when this method changed the setting."""
@@ -120,6 +230,25 @@ class GlobalSettingsPage(BasePage):
             raise RuntimeError("数据同步 Cookie checkbox was not found")
         return bool(value)
 
+    def ensure_cookie_data_sync_disabled(self) -> bool:
+        """Disable and persist only the Cookie item under 数据设置 → 数据同步."""
+        self._wait_for_cookie_data_sync()
+        before_states = self._wait_checkbox_states_stable()
+        if not self.cookie_data_sync_enabled():
+            return False
+
+        self.cdp.click_element_by_script(self._cookie_data_sync_checkbox_script())
+        self._wait_cookie_data_sync_enabled(False)
+        after_states = self.checkbox_states()
+        self._assert_only_checkbox_changed("Cookie", before_states, after_states, expected_change=(True, False))
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+
+        self.open()
+        self._wait_for_cookie_data_sync()
+        self._wait_cookie_data_sync_enabled(False)
+        return True
+
     def ensure_local_storage_data_sync_enabled(self) -> bool:
         """Enable and persist only the Local Storage item under 数据设置 → 数据同步."""
         self._wait_for_local_storage_data_sync()
@@ -146,6 +275,25 @@ class GlobalSettingsPage(BasePage):
             raise RuntimeError("数据同步 Local Storage checkbox was not found")
         return bool(value)
 
+    def ensure_local_storage_data_sync_disabled(self) -> bool:
+        """Disable and persist only the Local Storage item under 数据设置 → 数据同步."""
+        self._wait_for_local_storage_data_sync()
+        before_states = self._wait_checkbox_states_stable()
+        if not self.local_storage_data_sync_enabled():
+            return False
+
+        self.cdp.click_element_by_script(self._local_storage_data_sync_checkbox_script())
+        self._wait_local_storage_data_sync_enabled(False)
+        after_states = self.checkbox_states()
+        self._assert_only_checkbox_changed("Local Storage", before_states, after_states, expected_change=(True, False))
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+
+        self.open()
+        self._wait_for_local_storage_data_sync()
+        self._wait_local_storage_data_sync_enabled(False)
+        return True
+
     def ensure_indexeddb_data_sync_enabled(self) -> bool:
         """Enable and persist only the IndexedDB item under 数据设置 → 数据同步."""
         self._wait_for_indexeddb_data_sync()
@@ -171,6 +319,25 @@ class GlobalSettingsPage(BasePage):
         if value is None:
             raise RuntimeError("数据同步 IndexedDB checkbox was not found")
         return bool(value)
+
+    def ensure_indexeddb_data_sync_disabled(self) -> bool:
+        """Disable and persist only the IndexedDB item under 数据设置 → 数据同步."""
+        self._wait_for_indexeddb_data_sync()
+        before_states = self._wait_checkbox_states_stable()
+        if not self.indexeddb_data_sync_enabled():
+            return False
+
+        self.cdp.click_element_by_script(self._indexeddb_data_sync_checkbox_script())
+        self._wait_indexeddb_data_sync_enabled(False)
+        after_states = self.checkbox_states()
+        self._assert_only_checkbox_changed("IndexedDB", before_states, after_states, expected_change=(True, False))
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+
+        self.open()
+        self._wait_for_indexeddb_data_sync()
+        self._wait_indexeddb_data_sync_enabled(False)
+        return True
 
     def data_sync_one_way_state(self) -> dict[str, object]:
         """Return persisted global 数据同步 state from the rendered page."""
@@ -376,6 +543,38 @@ class GlobalSettingsPage(BasePage):
             raise RuntimeError("禁用抓包软件 switch was not found")
         return bool(value)
 
+    def packet_capture_blocking_state(self) -> dict[str, object]:
+        self._wait_for_packet_capture_blocking()
+        process_name = self.cdp.evaluate(self._packet_capture_process_value_script())
+        return {
+            "enabled": self.packet_capture_blocking_enabled(),
+            "process_name": str(process_name or "").strip(),
+        }
+
+    def restore_packet_capture_blocking_state(self, state: object) -> None:
+        if not isinstance(state, dict):
+            return
+        expected_enabled = bool(state.get("enabled"))
+        if not expected_enabled:
+            self.disable_packet_capture_blocking()
+            return
+
+        process_name = str(state.get("process_name") or "").strip()
+        self._wait_for_packet_capture_blocking()
+        before_checkboxes, before_switches = self._wait_global_setting_states_stable()
+        self._set_packet_capture_blocking_enabled(True)
+        self.cdp.fill_element_by_script(self._packet_capture_process_input_script(), process_name)
+        self._assert_no_unexpected_existing_state_changes(
+            before_checkboxes=before_checkboxes,
+            before_switches=before_switches,
+            allowed_checkbox_names=set(),
+            allowed_switch_names={"禁用抓包软件"},
+        )
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self._wait_packet_capture_blocking_enabled(True)
+        self._wait_packet_capture_process_name(process_name)
+
     def configure_bookmark_overwrite(self, file_path: str | Path) -> None:
         """Enable bookmark setting, upload a bookmark file, and save overwrite mode."""
         file_path = Path(file_path).resolve()
@@ -478,6 +677,41 @@ class GlobalSettingsPage(BasePage):
             raise RuntimeError("书签设置 switch was not found")
         return bool(value)
 
+    def bookmark_setting_state(self) -> dict[str, object]:
+        self._wait_for_bookmark_setting()
+        enabled = self.bookmark_setting_enabled()
+        return {
+            "enabled": enabled,
+            "effect_modes": {
+                mode: bool(self.cdp.evaluate(self._bookmark_effect_mode_checked_script(mode)))
+                for mode in ("覆盖", "追加", "清空已有书签")
+            },
+            "text": str(self.cdp.evaluate(self._bookmark_setting_text_script()) or ""),
+            "restore_supported": not enabled,
+            "restore_note": "" if not enabled else "书签设置开启时页面无法反推出原始上传文件路径，快照只强恢复开关状态。",
+        }
+
+    def restore_bookmark_setting_state(self, state: object) -> None:
+        if not isinstance(state, dict):
+            return
+        expected_enabled = bool(state.get("enabled"))
+        if not expected_enabled:
+            self.disable_bookmark_setting()
+            return
+
+        self._wait_for_bookmark_setting()
+        before_checkboxes, before_switches = self._wait_global_setting_states_stable()
+        self._set_bookmark_setting_enabled(True)
+        self._assert_no_unexpected_existing_state_changes(
+            before_checkboxes=before_checkboxes,
+            before_switches=before_switches,
+            allowed_checkbox_names=set(),
+            allowed_switch_names={"书签设置"},
+        )
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self._wait_bookmark_setting_enabled(True)
+
     def configure_environment_field_display_limit(self, field_names: list[str]) -> None:
         """Enable environment field display limit, select exact fields, and save."""
         clean_fields = [str(item).strip() for item in field_names if str(item).strip()]
@@ -538,6 +772,38 @@ class GlobalSettingsPage(BasePage):
             raise RuntimeError("环境列表字段权限 switch was not found")
         return bool(value)
 
+    def environment_field_display_limit_state(self) -> dict[str, object]:
+        self._wait_for_environment_field_display_limit()
+        return {
+            "enabled": self.environment_field_display_limit_enabled(),
+            "fields": self._environment_field_display_limit_current_fields(),
+        }
+
+    def restore_environment_field_display_limit_state(self, state: object) -> None:
+        if not isinstance(state, dict):
+            return
+        expected_enabled = bool(state.get("enabled"))
+        fields = [str(item) for item in state.get("fields", []) if str(item).strip()]
+        if not expected_enabled:
+            self.disable_environment_field_display_limit()
+            return
+        if fields:
+            self.configure_environment_field_display_limit(fields)
+            return
+
+        self._wait_for_environment_field_display_limit()
+        before_checkboxes, before_switches = self._wait_global_setting_states_stable()
+        self._set_environment_field_display_limit_enabled(True)
+        self._assert_no_unexpected_existing_state_changes(
+            before_checkboxes=before_checkboxes,
+            before_switches=before_switches,
+            allowed_checkbox_names=set(),
+            allowed_switch_names=set(self.ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS),
+        )
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self._wait_environment_field_display_limit_enabled(True)
+
     def configure_environment_list_pagination_setting(self, page_size_text: str = "20 条/页") -> None:
         """Enable environment list pagination setting, select page size, and save."""
         clean_page_size = str(page_size_text or "").replace(" ", "").strip()
@@ -596,6 +862,38 @@ class GlobalSettingsPage(BasePage):
         if value is None:
             raise RuntimeError("环境列表分页设置 switch was not found")
         return bool(value)
+
+    def environment_list_pagination_setting_state(self) -> dict[str, object]:
+        self._wait_for_environment_list_pagination_setting()
+        return {
+            "enabled": self.environment_list_pagination_setting_enabled(),
+            "page_size": self._environment_list_pagination_page_size_value(),
+        }
+
+    def restore_environment_list_pagination_setting_state(self, state: object) -> None:
+        if not isinstance(state, dict):
+            return
+        expected_enabled = bool(state.get("enabled"))
+        page_size = str(state.get("page_size") or "").strip()
+        if not expected_enabled:
+            self.disable_environment_list_pagination_setting()
+            return
+        if page_size:
+            self.configure_environment_list_pagination_setting(page_size)
+            return
+
+        self._wait_for_environment_list_pagination_setting()
+        before_checkboxes, before_switches = self._wait_global_setting_states_stable()
+        self._set_environment_list_pagination_setting_enabled(True)
+        self._assert_no_unexpected_existing_state_changes(
+            before_checkboxes=before_checkboxes,
+            before_switches=before_switches,
+            allowed_checkbox_names=set(),
+            allowed_switch_names={"环境列表分页设置"},
+        )
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self._wait_environment_list_pagination_setting_enabled(True)
 
     def configure_environment_list_sort(self, field_text: str, direction_text: str) -> None:
         """Enable environment list sort limit, choose field/direction, and save."""
@@ -660,6 +958,40 @@ class GlobalSettingsPage(BasePage):
         if value is None:
             raise RuntimeError("环境列表排序 switch was not found")
         return bool(value)
+
+    def environment_list_sort_state(self) -> dict[str, object]:
+        self._wait_for_environment_list_sort()
+        return {
+            "enabled": self.environment_list_sort_enabled(),
+            "field": self._environment_list_sort_option_value("排序字段"),
+            "direction": self._environment_list_sort_option_value("排序方式"),
+        }
+
+    def restore_environment_list_sort_state(self, state: object) -> None:
+        if not isinstance(state, dict):
+            return
+        expected_enabled = bool(state.get("enabled"))
+        field = str(state.get("field") or "").strip()
+        direction = str(state.get("direction") or "").strip()
+        if not expected_enabled:
+            self.disable_environment_list_sort()
+            return
+        if field and direction:
+            self.configure_environment_list_sort(field, direction)
+            return
+
+        self._wait_for_environment_list_sort()
+        before_checkboxes, before_switches = self._wait_global_setting_states_stable()
+        self._set_environment_list_sort_enabled(True)
+        self._assert_no_unexpected_existing_state_changes(
+            before_checkboxes=before_checkboxes,
+            before_switches=before_switches,
+            allowed_checkbox_names=set(),
+            allowed_switch_names={"环境列表排序"},
+        )
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self._wait_environment_list_sort_enabled(True)
 
     def configure_website_restriction_blocklist(
         self,
@@ -815,6 +1147,53 @@ class GlobalSettingsPage(BasePage):
         if value is None:
             raise RuntimeError("访问网站限制 switch was not found")
         return bool(value)
+
+    def website_restriction_state(self) -> dict[str, object]:
+        self._wait_for_website_restriction()
+        return {
+            "enabled": self.website_restriction_enabled(),
+            "mode": self._website_restriction_selected_mode(),
+            "urls": self._website_restriction_url_lines(),
+            "shortcut_states": self._website_restriction_shortcut_states(),
+        }
+
+    def restore_website_restriction_state(self, state: object) -> None:
+        if not isinstance(state, dict):
+            return
+        expected_enabled = bool(state.get("enabled"))
+        if not expected_enabled:
+            self.disable_website_restriction()
+            return
+
+        mode = str(state.get("mode") or "").strip()
+        urls = [str(item) for item in state.get("urls", []) if str(item).strip()]
+        shortcut_states = state.get("shortcut_states", {})
+        if not isinstance(shortcut_states, dict):
+            shortcut_states = {}
+
+        self._wait_for_website_restriction()
+        before_checkboxes, before_switches = self._wait_global_setting_states_stable()
+        self._set_website_restriction_enabled(True)
+        if mode:
+            self._select_website_restriction_mode(mode)
+        for shortcut_name, checked in shortcut_states.items():
+            self._set_website_restriction_shortcut_checked(str(shortcut_name), bool(checked))
+        self.cdp.fill_element_by_script(
+            self._website_restriction_url_textarea_script(),
+            "\n".join(urls),
+        )
+        self._assert_no_unexpected_existing_state_changes(
+            before_checkboxes=before_checkboxes,
+            before_switches=before_switches,
+            allowed_checkbox_names=set(str(key) for key in shortcut_states),
+            allowed_switch_names={"访问网站限制"},
+        )
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self._wait_website_restriction_enabled(True)
+        if mode:
+            self._wait_website_restriction_mode(mode)
+        self._wait_website_restriction_urls(urls)
 
     @staticmethod
     def _label_candidates(label_text: str | tuple[str, ...]) -> tuple[str, ...]:
@@ -1660,6 +2039,13 @@ class GlobalSettingsPage(BasePage):
         actual = self.cdp.evaluate(self._environment_list_pagination_page_size_text_script())
         raise TimeoutError(f"环境列表分页条数未保存为预期值: expected={normalized}, actual={actual}")
 
+    def _environment_list_pagination_page_size_value(self) -> str:
+        text = str(self.cdp.evaluate(self._environment_list_pagination_page_size_text_script()) or "")
+        match = re.search(r"(\d+\s*条\s*/\s*页)", text)
+        if not match:
+            return ""
+        return match.group(1).replace(" ", "")
+
     def _wait_environment_list_sort_enabled(
         self,
         expected: bool,
@@ -1724,6 +2110,21 @@ class GlobalSettingsPage(BasePage):
             time.sleep(0.2)
         actual = self.cdp.evaluate(self._environment_list_sort_option_text_script(label_text))
         raise TimeoutError(f"环境列表排序选项未保存为预期值: label={label_text}, expected={option_text}, actual={actual}")
+
+    def _environment_list_sort_option_value(self, label_text: str) -> str:
+        text = str(self.cdp.evaluate(self._environment_list_sort_option_text_script(label_text)) or "")
+        if label_text == "排序方式":
+            if "升序" in text:
+                return "升序"
+            if "降序" in text:
+                return "降序"
+            return ""
+        for candidate in self._ENVIRONMENT_FIELD_ALIASES:
+            if candidate in {"升序", "降序"}:
+                continue
+            if self._canonical_environment_field(text) == candidate or candidate in text:
+                return candidate
+        return self._canonical_environment_field(text)
 
     def _open_environment_field_display_limit_dialog(self) -> None:
         self.cdp.click_element_by_script(self._environment_field_display_limit_edit_button_script())
@@ -1796,6 +2197,15 @@ class GlobalSettingsPage(BasePage):
                 return
             time.sleep(0.2)
         raise TimeoutError(f"环境列表字段权限当前设置未回显预期字段: expected={expected}")
+
+    def _environment_field_display_limit_current_fields(self) -> list[str]:
+        text = str(self.cdp.evaluate(self._environment_field_display_limit_text_script()) or "")
+        fields: list[str] = []
+        for candidate in re.split(r"[>、,，\\s]+", text):
+            field = self._canonical_environment_field(candidate)
+            if field in self._ENVIRONMENT_FIELD_ALIASES and field not in {"升序", "降序"} and field not in fields:
+                fields.append(field)
+        return fields
 
     def _upload_bookmark_file(self, file_path: Path) -> None:
         file_content = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -1952,6 +2362,35 @@ class GlobalSettingsPage(BasePage):
                 return
             time.sleep(0.2)
         raise TimeoutError(f"访问网站限制快捷选择未勾选: {shortcut_name}")
+
+    def _set_website_restriction_shortcut_checked(self, shortcut_name: str, expected: bool) -> None:
+        shortcut_names = self._website_shortcut_candidates(shortcut_name)
+        current = self.cdp.evaluate(self._website_restriction_shortcut_checked_script(shortcut_names))
+        if current is expected:
+            return
+        self.cdp.click_element_by_script(self._website_restriction_shortcut_script(shortcut_names))
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._website_restriction_shortcut_checked_script(shortcut_names)) is expected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"访问网站限制快捷选择状态未恢复: shortcut={shortcut_name}, expected={expected}")
+
+    def _website_restriction_selected_mode(self) -> str:
+        for mode_text in ("禁止访问指定网址", "允许访问指定网址"):
+            if self.cdp.evaluate(self._website_restriction_radio_checked_script(mode_text)):
+                return mode_text
+        return ""
+
+    def _website_restriction_url_lines(self) -> list[str]:
+        value = self.cdp.evaluate(self._website_restriction_url_value_script())
+        return self._unique_non_empty(str(value or "").splitlines())
+
+    def _website_restriction_shortcut_states(self) -> dict[str, bool]:
+        value = self.cdp.evaluate(self._website_restriction_shortcut_states_script())
+        if not isinstance(value, dict):
+            return {}
+        return {str(key): bool(item) for key, item in value.items()}
 
     def _website_shortcut_candidates(self, shortcut_name: str) -> tuple[str, ...]:
         clean_name = str(shortcut_name or "").strip()
@@ -2921,6 +3360,37 @@ class GlobalSettingsPage(BasePage):
             "__WEBSITE_RESTRICTION_ROOT__",
             self._website_restriction_root_function(),
         ).replace(
+            "__CHECKBOX_SELECTOR__",
+            repr(self.locator("checkbox")),
+        ).replace(
+            "__INPUT_SELECTOR__",
+            repr(self.locator("input")),
+        )
+
+    def _website_restriction_shortcut_states_script(self) -> str:
+        return """
+        () => {
+            const root = __WEBSITE_RESTRICTION_ROOT__();
+            if (!root) return {};
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const states = {};
+            for (const checkbox of Array.from(root.querySelectorAll(__CHECKBOX_SELECTOR__)).filter(visible)) {
+                const text = clean(checkbox.innerText || checkbox.textContent);
+                if (!text) continue;
+                const input = checkbox.querySelector(__INPUT_SELECTOR__);
+                states[text] = checkbox.classList.contains("is-checked") || Boolean(input?.checked);
+            }
+            return states;
+        }
+        """.replace("__WEBSITE_RESTRICTION_ROOT__", self._website_restriction_root_function()).replace(
             "__CHECKBOX_SELECTOR__",
             repr(self.locator("checkbox")),
         ).replace(

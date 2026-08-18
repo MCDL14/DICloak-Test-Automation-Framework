@@ -53,10 +53,12 @@ class TestAllowSpecificWebsiteLocalProbe(unittest.TestCase):
         kernel_pid = 0
         environment_opened = False
         cleanup_error: Exception | None = None
+        global_settings_snapshot: dict[str, object] | None = None
 
         try:
             with LocalHttpProbe() as allowed_probe:
                 global_settings_page.open()
+                global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
                 global_settings_page.validate_website_restriction_controls_without_saving(
                     test_url=allowed_probe.url,
                     shortcut_name=None,
@@ -152,14 +154,9 @@ class TestAllowSpecificWebsiteLocalProbe(unittest.TestCase):
             except Exception:
                 pass
             try:
-                global_settings_page.open()
-                global_settings_page.disable_website_restriction()
-                global_settings_page.open()
-                global_settings_page._wait_global_setting_states_stable()
-                assert_true(
-                    not global_settings_page.website_restriction_enabled(),
-                    "访问网站限制功能开关在用例清理后仍未关闭",
-                )
+                if global_settings_snapshot is not None:
+                    global_settings_page.open(force_reentry=True)
+                    global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
             except Exception as exc:
                 cleanup_error = exc
             try:

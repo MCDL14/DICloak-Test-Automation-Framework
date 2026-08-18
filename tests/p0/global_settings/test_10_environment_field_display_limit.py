@@ -34,12 +34,12 @@ class TestEnvironmentFieldDisplayLimit(unittest.TestCase):
     def test_environment_field_display_limit(self) -> None:
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
-        environment_field_limit_saved = False
-        global_settings_dirty = False
         cleanup_error: Exception | None = None
+        global_settings_snapshot: dict[str, object] | None = None
 
         try:
             global_settings_page.open()
+            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             global_settings_page.disable_environment_field_display_limit()
 
             environment_page.open_list()
@@ -51,20 +51,14 @@ class TestEnvironmentFieldDisplayLimit(unittest.TestCase):
             )
 
             global_settings_page.open()
-            global_settings_dirty = True
             global_settings_page.configure_environment_field_display_limit(LIMITED_SETTING_FIELDS)
-            global_settings_dirty = False
-            environment_field_limit_saved = True
 
             environment_page.open_list()
             environment_page.wait_column_settings_button_hidden()
             environment_page.wait_business_headers_equal(LIMITED_EXPECTED_HEADERS)
 
             global_settings_page.open()
-            global_settings_dirty = True
             global_settings_page.disable_environment_field_display_limit()
-            global_settings_dirty = False
-            environment_field_limit_saved = False
 
             environment_page.open_list()
             environment_page.wait_column_settings_button_visible()
@@ -72,17 +66,9 @@ class TestEnvironmentFieldDisplayLimit(unittest.TestCase):
             environment_page.wait_business_headers_include(LIMITED_EXPECTED_HEADERS)
         finally:
             try:
-                if environment_field_limit_saved:
-                    global_settings_page.open()
-                    global_settings_page.disable_environment_field_display_limit()
-                    global_settings_page.open()
-                    global_settings_page._wait_global_setting_states_stable()
-                    assert_true(
-                        not global_settings_page.environment_field_display_limit_enabled(),
-                        "环境列表字段权限功能开关在用例清理后仍未关闭",
-                    )
-                elif global_settings_dirty:
-                    self.cdp.reload()
+                if global_settings_snapshot is not None:
+                    global_settings_page.open(force_reentry=True)
+                    global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
             try:

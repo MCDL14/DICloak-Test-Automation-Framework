@@ -33,16 +33,13 @@ class TestEnvironmentListSortLimit(unittest.TestCase):
     def test_environment_list_sort_limit(self) -> None:
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
-        sort_limit_saved = False
-        global_settings_dirty = False
         cleanup_error: Exception | None = None
+        global_settings_snapshot: dict[str, object] | None = None
 
         try:
             global_settings_page.open()
-            global_settings_dirty = True
+            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             global_settings_page.configure_environment_list_sort(SORT_FIELD, "升序")
-            global_settings_dirty = False
-            sort_limit_saved = True
 
             self.cdp.reload()
             environment_page.open_list()
@@ -58,9 +55,7 @@ class TestEnvironmentListSortLimit(unittest.TestCase):
             )
 
             global_settings_page.open()
-            global_settings_dirty = True
             global_settings_page.configure_environment_list_sort(SORT_FIELD, "降序")
-            global_settings_dirty = False
 
             self.cdp.reload()
             environment_page.open_list()
@@ -76,10 +71,7 @@ class TestEnvironmentListSortLimit(unittest.TestCase):
             )
 
             global_settings_page.open()
-            global_settings_dirty = True
             global_settings_page.disable_environment_list_sort()
-            global_settings_dirty = False
-            sort_limit_saved = False
 
             self.cdp.reload()
             environment_page.open_list()
@@ -98,18 +90,9 @@ class TestEnvironmentListSortLimit(unittest.TestCase):
             )
         finally:
             try:
-                if sort_limit_saved:
-                    global_settings_page.open()
-                    global_settings_page.disable_environment_list_sort()
-                    self.cdp.reload()
-                    global_settings_page.open()
-                    global_settings_page._wait_global_setting_states_stable()
-                    assert_true(
-                        not global_settings_page.environment_list_sort_enabled(),
-                        "环境列表排序功能开关在用例清理后仍未关闭",
-                    )
-                elif global_settings_dirty:
-                    self.cdp.reload()
+                if global_settings_snapshot is not None:
+                    global_settings_page.open(force_reentry=True)
+                    global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
             try:

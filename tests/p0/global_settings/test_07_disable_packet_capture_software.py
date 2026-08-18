@@ -67,9 +67,11 @@ class TestDisablePacketCaptureSoftware(unittest.TestCase):
         packet_process_started = False
         packet_process_ids: set[int] = set()
         cleanup_error: Exception | None = None
+        global_settings_snapshot: dict[str, object] | None = None
 
         try:
             global_settings_page.open()
+            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             global_settings_page.configure_packet_capture_blocking(packet_process_name)
 
             packet_process_ids_before = set(main_process_ids(packet_process_name))
@@ -163,14 +165,9 @@ class TestDisablePacketCaptureSoftware(unittest.TestCase):
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
             try:
-                global_settings_page.open()
-                global_settings_page.disable_packet_capture_blocking()
-                global_settings_page.open()
-                global_settings_page._wait_global_setting_states_stable()
-                assert_true(
-                    not global_settings_page.packet_capture_blocking_enabled(),
-                    "禁用抓包软件功能开关在用例清理后仍未关闭",
-                )
+                if global_settings_snapshot is not None:
+                    global_settings_page.open(force_reentry=True)
+                    global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
             try:

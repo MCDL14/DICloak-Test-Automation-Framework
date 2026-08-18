@@ -22,7 +22,7 @@ from pages.login_page import LoginPage
 from pages.personal_settings_page import PersonalSettingsPage
 
 
-CASE_MODULE = "环境管理"
+CASE_MODULE = "全局设置"
 ENVIRONMENT_NAME = "全局设置-单向同步-允许当前账号同步"
 EXPECTED_SYNC_ITEMS = ["Cookie", "Local Storage", "IndexedDB"]
 EXPECTED_WHITELIST_GROUPS = ["管理组"]
@@ -75,8 +75,10 @@ class TestGlobalSettingsOneWaySyncAllowCurrentAccount(unittest.TestCase):
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
         personal_settings_page = PersonalSettingsPage(cdp_driver=self.cdp, config=self.config)
+        global_settings_snapshot: dict[str, object] | None = None
         try:
             global_settings_page.open(force_reentry=True)
+            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             configured_state = global_settings_page.configure_data_sync_one_way(
                 EXPECTED_SYNC_ITEMS,
                 EXPECTED_WHITELIST_GROUPS,
@@ -185,12 +187,9 @@ class TestGlobalSettingsOneWaySyncAllowCurrentAccount(unittest.TestCase):
                 environment_page.clear_search()
             except Exception:
                 pass
-            global_settings_page.open(force_reentry=True)
-            final_global_state = global_settings_page.disable_data_sync_one_way()
-            assert_true(
-                not bool(final_global_state.get("one_way_enabled")),
-                f"全局设置单向同步开关未关闭: actual={final_global_state}",
-            )
+            if global_settings_snapshot is not None:
+                global_settings_page.open(force_reentry=True)
+                global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
 
     def _credentials_by_site(self) -> dict[str, tuple[str, str]]:
         test_data = self.config.get("test_data", {})

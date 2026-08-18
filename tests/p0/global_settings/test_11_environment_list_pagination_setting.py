@@ -34,16 +34,13 @@ class TestEnvironmentListPaginationSetting(unittest.TestCase):
     def test_environment_list_pagination_setting(self) -> None:
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
-        pagination_setting_saved = False
-        global_settings_dirty = False
         cleanup_error: Exception | None = None
+        global_settings_snapshot: dict[str, object] | None = None
 
         try:
             global_settings_page.open()
-            global_settings_dirty = True
+            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             global_settings_page.configure_environment_list_pagination_setting(LOCKED_PAGE_SIZE)
-            global_settings_dirty = False
-            pagination_setting_saved = True
 
             self.cdp.reload()
             environment_page.open_list()
@@ -51,10 +48,7 @@ class TestEnvironmentListPaginationSetting(unittest.TestCase):
             environment_page.wait_current_page_row_count_between(min_exclusive=10, max_inclusive=20)
 
             global_settings_page.open()
-            global_settings_dirty = True
             global_settings_page.disable_environment_list_pagination_setting()
-            global_settings_dirty = False
-            pagination_setting_saved = False
 
             self.cdp.reload()
             environment_page.open_list()
@@ -64,17 +58,9 @@ class TestEnvironmentListPaginationSetting(unittest.TestCase):
             assert_true(row_count == 10, f"current page environment row count should be 10 after restore: {row_count}")
         finally:
             try:
-                if pagination_setting_saved:
-                    global_settings_page.open()
-                    global_settings_page.disable_environment_list_pagination_setting()
-                    global_settings_page.open()
-                    global_settings_page._wait_global_setting_states_stable()
-                    assert_true(
-                        not global_settings_page.environment_list_pagination_setting_enabled(),
-                        "环境列表分页设置功能开关在用例清理后仍未关闭",
-                    )
-                elif global_settings_dirty:
-                    self.cdp.reload()
+                if global_settings_snapshot is not None:
+                    global_settings_page.open(force_reentry=True)
+                    global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
             try:

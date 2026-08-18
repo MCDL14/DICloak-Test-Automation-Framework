@@ -52,9 +52,12 @@ class TestDisableMemberAccessGoogleExtensionPages(unittest.TestCase):
         environment_name = ""
         kernel_pid = 0
         environment_opened = False
+        global_settings_snapshot: dict[str, object] | None = None
+        cleanup_error: Exception | None = None
 
         try:
             global_settings_page.open()
+            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             global_settings_page.ensure_disable_member_google_extension_pages_enabled()
 
             environment_page.open_list()
@@ -140,14 +143,17 @@ class TestDisableMemberAccessGoogleExtensionPages(unittest.TestCase):
             except Exception:
                 pass
             try:
-                global_settings_page.open()
-                global_settings_page.ensure_disable_member_google_extension_pages_disabled()
-            except Exception:
-                pass
+                if global_settings_snapshot is not None:
+                    global_settings_page.open(force_reentry=True)
+                    global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
+            except Exception as exc:
+                cleanup_error = exc
             try:
                 environment_page.open_list()
             except Exception:
                 pass
+            if cleanup_error:
+                raise cleanup_error
 
     def _close_environment_if_open(
         self,

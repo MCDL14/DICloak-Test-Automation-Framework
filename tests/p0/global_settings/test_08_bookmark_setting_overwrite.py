@@ -52,10 +52,13 @@ class TestBookmarkSettingOverwrite(unittest.TestCase):
         environment_name = ""
         kernel_pid = 0
         environment_opened = False
-        bookmark_setting_saved = False
         cleanup_error: Exception | None = None
+        global_settings_snapshot: dict[str, object] | None = None
 
         try:
+            global_settings_page.open()
+            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
+
             environment_page.open_list()
             environment_page.search_environment(ENVIRONMENT_SEARCH_KEYWORD)
             environment_name = environment_page.environment_name_at_position(1)
@@ -119,7 +122,6 @@ class TestBookmarkSettingOverwrite(unittest.TestCase):
 
             global_settings_page.open()
             global_settings_page.configure_bookmark_overwrite(bookmark_file)
-            bookmark_setting_saved = True
 
             environment_page.open_list()
             environment_page.search_environment(ENVIRONMENT_SEARCH_KEYWORD)
@@ -197,17 +199,9 @@ class TestBookmarkSettingOverwrite(unittest.TestCase):
             except Exception:
                 pass
             try:
-                if bookmark_setting_saved:
-                    global_settings_page.open()
-                    global_settings_page.disable_bookmark_setting()
-                    global_settings_page.open()
-                    global_settings_page._wait_global_setting_states_stable()
-                    assert_true(
-                        not global_settings_page.bookmark_setting_enabled(),
-                        "书签设置功能开关在用例清理后仍未关闭",
-                    )
-                else:
-                    self.cdp.reload()
+                if global_settings_snapshot is not None:
+                    global_settings_page.open(force_reentry=True)
+                    global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
             try:

@@ -9,13 +9,14 @@
 当前实现状态：
 
 1. 框架骨架、配置、预检、日志、APP 生命周期、CDP 连接、UIAutomation、飞书通知、用例运行编排已完成。
-2. 当前 `tests/p0` 可发现 68 条 P0 用例：环境管理 31 条、全局设置 12 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
+2. 当前 `tests/p0` 可发现 75 条 P0 用例：环境管理 36 条、全局设置 14 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
 3. P0 用例已按业务模块移动到 `tests/p0/` 下的对应模块目录，并支持按级别、文件/目录模块、业务模块、单条用例运行。
 4. 已接入用例前后恢复机制：全局 APP 稳定态恢复不做业务导航，模块级恢复由各模块自行进入模块首页并清理模块状态，当前已实现环境管理和环境分组管理模块恢复入口。
 5. 已接入 Streamlit 本地 UI，用于用例发现、模块筛选、批量选择、实时日志、运行结果统计和历史日志查看，UI 执行复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路。
 6. 成员管理已覆盖创建/编辑/筛选/导出/权限/API 停用与到期停用等 P0 场景；四条成员 open API 用例已具备接口非 200 重试和异常兜底恢复能力。
 7. 代理管理已覆盖创建自定义代理、批量创建、创建 NodeMaven 动态代理、批量创建后批量检测 4 条 P0 用例；扩展管理等模块目录已预留，后续按业务优先级继续补充。
-8. 环境管理新增 Cookie、Local Storage、IndexedDB 三条预置环境数据恢复校验，以及三条新环境持续保持用例；后三条严格沿用原有默认创建流程，当前只完成静态验证，默认创建问题的处理方式待确认。
+8. 环境管理已接入 Cookie、Local Storage、IndexedDB 三条预置环境数据恢复校验、三条新环境持续保持用例、三条环境单独设置数据同步用例和两条环境单独设置单向同步用例；涉及全局数据同步配置的用例已接入运行前全局设置快照与 finally 恢复。
+9. 全局设置模块已接入 14 条 P0 用例；会保存全局设置配置的用例统一通过 `GlobalSettingsPage.capture_global_settings_snapshot()` 和 `restore_global_settings_snapshot()` 恢复运行前配置。新增会保存全局设置的新配置项时，必须先补充快照采集、恢复和文档说明。
 
 第一阶段需要达成以下结果：
 
@@ -796,7 +797,7 @@ DICloak自动化框架/
 
 ## 八、P0 用例设计
 
-当前第一阶段已完成环境管理模块 31 条 P0 用例，并已完成全局设置 12 条、环境分组管理 6 条、成员管理 15 条和代理管理 4 条 P0 用例。
+当前第一阶段已完成环境管理模块 36 条 P0 用例，并已完成全局设置 14 条、环境分组管理 6 条、成员管理 15 条和代理管理 4 条 P0 用例。
 
 已实现用例：
 
@@ -828,9 +829,14 @@ DICloak自动化框架/
 26. `test_26_cookie_data_validation.py`：预置环境 Cookie 云端数据恢复校验。
 27. `test_27_local_storage_data_validation.py`：预置环境 Local Storage 云端数据恢复校验。
 28. `test_28_indexeddb_data_validation.py`：预置环境 IndexedDB 云端数据恢复校验。
-29. `test_29_new_environment_cookie_persistence.py`：新环境 Cookie 持续保持，沿用原有默认创建流程；创建问题待确认，尚未按当前代码真实通过。
-30. `test_30_new_environment_local_storage_persistence.py`：新环境 Local Storage 持续保持，沿用原有默认创建流程；尚未真实运行。
-31. `test_31_new_environment_indexeddb_persistence.py`：新环境 IndexedDB 持续保持，沿用原有默认创建流程；尚未真实运行。
+29. `test_29_new_environment_cookie_persistence.py`：新环境 Cookie 持续保持，沿用默认创建流程；2026-08-18 涉及快照恢复的 6 条环境管理用例联合真实回归中通过。
+30. `test_30_new_environment_local_storage_persistence.py`：新环境 Local Storage 持续保持，沿用默认创建流程；2026-08-18 涉及快照恢复的 6 条环境管理用例联合真实回归中通过。
+31. `test_31_new_environment_indexeddb_persistence.py`：新环境 IndexedDB 持续保持，沿用默认创建流程；2026-08-18 涉及快照恢复的 6 条环境管理用例联合真实回归中通过。
+32. `test_32_individual_environment_cookie_sync.py`：环境单独设置 Cookie 同步。
+33. `test_33_individual_environment_local_storage_sync.py`：环境单独设置 Local Storage 同步。
+34. `test_34_individual_environment_indexeddb_sync.py`：环境单独设置 IndexedDB 同步。
+35. `test_35_individual_environment_one_way_sync_forbid_current_account.py`：环境单独设置单向同步-禁止当前账号同步。
+36. `test_36_individual_environment_one_way_sync_allow_current_account.py`：环境单独设置单向同步-允许当前账号同步。
 
 全局设置模块：
 
@@ -839,8 +845,15 @@ DICloak自动化框架/
 3. `test_03_disable_extension_management.py`：禁止管理/移除扩展，以及从本地安装扩展至浏览器。
 4. `test_04_disable_member_access_google_extension_pages.py`：禁止成员访问谷歌扩展商店和扩展设置页面。
 5. `test_05_block_specific_websites_google_and_baidu.py`：禁止访问指定网址-快捷勾选 Chrome 应用商店、百度，并通过本地 HTTP 探针校验允许网址仍可访问。
-6. `test_06_allow_specific_website_bilibili.py`：允许访问指定网址-b 站。
+6. `test_06_allow_specific_website_bilibili.py`：允许访问指定网址，使用本地 HTTP 探针作为允许网址。
 7. `test_07_disable_packet_capture_software.py`：禁用抓包软件，校验抓包进程存在时禁止打开环境，关闭抓包软件后环境可正常打开。
+8. `test_08_bookmark_setting_overwrite.py`：书签设置-覆盖。
+9. `test_09_bookmark_setting_append.py`：书签设置-追加。
+10. `test_10_environment_field_display_limit.py`：环境列表字段权限。
+11. `test_11_environment_list_pagination_setting.py`：环境列表分页设置。
+12. `test_12_environment_list_sort_limit.py`：环境列表排序设置。
+13. `test_13_global_settings_one_way_sync_disallow_current_account.py`：全局设置单向同步-不允许当前账号同步。
+14. `test_14_global_settings_one_way_sync_allow_current_account.py`：全局设置单向同步-允许当前账号同步。
 
 环境分组管理模块：
 

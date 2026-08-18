@@ -66,6 +66,9 @@ test_data:
 11. 新环境 Cookie 持续保持用例使用 `test_data.environment_new_cookie_persistence`，当前账号为 `MCDL004`，密码只写入本地 `config/test_data.yaml`。
 12. 新环境 Local Storage 持续保持用例使用 `test_data.environment_new_local_storage_persistence`，当前账号为 `MCDL005`，密码只写入本地 `config/test_data.yaml`。
 13. 新环境 IndexedDB 持续保持用例使用 `test_data.environment_new_indexeddb_persistence`，当前账号为 `MCDL006`，密码只写入本地 `config/test_data.yaml`。
+14. 环境单独设置与全局设置的四条单向同步用例共用 `test_data.environment_one_way_sync`，其中 `cookie` 使用 `MCDL004`、`localstorage` 使用 `MCDL005`、`indexeddb` 使用 `MCDL006`；密码只写入本地 `config/test_data.yaml`。该段缺失时，全局设置单向同步用例会在用例数据校验阶段失败，不会进入全局设置页面保存配置。
+
+全局设置相关用例如果会保存团队级配置，必须在运行前记录全局设置快照并在 `finally` 中恢复。后续新增全局设置用例并引入新的测试数据键时，应同时检查是否需要扩展 `GlobalSettingsPage.capture_global_settings_snapshot()` 和对应恢复方法。
 
 成员 open API 的真实 token 属于敏感信息，优先通过运行进程环境变量 `DICLOAK_API_MEMBER_EDIT_TOKEN` 注入；如必须写入本地配置，只能写入被 `.gitignore` 排除的 `config/test_data.yaml`，不要写入 `config/test_data.example.yaml`、测试代码或文档。目标外部成员 ID 可通过 `DICLOAK_API_MEMBER_EDIT_MEMBER_ID` 临时覆盖。
 

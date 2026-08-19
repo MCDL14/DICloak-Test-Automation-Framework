@@ -19,6 +19,12 @@ class GlobalSettingsPage(BasePage):
     DATA_SYNC_ONE_WAY_SYNC_TEXT = "防止成员覆盖云端数据，导致环境内账号退出登录"
     DATA_SYNC_ONE_WAY_SYNC_STATE_NAME = "数据同步"
     DATA_SYNC_ONE_WAY_SYNC_WHITELIST_LABEL = "白名单"
+    CLEAR_LOCAL_CACHE_METHOD_LABEL = "清除方式"
+    CLEAR_LOCAL_CACHE_FREQUENCY_LABEL = "清除频率"
+    CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT = "不清除"
+    CLEAR_LOCAL_CACHE_ALL_TEXT = "清除本地全部缓存"
+    CLEAR_LOCAL_CACHE_EVERY_OPEN_TEXT = "每次打开环境时都清除"
+    CLEAR_LOCAL_CACHE_SYNC_CLOUD_TEXT = "清除后，再同步云端数据"
     DISABLE_DEVTOOLS_LABELS = ("禁止打开浏览器开发者工具", "禁止打开浏览器开发者工具界面")
     ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS = ("环境列表字段权限", "环境字段显示限制")
     ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG_TITLES = ("列表字段", "列表字段设置")
@@ -91,6 +97,7 @@ class GlobalSettingsPage(BasePage):
             "environment_list_pagination": self.environment_list_pagination_setting_state(),
             "environment_list_sort": self.environment_list_sort_state(),
             "data_sync": self.data_sync_one_way_state(),
+            "clear_local_cache": self.clear_local_cache_state(),
         }
 
     def restore_global_settings_snapshot(self, snapshot: dict[str, object]) -> None:
@@ -106,6 +113,7 @@ class GlobalSettingsPage(BasePage):
         self.restore_environment_list_pagination_setting_state(snapshot.get("environment_list_pagination", {}))
         self.restore_environment_list_sort_state(snapshot.get("environment_list_sort", {}))
         self.restore_data_sync_one_way_state(snapshot.get("data_sync", {}))
+        self.restore_clear_local_cache_state(snapshot.get("clear_local_cache", {}))
 
         self.open(force_reentry=True)
         restored = self.capture_global_settings_snapshot()
@@ -169,6 +177,10 @@ class GlobalSettingsPage(BasePage):
         sort_limit = strong.get("environment_list_sort")
         if isinstance(sort_limit, dict) and not bool(sort_limit.get("enabled")):
             strong["environment_list_sort"] = {"enabled": False}
+
+        clear_local_cache = strong.get("clear_local_cache")
+        if isinstance(clear_local_cache, dict) and clear_local_cache.get("clear_method") == self.CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT:
+            strong["clear_local_cache"] = {"clear_method": self.CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT}
 
         return strong
 
@@ -477,6 +489,121 @@ class GlobalSettingsPage(BasePage):
         if value is None:
             raise RuntimeError("数据同步单向同步 switch was not found")
         return bool(value)
+
+    def configure_clear_all_local_cache_every_open_sync_cloud_data(self) -> None:
+        """Set 全局设置 → 清除本地缓存 to clear all cache every open and sync cloud data."""
+        self._configure_clear_all_local_cache_every_open(sync_cloud_data=True)
+
+    def configure_clear_all_local_cache_every_open_no_cloud_sync_data(self) -> None:
+        """Set 全局设置 → 清除本地缓存 to clear all cache every open without cloud sync."""
+        self._configure_clear_all_local_cache_every_open(sync_cloud_data=False)
+
+    def _configure_clear_all_local_cache_every_open(self, *, sync_cloud_data: bool) -> None:
+        self._wait_for_clear_local_cache_settings()
+        before_checkboxes, before_switches = self._wait_global_setting_states_stable()
+        self._select_global_settings_form_select_option(
+            self.CLEAR_LOCAL_CACHE_METHOD_LABEL,
+            self.CLEAR_LOCAL_CACHE_ALL_TEXT,
+        )
+        self._select_global_settings_form_select_option(
+            self.CLEAR_LOCAL_CACHE_FREQUENCY_LABEL,
+            self.CLEAR_LOCAL_CACHE_EVERY_OPEN_TEXT,
+        )
+        self._set_clear_local_cache_sync_cloud_enabled(sync_cloud_data)
+        self._close_select_dropdowns()
+        self._assert_no_unexpected_existing_state_changes(
+            before_checkboxes=before_checkboxes,
+            before_switches=before_switches,
+            allowed_checkbox_names=set(),
+            allowed_switch_names={self.CLEAR_LOCAL_CACHE_SYNC_CLOUD_TEXT},
+        )
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self.open(force_reentry=True)
+        self._wait_global_settings_form_select_value(
+            self.CLEAR_LOCAL_CACHE_METHOD_LABEL,
+            self.CLEAR_LOCAL_CACHE_ALL_TEXT,
+        )
+        self._wait_global_settings_form_select_value(
+            self.CLEAR_LOCAL_CACHE_FREQUENCY_LABEL,
+            self.CLEAR_LOCAL_CACHE_EVERY_OPEN_TEXT,
+        )
+        self._wait_clear_local_cache_sync_cloud_enabled(sync_cloud_data)
+
+    def configure_clear_local_cache_no_clear(self) -> None:
+        """Set 全局设置 → 清除本地缓存 → 清除方式 to 不清除 and persist it."""
+        self._wait_for_clear_local_cache_settings()
+        before_checkboxes, before_switches = self._wait_global_setting_states_stable()
+        self._select_global_settings_form_select_option(
+            self.CLEAR_LOCAL_CACHE_METHOD_LABEL,
+            self.CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT,
+        )
+        self._close_select_dropdowns()
+        self._assert_no_unexpected_existing_state_changes(
+            before_checkboxes=before_checkboxes,
+            before_switches=before_switches,
+            allowed_checkbox_names=set(),
+            allowed_switch_names=set(),
+        )
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self.open(force_reentry=True)
+        self._wait_global_settings_form_select_value(
+            self.CLEAR_LOCAL_CACHE_METHOD_LABEL,
+            self.CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT,
+        )
+
+    def clear_local_cache_state(self) -> dict[str, object]:
+        """Return persisted global 清除本地缓存 state from the rendered page."""
+        self._wait_for_clear_local_cache_settings()
+        state: dict[str, object] = {
+            "clear_method": self._global_settings_form_select_value(self.CLEAR_LOCAL_CACHE_METHOD_LABEL),
+        }
+        if self.cdp.evaluate(self._global_settings_form_select_exists_script(self.CLEAR_LOCAL_CACHE_FREQUENCY_LABEL)):
+            state["clear_frequency"] = self._global_settings_form_select_value(self.CLEAR_LOCAL_CACHE_FREQUENCY_LABEL)
+        sync_cloud_data = self.cdp.evaluate(self._clear_local_cache_sync_cloud_enabled_script())
+        if sync_cloud_data is not None:
+            state["sync_cloud_data"] = bool(sync_cloud_data)
+        return state
+
+    def restore_clear_local_cache_state(self, state: object) -> None:
+        """Restore global 清除本地缓存 state captured by clear_local_cache_state()."""
+        if not isinstance(state, dict):
+            return
+
+        clear_method = str(state.get("clear_method") or "").strip()
+        if not clear_method:
+            clear_method = self.CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT
+
+        self._wait_for_clear_local_cache_settings()
+        self._select_global_settings_form_select_option(self.CLEAR_LOCAL_CACHE_METHOD_LABEL, clear_method)
+
+        clear_frequency = str(state.get("clear_frequency") or "").strip()
+        if clear_frequency and self.cdp.evaluate(
+            self._global_settings_form_select_exists_script(self.CLEAR_LOCAL_CACHE_FREQUENCY_LABEL)
+        ):
+            self._select_global_settings_form_select_option(self.CLEAR_LOCAL_CACHE_FREQUENCY_LABEL, clear_frequency)
+
+        if "sync_cloud_data" in state and self.cdp.evaluate(self._clear_local_cache_sync_cloud_enabled_script()) is not None:
+            self._set_clear_local_cache_sync_cloud_enabled(bool(state.get("sync_cloud_data")))
+
+        self._close_select_dropdowns()
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self.open(force_reentry=True)
+        final_state = self.clear_local_cache_state()
+        expected_state = {"clear_method": clear_method}
+        if clear_frequency:
+            expected_state["clear_frequency"] = clear_frequency
+        if "sync_cloud_data" in state and final_state.get("sync_cloud_data") is not None:
+            expected_state["sync_cloud_data"] = bool(state.get("sync_cloud_data"))
+        mismatches = {
+            key: (expected, final_state.get(key))
+            for key, expected in expected_state.items()
+            if final_state.get(key) != expected
+        }
+        if mismatches:
+            raise AssertionError(f"global clear local cache restore mismatch: {mismatches}")
 
     def data_sync_one_way_whitelist_values(self) -> list[str]:
         value = self.cdp.evaluate(self._data_sync_one_way_whitelist_values_script())
@@ -2045,6 +2172,80 @@ class GlobalSettingsPage(BasePage):
         if not match:
             return ""
         return match.group(1).replace(" ", "")
+
+    def _wait_for_clear_local_cache_settings(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._global_settings_form_select_exists_script(self.CLEAR_LOCAL_CACHE_METHOD_LABEL)):
+                return
+            time.sleep(0.2)
+        raise TimeoutError("全局设置清除本地缓存清除方式 select did not appear")
+
+    def _select_global_settings_form_select_option(self, label_text: str, option_text: str) -> None:
+        if option_text in self._global_settings_form_select_value(label_text):
+            return
+
+        last_error: TimeoutError | None = None
+        for _ in range(3):
+            self.cdp.click_element_by_script(self._global_settings_form_select_script(label_text))
+            time.sleep(0.3)
+            try:
+                self.cdp.click_element_by_script(self._select_dropdown_option_script(option_text), timeout=3000)
+                self._close_select_dropdowns()
+                self._wait_global_settings_form_select_value(label_text, option_text)
+                return
+            except TimeoutError as exc:
+                last_error = exc
+                self.cdp.press("Escape")
+                time.sleep(0.2)
+        raise TimeoutError(
+            f"global settings select option was not selected: label={label_text}, option={option_text}"
+        ) from last_error
+
+    def _global_settings_form_select_value(self, label_text: str) -> str:
+        return str(self.cdp.evaluate(self._global_settings_form_select_value_script(label_text)) or "").strip()
+
+    def _wait_global_settings_form_select_value(
+        self,
+        label_text: str,
+        expected_value: str,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_value = ""
+        while time.time() < deadline:
+            last_value = self._global_settings_form_select_value(label_text)
+            if expected_value in last_value:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(
+            "global settings select value did not become expected: "
+            f"label={label_text}, expected={expected_value}, actual={last_value}"
+        )
+
+    def _set_clear_local_cache_sync_cloud_enabled(self, expected: bool) -> None:
+        current = self.cdp.evaluate(self._clear_local_cache_sync_cloud_enabled_script())
+        if current is None:
+            raise RuntimeError("清除后，再同步云端数据 switch was not found")
+        if bool(current) is expected:
+            return
+        self.cdp.click_element_by_script(self._clear_local_cache_sync_cloud_switch_script())
+        self._wait_clear_local_cache_sync_cloud_enabled(expected)
+
+    def _wait_clear_local_cache_sync_cloud_enabled(
+        self,
+        expected: bool,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.cdp.evaluate(self._clear_local_cache_sync_cloud_enabled_script()) is expected:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"清除后，再同步云端数据 switch state did not become expected: {expected}")
 
     def _wait_environment_list_sort_enabled(
         self,
@@ -4629,6 +4830,186 @@ class GlobalSettingsPage(BasePage):
             return items[items.length - 1] || null;
         }}
         """.replace("__DROPDOWN_ITEM_SELECTOR__", repr(self.locator("dropdown_item_candidates")))
+
+    def _global_settings_form_select_exists_script(self, label_text: str) -> str:
+        return """
+        () => {
+            const finder = __FORM_ITEM_FINDER__;
+            const item = finder();
+            return Boolean(item && item.querySelector(__SELECT_CONTROL_SELECTOR__));
+        }
+        """.replace("__FORM_ITEM_FINDER__", self._global_settings_form_item_function(label_text)).replace(
+            "__SELECT_CONTROL_SELECTOR__",
+            repr(self.locator("select_control")),
+        )
+
+    def _global_settings_form_select_script(self, label_text: str) -> str:
+        return """
+        () => {
+            const finder = __FORM_ITEM_FINDER__;
+            const item = finder();
+            if (!item) return null;
+            const visible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.left < window.innerWidth
+                    && rect.right > 0;
+            };
+            const select = Array.from(item.querySelectorAll(__SELECT_CONTROL_SELECTOR__))
+                .find((el) => visible(el)) || null;
+            if (select) select.scrollIntoView({ block: "center", inline: "center" });
+            return select;
+        }
+        """.replace("__FORM_ITEM_FINDER__", self._global_settings_form_item_function(label_text)).replace(
+            "__SELECT_CONTROL_SELECTOR__",
+            repr(self.locator("select_control_with_input")),
+        )
+
+    def _global_settings_form_select_value_script(self, label_text: str) -> str:
+        return """
+        () => {
+            const finder = __FORM_ITEM_FINDER__;
+            const item = finder();
+            if (!item) return "";
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && !String(el.className || "").includes("is-hidden");
+            };
+            const preferred = Array.from(item.querySelectorAll(
+                ".el-select__placeholder, .el-select__selected-item span, .el-select__selected-item"
+            ))
+                .filter((el) => visible(el))
+                .map((el) => clean(el.innerText || el.textContent))
+                .filter(Boolean);
+            if (preferred.length) return preferred[0];
+            const inputValue = Array.from(item.querySelectorAll("input"))
+                .filter((el) => visible(el))
+                .map((el) => clean(el.value || el.getAttribute("placeholder") || ""))
+                .find(Boolean);
+            if (inputValue) return inputValue;
+            const select = Array.from(item.querySelectorAll(__SELECT_CONTROL_SELECTOR__)).find((el) => visible(el));
+            return clean(select ? (select.innerText || select.textContent) : "");
+        }
+        """.replace("__FORM_ITEM_FINDER__", self._global_settings_form_item_function(label_text)).replace(
+            "__SELECT_CONTROL_SELECTOR__",
+            repr(self.locator("select_control")),
+        )
+
+    def _clear_local_cache_sync_cloud_switch_script(self) -> str:
+        return """
+        () => {
+            const switchEl = __CLEAR_LOCAL_CACHE_SYNC_CLOUD_SWITCH__();
+            if (!switchEl) return null;
+            const core = switchEl.querySelector(__SWITCH_CORE_SELECTOR__) || switchEl;
+            core.scrollIntoView({ block: "center", inline: "center" });
+            return core;
+        }
+        """.replace(
+            "__CLEAR_LOCAL_CACHE_SYNC_CLOUD_SWITCH__",
+            self._clear_local_cache_sync_cloud_switch_function(),
+        ).replace(
+            "__SWITCH_CORE_SELECTOR__",
+            repr(self.locator("switch_core")),
+        )
+
+    def _clear_local_cache_sync_cloud_enabled_script(self) -> str:
+        return """
+        () => {
+            const switchEl = __CLEAR_LOCAL_CACHE_SYNC_CLOUD_SWITCH__();
+            if (!switchEl) return null;
+            const input = switchEl.querySelector("input");
+            const ariaChecked = input?.getAttribute("aria-checked") || switchEl.getAttribute("aria-checked") || "";
+            if (ariaChecked === "true") return true;
+            if (ariaChecked === "false") return false;
+            return switchEl.classList.contains("is-checked") || Boolean(input?.checked);
+        }
+        """.replace(
+            "__CLEAR_LOCAL_CACHE_SYNC_CLOUD_SWITCH__",
+            self._clear_local_cache_sync_cloud_switch_function(),
+        )
+
+    def _clear_local_cache_sync_cloud_switch_function(self) -> str:
+        return """
+        (() => {
+            const formItemSelector = __FORM_ITEM_SELECTOR__;
+            const switchSelector = __SWITCH_SELECTOR__;
+            const expectedText = __EXPECTED_TEXT__;
+            const visible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const candidates = Array.from(document.querySelectorAll(formItemSelector))
+                .filter(visible)
+                .filter((item) => clean(item.innerText || item.textContent).includes(expectedText))
+                .map((item) => item.querySelector(switchSelector))
+                .filter(visible);
+            return candidates[0] || null;
+        })
+        """.replace("__FORM_ITEM_SELECTOR__", repr(self.locator("form_item"))).replace(
+            "__SWITCH_SELECTOR__",
+            repr(self.locator("switch")),
+        ).replace(
+            "__EXPECTED_TEXT__",
+            repr(self.CLEAR_LOCAL_CACHE_SYNC_CLOUD_TEXT),
+        )
+
+    def _global_settings_form_item_function(self, label_text: str) -> str:
+        return """
+        (() => {
+            const expectedLabel = __LABEL_TEXT__;
+            const formItemSelector = __FORM_ITEM_SELECTOR__;
+            const visible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const items = Array.from(document.querySelectorAll(formItemSelector))
+                .filter(visible)
+                .map((item) => {
+                    const label = item.querySelector("label, .el-form-item__label");
+                    return {
+                        item,
+                        labelText: clean(label ? (label.innerText || label.textContent) : ""),
+                        text: clean(item.innerText || item.textContent),
+                        rect: item.getBoundingClientRect(),
+                    };
+                })
+                .filter(({ labelText, text }) => labelText === expectedLabel || text.startsWith(expectedLabel));
+            items.sort((left, right) => {
+                const leftExact = left.labelText === expectedLabel ? 0 : 1;
+                const rightExact = right.labelText === expectedLabel ? 0 : 1;
+                if (leftExact !== rightExact) return leftExact - rightExact;
+                return (left.rect.width * left.rect.height) - (right.rect.width * right.rect.height);
+            });
+            return items[0]?.item || null;
+        })
+        """.replace("__LABEL_TEXT__", repr(label_text)).replace(
+            "__FORM_ITEM_SELECTOR__",
+            repr(self.locator("form_item")),
+        )
 
     def _packet_capture_blocking_exists_script(self) -> str:
         return """

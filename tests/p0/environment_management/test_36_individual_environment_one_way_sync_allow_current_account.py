@@ -13,6 +13,7 @@ from core.environment_cache import (
 )
 from core.kernel_cdp_session import KernelCDPSession
 from core.kernel_process import resolve_kernel_runtime
+from core.local_auth_lab.credentials import local_auth_lab_login_credentials_by_site
 from core.logger import setup_logger
 from core.process import wait_for_pid_running, wait_for_pid_stopped
 from pages.environment_page import EnvironmentPage
@@ -26,7 +27,6 @@ ENVIRONMENT_NAME = "自动化-环境单独设置-单向同步-允许当前账号
 EXPECTED_SYNC_ITEMS = ["Cookie", "Local Storage", "IndexedDB"]
 EXPECTED_WHITELIST_GROUPS = ["管理组"]
 LOGGED_IN_STATUS = "已登录"
-ONE_WAY_SYNC_DATA_KEY = "environment_one_way_sync"
 SITE_DEFINITIONS = (
     {
         "site_id": "cookie",
@@ -194,30 +194,10 @@ class TestIndividualEnvironmentOneWaySyncAllowCurrentAccount(unittest.TestCase):
                 pass
 
     def _credentials_by_site(self) -> dict[str, tuple[str, str]]:
-        test_data = self.config.get("test_data", {})
-        assert_true(isinstance(test_data, dict), "测试数据配置格式错误: test_data 不是字典")
-        combined = test_data.get(ONE_WAY_SYNC_DATA_KEY)
-        if not isinstance(combined, dict):
-            combined = {}
-        credentials_by_site: dict[str, tuple[str, str]] = {}
-        for site in SITE_DEFINITIONS:
-            site_id = site["site_id"]
-            value = combined.get(site_id)
-            if not isinstance(value, dict):
-                value = {}
-            username = str(value.get("username", "")).strip()
-            password = str(value.get("password", ""))
-            assert_equal(
-                username,
-                site["expected_account"],
-                f"单向同步共享配置 {site['label']} 账号配置错误",
-            )
-            assert_true(
-                bool(password) and not password.startswith("请在"),
-                f"请在 config/test_data.yaml 中配置 {ONE_WAY_SYNC_DATA_KEY}.{site_id} 登录密码",
-            )
-            credentials_by_site[site_id] = (username, password)
-        return credentials_by_site
+        return local_auth_lab_login_credentials_by_site(
+            self.config,
+            (str(site["site_id"]) for site in SITE_DEFINITIONS),
+        )
 
     def _assert_sites_logged_in(self, statuses: dict[str, tuple[str, str]], *, stage: str) -> None:
         for site in SITE_DEFINITIONS:

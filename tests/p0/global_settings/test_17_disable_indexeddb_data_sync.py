@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import time
 import unittest
 from pathlib import Path
@@ -13,41 +14,26 @@ from core.environment_cache import (
 )
 from core.kernel_cdp_session import KernelCDPSession
 from core.kernel_process import resolve_kernel_runtime
-from core.local_auth_lab.credentials import local_auth_lab_login_credentials_by_site
+from core.local_auth_lab.client import LocalAuthLabClient
+from core.local_auth_lab.credentials import local_auth_lab_login_credentials
+from core.local_auth_lab.settings import LocalAuthLabSettings
 from core.logger import setup_logger
 from core.process import wait_for_pid_running, wait_for_pid_stopped
 from pages.environment_page import EnvironmentPage
+from pages.global_settings_page import GlobalSettingsPage
 from pages.local_auth_lab_page import LocalAuthLabPage
 from pages.login_page import LoginPage
 from pages.personal_settings_page import PersonalSettingsPage
 
 
-CASE_MODULE = "环境管理"
-ENVIRONMENT_NAME = "自动化-环境单独设置-单向同步-禁止当前账号同步"
-EXPECTED_SYNC_ITEMS = ["Cookie", "Local Storage", "IndexedDB"]
-EXPECTED_WHITELIST_GROUPS = ["超管组"]
+CASE_MODULE = "全局设置"
+ENVIRONMENT_NAME = "自动化-全局设置-不勾选IndexedDB同步"
+EXPECTED_ACCOUNT = "MCDL006"
 LOGGED_IN_STATUS = "已登录"
 LOGGED_OUT_STATUS = "未登录"
-SITE_DEFINITIONS = (
-    {
-        "site_id": "cookie",
-        "label": "Cookie",
-        "expected_account": "MCDL004",
-    },
-    {
-        "site_id": "localstorage",
-        "label": "Local Storage",
-        "expected_account": "MCDL005",
-    },
-    {
-        "site_id": "indexeddb",
-        "label": "IndexedDB",
-        "expected_account": "MCDL006",
-    },
-)
 
 
-class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase):
+class TestDisableIndexedDBDataSync(unittest.TestCase):
     REQUIRED_RUNTIME_SERVICES = {"local_auth_lab"}
 
     @classmethod
@@ -62,7 +48,9 @@ class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase)
     def tearDownClass(cls) -> None:
         cls.cdp.close()
 
-    def test_one_way_sync_forbids_current_account_data_upload(self) -> None:
+    def test_indexeddb_not_restored_after_cache_deletion_when_global_indexeddb_sync_disabled(
+        self,
+    ) -> None:
         environment_open_timeout = timeout_seconds(self.config, "environment_open_seconds", 90)
         environment_close_timeout = timeout_seconds(self.config, "environment_close_seconds", 90)
         kernel_process_timeout = timeout_seconds(self.config, "kernel_process_seconds", 90)
@@ -70,11 +58,27 @@ class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase)
         kernel_cdp_probe_timeout = timeout_seconds(self.config, "kernel_cdp_probe_seconds", 3)
         http_probe_timeout = timeout_seconds(self.config, "http_probe_seconds", 2)
 
-        credentials_by_site = self._credentials_by_site()
+        username, password = self._indexeddb_credentials()
+        self._ensure_indexeddb_lab_user(username, password)
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
+        global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
         personal_settings_page = PersonalSettingsPage(cdp_driver=self.cdp, config=self.config)
+        global_settings_snapshot: dict[str, object] | None = None
+        cleanup_error: Exception | None = None
         try:
+            global_settings_page.open(force_reentry=True)
+            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
+            indexeddb_sync_changed = global_settings_page.ensure_indexeddb_data_sync_disabled()
+            assert_true(
+                not global_settings_page.indexeddb_data_sync_enabled(),
+                "数据设置 → 数据同步中的 IndexedDB 未保持取消勾选状态",
+            )
+            self.logger.info(
+                "IndexedDB data sync is disabled: changed=%s",
+                indexeddb_sync_changed,
+            )
+
             environment_page.open_list()
             environment_page.search_environment_without_assert(ENVIRONMENT_NAME)
             if environment_page.environment_visible_in_current_list(ENVIRONMENT_NAME):
@@ -86,31 +90,15 @@ class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase)
                 environment_page.delete_environment_from_current_list(ENVIRONMENT_NAME)
                 environment_page.wait_environment_absent_in_current_list(ENVIRONMENT_NAME)
 
-            selected_sync_items, selected_whitelist_groups = (
-                environment_page.create_environment_with_custom_data_sync_and_one_way_sync(
-                    ENVIRONMENT_NAME,
-                    EXPECTED_SYNC_ITEMS,
-                    EXPECTED_WHITELIST_GROUPS,
-                )
-            )
-            assert_equal(
-                selected_sync_items,
-                EXPECTED_SYNC_ITEMS,
-                f"创建环境时自定义数据同步项不正确: actual={selected_sync_items}",
-            )
-            assert_equal(
-                selected_whitelist_groups,
-                EXPECTED_WHITELIST_GROUPS,
-                f"创建环境时单向同步白名单不正确: actual={selected_whitelist_groups}",
-            )
+            environment_page.create_environment(ENVIRONMENT_NAME)
             environment_page.wait_environment_visible_in_current_list(ENVIRONMENT_NAME)
             assert_equal(
                 environment_page.environment_action_text(ENVIRONMENT_NAME),
                 "打开",
-                f"新建环境未处于可打开状态: {ENVIRONMENT_NAME}",
+                f"新建默认配置环境未处于可打开状态: {ENVIRONMENT_NAME}",
             )
 
-            first_statuses = self._open_visit_sites_and_close(
+            first_status, first_account = self._open_read_indexeddb_status_and_close(
                 environment_page,
                 environment_open_timeout=environment_open_timeout,
                 environment_close_timeout=environment_close_timeout,
@@ -119,22 +107,41 @@ class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase)
                 kernel_cdp_probe_timeout=kernel_cdp_probe_timeout,
                 http_probe_timeout=http_probe_timeout,
                 stage="首次打开并登录",
-                credentials_by_site=credentials_by_site,
+                login_username=username,
+                login_password=password,
                 wait_after_login_seconds=2,
             )
-            for site in SITE_DEFINITIONS:
-                label = site["label"]
-                status, account = first_statuses[site["site_id"]]
-                assert_equal(
-                    status,
-                    LOGGED_IN_STATUS,
-                    f"首次打开登录后 {label} 模拟站状态错误: actual={status}",
-                )
-                assert_equal(
-                    account,
-                    site["expected_account"],
-                    f"首次打开登录后 {label} 模拟站账号错误: actual={account}",
-                )
+            assert_equal(
+                first_status,
+                LOGGED_IN_STATUS,
+                f"首次打开登录后 IndexedDB 模拟站状态错误: actual={first_status}, account={first_account}",
+            )
+            assert_equal(
+                first_account,
+                EXPECTED_ACCOUNT,
+                f"首次打开登录后 IndexedDB 模拟站账号错误: actual={first_account}",
+            )
+
+            second_status, second_account = self._open_read_indexeddb_status_and_close(
+                environment_page,
+                environment_open_timeout=environment_open_timeout,
+                environment_close_timeout=environment_close_timeout,
+                kernel_process_timeout=kernel_process_timeout,
+                kernel_cdp_timeout=kernel_cdp_timeout,
+                kernel_cdp_probe_timeout=kernel_cdp_probe_timeout,
+                http_probe_timeout=http_probe_timeout,
+                stage="未删除本地缓存再次打开",
+            )
+            assert_equal(
+                second_status,
+                LOGGED_IN_STATUS,
+                f"未删除本地缓存再次打开后 IndexedDB 模拟站状态错误: actual={second_status}, account={second_account}",
+            )
+            assert_equal(
+                second_account,
+                EXPECTED_ACCOUNT,
+                f"未删除本地缓存再次打开后 IndexedDB 模拟站账号错误: actual={second_account}",
+            )
 
             personal_settings_page.open_from_avatar()
             personal_settings_page.open_basic_settings()
@@ -168,8 +175,7 @@ class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase)
                 environment_page.environment_visible_in_current_list(ENVIRONMENT_NAME),
                 f"删除本地缓存后未找到新建环境: {ENVIRONMENT_NAME}",
             )
-
-            second_statuses = self._open_visit_sites_and_close(
+            third_status, third_account = self._open_read_indexeddb_status_and_close(
                 environment_page,
                 environment_open_timeout=environment_open_timeout,
                 environment_close_timeout=environment_close_timeout,
@@ -179,14 +185,11 @@ class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase)
                 http_probe_timeout=http_probe_timeout,
                 stage="删除本地缓存后再次打开",
             )
-            for site in SITE_DEFINITIONS:
-                label = site["label"]
-                status, account = second_statuses[site["site_id"]]
-                assert_equal(
-                    status,
-                    LOGGED_OUT_STATUS,
-                    f"再次打开后 {label} 模拟站应为未登录: actual_status={status}, actual_account={account}",
-                )
+            assert_equal(
+                third_status,
+                LOGGED_OUT_STATUS,
+                f"删除本地缓存后 IndexedDB 模拟站应为未登录: actual={third_status}, account={third_account}",
+            )
 
             environment_page.delete_environment_from_current_list(ENVIRONMENT_NAME)
             environment_page.search_environment_without_assert(ENVIRONMENT_NAME)
@@ -212,14 +215,34 @@ class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase)
                 environment_page.clear_search()
             except Exception:
                 pass
+            try:
+                if global_settings_snapshot is not None:
+                    global_settings_page.open(force_reentry=True)
+                    global_settings_page.restore_global_settings_snapshot(
+                        self._snapshot_with_indexeddb_enabled(global_settings_snapshot)
+                    )
+            except Exception as exc:
+                cleanup_error = exc
+            if cleanup_error:
+                raise cleanup_error
 
-    def _credentials_by_site(self) -> dict[str, tuple[str, str]]:
-        return local_auth_lab_login_credentials_by_site(
-            self.config,
-            (str(site["site_id"]) for site in SITE_DEFINITIONS),
-        )
+    def _indexeddb_credentials(self) -> tuple[str, str]:
+        return local_auth_lab_login_credentials(self.config, "indexeddb")
 
-    def _open_visit_sites_and_close(
+    def _ensure_indexeddb_lab_user(self, username: str, password: str) -> None:
+        settings = LocalAuthLabSettings.from_config(self.config).ensure_persistent_credentials()
+        LocalAuthLabClient(settings).ensure_user("indexeddb", username, password)
+
+    def _snapshot_with_indexeddb_enabled(self, snapshot: dict[str, object]) -> dict[str, object]:
+        target = copy.deepcopy(snapshot)
+        data_sync = target.get("data_sync")
+        if isinstance(data_sync, dict):
+            data_sync["indexeddb"] = True
+        else:
+            target["data_sync"] = {"indexeddb": True}
+        return target
+
+    def _open_read_indexeddb_status_and_close(
         self,
         environment_page: EnvironmentPage,
         *,
@@ -230,11 +253,13 @@ class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase)
         kernel_cdp_probe_timeout: int,
         http_probe_timeout: int,
         stage: str,
-        credentials_by_site: dict[str, tuple[str, str]] | None = None,
+        login_username: str = "",
+        login_password: str = "",
         wait_after_login_seconds: int = 0,
-    ) -> dict[str, tuple[str, str]]:
+    ) -> tuple[str, str]:
         kernel_pid = 0
-        statuses: dict[str, tuple[str, str]] = {}
+        status = ""
+        account = ""
         try:
             kernel_pid = environment_page.open_environment_and_capture_pid(ENVIRONMENT_NAME)
             assert_true(
@@ -258,28 +283,23 @@ class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase)
                 timeout_seconds=max(kernel_cdp_timeout, 20),
             ) as kernel_session:
                 local_auth_page = LocalAuthLabPage(kernel_session, self.config)
-                for site in SITE_DEFINITIONS:
-                    site_id = site["site_id"]
-                    local_auth_page.open(site_id)
-                    if credentials_by_site:
-                        username, password = credentials_by_site[site_id]
-                        local_auth_page.login(
-                            username,
-                            password,
-                            run_id=f"individual-one-way-sync-{site_id}",
-                        )
-                        time.sleep(wait_after_login_seconds)
-                    status = local_auth_page.auth_status
-                    account = local_auth_page.current_account
-                    statuses[site_id] = (status, account)
-                    self.logger.info(
-                        "One-way sync login status captured: stage=%s environment=%s site=%s status=%s account=%s",
-                        stage,
-                        ENVIRONMENT_NAME,
-                        site_id,
-                        status,
-                        account,
+                local_auth_page.open("indexeddb")
+                if login_username:
+                    local_auth_page.login(
+                        login_username,
+                        login_password,
+                        run_id="global-settings-indexeddb-sync-disabled",
                     )
+                    time.sleep(wait_after_login_seconds)
+                status = local_auth_page.auth_status
+                account = local_auth_page.current_account
+                self.logger.info(
+                    "IndexedDB login status captured: stage=%s environment=%s status=%s account=%s",
+                    stage,
+                    ENVIRONMENT_NAME,
+                    status,
+                    account,
+                )
         finally:
             self._close_environment_if_open(
                 environment_page,
@@ -293,7 +313,7 @@ class TestIndividualEnvironmentOneWaySyncForbidCurrentAccount(unittest.TestCase)
             "打开",
             f"{stage}并关闭环境后操作按钮未恢复为打开: {ENVIRONMENT_NAME}",
         )
-        return statuses
+        return status, account
 
     def _close_environment_if_open(
         self,

@@ -15,10 +15,42 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core.local_auth_lab.client import LocalAuthLabClient
+from core.local_auth_lab.credentials import (
+    local_auth_lab_login_credentials,
+    local_auth_lab_login_credentials_by_site,
+)
 from core.local_auth_lab.precheck import LocalAuthLabPrechecker
 from core.local_auth_lab.security import issue_token, validate_token
 from core.local_auth_lab.server import LocalAuthLabServer
 from core.local_auth_lab.settings import DEFAULT_DOMAINS, LocalAuthLabSettings
+
+
+class LocalAuthLabLoginCredentialTests(unittest.TestCase):
+    def test_reads_shared_login_credentials_for_all_sites(self) -> None:
+        config = _shared_login_config()
+
+        self.assertEqual(
+            local_auth_lab_login_credentials_by_site(config),
+            {
+                "cookie": ("MCDL004", "M12345678"),
+                "localstorage": ("MCDL005", "M12345678"),
+                "indexeddb": ("MCDL006", "M12345678"),
+            },
+        )
+
+    def test_rejects_old_or_mismatched_site_credentials(self) -> None:
+        config = _shared_login_config()
+        config["test_data"]["local_auth_lab_login"]["cookie"]["username"] = "MCDL005"
+
+        with self.assertRaisesRegex(AssertionError, "cookie 账号配置错误"):
+            local_auth_lab_login_credentials(config, "cookie")
+
+    def test_rejects_mismatched_password(self) -> None:
+        config = _shared_login_config()
+        config["test_data"]["local_auth_lab_login"]["indexeddb"]["password"] = "other"
+
+        with self.assertRaisesRegex(AssertionError, "indexeddb 密码配置错误"):
+            local_auth_lab_login_credentials(config, "indexeddb")
 
 
 class LocalAuthLabComponentTests(unittest.TestCase):
@@ -300,6 +332,27 @@ def _available_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _shared_login_config() -> dict:
+    return {
+        "test_data": {
+            "local_auth_lab_login": {
+                "cookie": {
+                    "username": "MCDL004",
+                    "password": "M12345678",
+                },
+                "localstorage": {
+                    "username": "MCDL005",
+                    "password": "M12345678",
+                },
+                "indexeddb": {
+                    "username": "MCDL006",
+                    "password": "M12345678",
+                },
+            },
+        },
+    }
 
 
 if __name__ == "__main__":

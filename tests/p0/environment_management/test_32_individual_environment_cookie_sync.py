@@ -13,6 +13,7 @@ from core.environment_cache import (
 )
 from core.kernel_cdp_session import KernelCDPSession
 from core.kernel_process import resolve_kernel_runtime
+from core.local_auth_lab.credentials import local_auth_lab_login_credentials
 from core.logger import setup_logger
 from core.process import wait_for_pid_running, wait_for_pid_stopped
 from pages.environment_page import EnvironmentPage
@@ -26,7 +27,6 @@ ENVIRONMENT_NAME = "自动化-环境单独设置-cookie同步"
 EXPECTED_LOGIN_STATUS = "已登录"
 EXPECTED_ACCOUNT = "MCDL004"
 EXPECTED_SYNC_ITEMS = ["Cookie"]
-CREDENTIALS_DATA_KEY = "environment_new_cookie_persistence"
 
 
 class TestIndividualEnvironmentCookieSync(unittest.TestCase):
@@ -52,18 +52,7 @@ class TestIndividualEnvironmentCookieSync(unittest.TestCase):
         kernel_cdp_probe_timeout = timeout_seconds(self.config, "kernel_cdp_probe_seconds", 3)
         http_probe_timeout = timeout_seconds(self.config, "http_probe_seconds", 2)
 
-        credentials = self._credentials()
-        username = str(credentials.get("username", "")).strip()
-        password = str(credentials.get("password", ""))
-        assert_equal(
-            username,
-            EXPECTED_ACCOUNT,
-            "新环境 Cookie 持续保持共享配置账号错误",
-        )
-        assert_true(
-            bool(password) and not password.startswith("请在"),
-            f"请在 config/test_data.yaml 中配置 {CREDENTIALS_DATA_KEY} 的登录密码",
-        )
+        username, password = local_auth_lab_login_credentials(self.config, "cookie")
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         personal_settings_page = PersonalSettingsPage(cdp_driver=self.cdp, config=self.config)
@@ -220,13 +209,6 @@ class TestIndividualEnvironmentCookieSync(unittest.TestCase):
                 environment_page.clear_search()
             except Exception:
                 pass
-
-    def _credentials(self) -> dict:
-        test_data = self.config.get("test_data", {})
-        if not isinstance(test_data, dict):
-            return {}
-        value = test_data.get(CREDENTIALS_DATA_KEY)
-        return value if isinstance(value, dict) else {}
 
     def _open_read_cookie_status_and_close(
         self,

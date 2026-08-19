@@ -9,9 +9,12 @@ from pages.global_settings_page import GlobalSettingsPage
 class TestGlobalSettingsLoadGuard(unittest.TestCase):
     def setUp(self) -> None:
         self.cdp = mock.MagicMock()
+        self.cdp.evaluate.return_value = False
         self.page = GlobalSettingsPage(cdp_driver=self.cdp, config={})
         self.page.locators = {
             "global_settings_menu_candidates": ".menu-item",
+            "message_box": ".el-message-box",
+            "dialog_or_message_box": ".el-dialog, .el-message-box",
         }
         self.page._dismiss_blocking_overlays = mock.MagicMock()
         self.page._global_settings_route_active = mock.MagicMock(return_value=False)

@@ -13,6 +13,7 @@ from core.environment_cache import (
 )
 from core.kernel_cdp_session import KernelCDPSession
 from core.kernel_process import resolve_kernel_runtime
+from core.local_auth_lab.credentials import local_auth_lab_login_credentials
 from core.logger import setup_logger
 from core.process import wait_for_pid_running, wait_for_pid_stopped
 from pages.environment_page import EnvironmentPage
@@ -51,22 +52,7 @@ class TestNewEnvironmentCookiePersistence(unittest.TestCase):
         kernel_cdp_probe_timeout = timeout_seconds(self.config, "kernel_cdp_probe_seconds", 3)
         http_probe_timeout = timeout_seconds(self.config, "http_probe_seconds", 2)
 
-        credentials = self.config.get("test_data", {}).get("environment_new_cookie_persistence", {})
-        assert_true(
-            isinstance(credentials, dict),
-            "test_data.environment_new_cookie_persistence 必须是映射配置",
-        )
-        username = str(credentials.get("username", "")).strip()
-        password = str(credentials.get("password", ""))
-        assert_equal(
-            username,
-            EXPECTED_ACCOUNT,
-            "新环境 Cookie 持续保持用例账号配置错误",
-        )
-        assert_true(
-            bool(password) and not password.startswith("请在"),
-            "请在 config/test_data.yaml 中配置新环境 Cookie 持续保持用例的登录密码",
-        )
+        username, password = local_auth_lab_login_credentials(self.config, "cookie")
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)

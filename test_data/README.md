@@ -63,10 +63,7 @@ test_data:
 8. 成员导出用例使用的预期 xlsx 文件、导出目录和文件名正则。
 9. 成员 open API 用例使用的接口地址、目标外部成员 ID、内部成员信息、到期停用参数、状态码重试次数和重试间隔；配置集中在 `test_data.api_member_edit`，并按 `internal_member`、`disuse`、`status_retry` 小块分组，避免 YAML 过度膨胀。
 10. 代理管理创建自定义代理用例使用的代理主机、端口、账号和密码；配置集中在 `test_data.proxy_custom`。Windows 系统代理主机和端口属于运行环境配置，统一维护在 `config.yaml` 顶层 `windows_system_proxy.host/port`，默认 `127.0.0.1:7897`。
-11. 新环境 Cookie 持续保持用例使用 `test_data.environment_new_cookie_persistence`，当前账号为 `MCDL004`，密码只写入本地 `config/test_data.yaml`。
-12. 新环境 Local Storage 持续保持用例使用 `test_data.environment_new_local_storage_persistence`，当前账号为 `MCDL005`，密码只写入本地 `config/test_data.yaml`。
-13. 新环境 IndexedDB 持续保持用例使用 `test_data.environment_new_indexeddb_persistence`，当前账号为 `MCDL006`，密码只写入本地 `config/test_data.yaml`。
-14. 环境单独设置与全局设置的四条单向同步用例共用 `test_data.environment_one_way_sync`，其中 `cookie` 使用 `MCDL004`、`localstorage` 使用 `MCDL005`、`indexeddb` 使用 `MCDL006`；密码只写入本地 `config/test_data.yaml`。该段缺失时，全局设置单向同步用例会在用例数据校验阶段失败，不会进入全局设置页面保存配置。
+11. 除 Cookie、Local Storage、IndexedDB 三条预置数据校验用例外，所有会登录本地模拟站的用例共用 `test_data.local_auth_lab_login`：`cookie` 使用 `MCDL004 / M12345678`，`localstorage` 使用 `MCDL005 / M12345678`，`indexeddb` 使用 `MCDL006 / M12345678`。该段缺失或账号密码不匹配时，用例会在数据校验阶段失败，不会进入后续页面操作。
 
 全局设置相关用例如果会保存团队级配置，必须在运行前记录全局设置快照并在 `finally` 中恢复。后续新增全局设置用例并引入新的测试数据键时，应同时检查是否需要扩展 `GlobalSettingsPage.capture_global_settings_snapshot()` 和对应恢复方法。
 

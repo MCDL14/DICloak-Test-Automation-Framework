@@ -81,6 +81,81 @@ class _SubmitProbe(EnvironmentPage):
         return {"text": text, "loading": False, "disabled": False}
 
 
+class _DataSyncOptionsProbe(EnvironmentPage):
+    CREATE_ENVIRONMENT_DATA_SYNC_OPTIONS = ("Cookie", "Local Storage", "IndexedDB")
+
+    def __init__(self, *, checked_options: set[str]):
+        self.checked_options = set(checked_options)
+        self.clicked_options: list[str] = []
+        self.cdp = self
+
+    def click_element_by_script(self, script: str) -> None:
+        option = script.removeprefix("checkbox:")
+        self.clicked_options.append(option)
+        if option in self.checked_options:
+            self.checked_options.remove(option)
+        else:
+            self.checked_options.add(option)
+
+    def _active_drawer_form_checkbox_script(self, label: str, option: str) -> str:
+        return f"checkbox:{option}"
+
+    def _create_environment_data_sync_option_checked(self, option: str) -> bool:
+        return option in self.checked_options
+
+    def _wait_create_environment_data_sync_option_checked(self, option: str, expected: bool) -> None:
+        if self._create_environment_data_sync_option_checked(option) != expected:
+            raise TimeoutError(f"option did not become expected: {option}={expected}")
+
+    def create_environment_selected_data_sync_options(self) -> list[str]:
+        return [option for option in self.CREATE_ENVIRONMENT_DATA_SYNC_OPTIONS if option in self.checked_options]
+
+
+class _EditClearCacheProbe(EnvironmentPage):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+        self.cdp = self
+
+    def click_environment_more(self, name: str) -> None:
+        self.calls.append(("more", (name,)))
+
+    def click_visible_dropdown_item(self, text: str) -> None:
+        self.calls.append(("dropdown", (text,)))
+
+    def _wait_edit_environment_drawer_visible(self) -> None:
+        self.calls.append(("wait-drawer", ()))
+
+    def _expand_edit_environment_advanced_settings(self) -> None:
+        self.calls.append(("expand-advanced", ()))
+
+    def _select_edit_environment_clear_local_cache_mode(self, mode: str) -> None:
+        self.calls.append(("cache-mode", (mode,)))
+
+    def _select_active_drawer_form_select_option(self, label: str, option: str) -> None:
+        self.calls.append(("select", (label, option)))
+
+    def _set_active_drawer_switch_by_text(self, text: str, enabled: bool) -> None:
+        self.calls.append(("switch", (text, str(enabled))))
+
+    def _close_select_dropdowns(self) -> None:
+        self.calls.append(("close-selects", ()))
+
+    def click_element_by_script(self, script: str) -> None:
+        self.calls.append(("click", (script,)))
+
+    def _active_overlay_button_script(self, text: str) -> str:
+        return f"button:{text}"
+
+    def _confirm_edit_save_message_if_present(self) -> None:
+        self.calls.append(("confirm-edit-message", ()))
+
+    def _wait_for_overlay_closed(self) -> None:
+        self.calls.append(("wait-closed", ()))
+
+    def _wait_for_environment_list_not_loading_with_refresh_retry(self) -> None:
+        self.calls.append(("wait-list", ()))
+
+
 class EnvironmentCreateDrawerRetryTests(unittest.TestCase):
     def test_reopens_until_default_group_is_selected(self) -> None:
         page = _DrawerFlowProbe(group_ready=[False, False, True], submit_states=["ok"])
@@ -182,6 +257,52 @@ class EnvironmentCreateDrawerRetryTests(unittest.TestCase):
 
         self.assertEqual(page.refresh_count, 2)
         self.assertEqual(page.wait_timeouts, [20, 20, 20])
+
+    def test_disables_only_requested_create_environment_data_sync_options(self) -> None:
+        page = _DataSyncOptionsProbe(checked_options={"Cookie", "Local Storage"})
+
+        page._disable_create_environment_data_sync_options(["Cookie"])
+
+        self.assertEqual(page.clicked_options, ["Cookie"])
+        self.assertEqual(page.create_environment_selected_data_sync_options(), ["Local Storage"])
+
+    def test_disabling_unknown_create_environment_data_sync_option_fails(self) -> None:
+        page = _DataSyncOptionsProbe(checked_options=set())
+
+        with self.assertRaisesRegex(ValueError, "unsupported create environment data sync options"):
+            page._disable_create_environment_data_sync_options(["Session Storage"])
+
+    def test_edit_clear_all_cache_every_open_sync_cloud_data_uses_expected_controls(self) -> None:
+        page = _EditClearCacheProbe()
+
+        page.edit_environment_clear_all_local_cache_every_open_sync_cloud_data("env-a")
+
+        self.assertEqual(
+            page.calls,
+            [
+                ("more", ("env-a",)),
+                ("dropdown", ("编辑",)),
+                ("wait-drawer", ()),
+                ("expand-advanced", ()),
+                ("cache-mode", ("自定义",)),
+                ("select", ("清除方式", "清除本地全部缓存")),
+                ("select", ("清除频率", "每次打开环境时都清除")),
+                ("switch", ("清除后，再同步云端数据", "True")),
+                ("close-selects", ()),
+                ("click", ("button:确定",)),
+                ("confirm-edit-message", ()),
+                ("wait-closed", ()),
+                ("wait-list", ()),
+            ],
+        )
+
+    def test_edit_clear_all_cache_every_open_no_cloud_sync_data_turns_switch_off(self) -> None:
+        page = _EditClearCacheProbe()
+
+        page.edit_environment_clear_all_local_cache_every_open_no_cloud_sync_data("env-a")
+
+        self.assertIn(("switch", ("清除后，再同步云端数据", "False")), page.calls)
+        self.assertEqual(page.calls[-1], ("wait-list", ()))
 
 
 if __name__ == "__main__":

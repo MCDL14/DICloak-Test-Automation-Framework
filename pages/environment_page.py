@@ -27,6 +27,7 @@ class EnvironmentPage(BasePage):
     ENVIRONMENT_LIST_LOADING_REFRESH_RETRIES = 2
     CREATE_ENVIRONMENT_ONE_WAY_SYNC_TEXT = "防止成员覆盖云端数据，导致环境内账号退出登录"
     CREATE_ENVIRONMENT_ONE_WAY_SYNC_WHITELIST_LABEL = "白名单"
+    CLEAR_LOCAL_CACHE_SYNC_CLOUD_TEXT = "清除后，再同步云端数据"
     CREATE_ENVIRONMENT_DATA_SYNC_OPTIONS = (
         "Cookie",
         "账号密码",
@@ -105,6 +106,29 @@ class EnvironmentPage(BasePage):
             open_drawer,
             populate_drawer,
             context=f"create environment with custom data sync: {name}",
+        )
+
+    def create_environment_with_custom_data_sync_disabled(
+        self,
+        name: str,
+        disabled_sync_items: list[str],
+    ) -> list[str]:
+        disabled_items = self._unique_non_empty(disabled_sync_items)
+
+        def open_drawer() -> None:
+            self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+
+        def populate_drawer() -> list[str]:
+            self.fill("environment_name_input", name)
+            self._expand_create_environment_advanced_settings()
+            self._select_create_environment_data_sync_mode("自定义")
+            self._disable_create_environment_data_sync_options(disabled_items)
+            return self.create_environment_selected_data_sync_options()
+
+        return self._run_create_environment_drawer_flow(
+            open_drawer,
+            populate_drawer,
+            context=f"create environment with disabled custom data sync: {name}",
         )
 
     def create_environment_with_custom_data_sync_and_one_way_sync(
@@ -1037,13 +1061,13 @@ class EnvironmentPage(BasePage):
         for _ in range(3):
             self.click_environment_more(name)
             self.click_visible_dropdown_item("删除")
-            if self._wait_active_overlay_visible(timeout_seconds=2):
+            if self._wait_delete_environment_secondary_dialog_visible(name, timeout_seconds=2):
                 break
             self.cdp.press("Escape")
             time.sleep(0.3)
         else:
             raise TimeoutError(f"delete environment secondary dialog did not appear: {name}")
-        self.confirm_secondary_dialog()
+        self.confirm_secondary_dialog(preferred_texts=("确定删除", "确定", "确认"))
         self.wait_environment_absent_in_current_list(name)
 
     def delete_environments_by_prefix_from_current_list(self, name_prefix: str) -> None:
@@ -1093,6 +1117,49 @@ class EnvironmentPage(BasePage):
                 return True
             time.sleep(0.2)
         return False
+
+    def _wait_delete_environment_secondary_dialog_visible(
+        self,
+        name: str,
+        timeout_seconds: int | None = None,
+    ) -> bool:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self._delete_environment_secondary_dialog_visible(name):
+                return True
+            time.sleep(0.2)
+        return False
+
+    def _delete_environment_secondary_dialog_visible(self, name: str) -> bool:
+        return bool(
+            self.cdp.evaluate(
+                f"""
+                () => {{
+                    const expectedName = {name!r};
+                    const visible = (el) => {{
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== "none"
+                            && style.visibility !== "hidden"
+                            && rect.width > 0
+                            && rect.height > 0;
+                    }};
+                    const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                    return Array.from(document.querySelectorAll(".el-message-box, .el-dialog"))
+                        .filter(visible)
+                        .some((overlay) => {{
+                            const text = clean(overlay.innerText || overlay.textContent);
+                            return text.includes("删除")
+                                && (text.includes(expectedName)
+                                    || text.includes("确定删除")
+                                    || text.includes("删除环境")
+                                    || text.includes("是否"));
+                        }});
+                }}
+                """
+            )
+        )
 
     def wait_environment_deleted(self, name: str) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "search_result_seconds", 10)
@@ -1933,6 +2000,27 @@ class EnvironmentPage(BasePage):
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._confirm_edit_save_message_if_present()
         self._wait_for_overlay_closed()
+
+    def edit_environment_clear_all_local_cache_every_open_sync_cloud_data(self, name: str) -> None:
+        self._edit_environment_clear_all_local_cache_every_open(name, sync_cloud_data=True)
+
+    def edit_environment_clear_all_local_cache_every_open_no_cloud_sync_data(self, name: str) -> None:
+        self._edit_environment_clear_all_local_cache_every_open(name, sync_cloud_data=False)
+
+    def _edit_environment_clear_all_local_cache_every_open(self, name: str, *, sync_cloud_data: bool) -> None:
+        self.click_environment_more(name)
+        self.click_visible_dropdown_item("编辑")
+        self._wait_edit_environment_drawer_visible()
+        self._expand_edit_environment_advanced_settings()
+        self._select_edit_environment_clear_local_cache_mode("自定义")
+        self._select_active_drawer_form_select_option("清除方式", "清除本地全部缓存")
+        self._select_active_drawer_form_select_option("清除频率", "每次打开环境时都清除")
+        self._set_active_drawer_switch_by_text(self.CLEAR_LOCAL_CACHE_SYNC_CLOUD_TEXT, sync_cloud_data)
+        self._close_select_dropdowns()
+        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
+        self._confirm_edit_save_message_if_present()
+        self._wait_for_overlay_closed()
+        self._wait_for_environment_list_not_loading_with_refresh_retry()
 
     def wait_environment_name_by_serial(
         self,
@@ -3222,6 +3310,26 @@ class EnvironmentPage(BasePage):
             return []
         return self._unique_non_empty([str(item).strip() for item in value])
 
+    def _disable_create_environment_data_sync_options(self, disabled_options: list[str]) -> None:
+        disabled = set(self._unique_non_empty(disabled_options))
+        unknown = disabled - set(self.CREATE_ENVIRONMENT_DATA_SYNC_OPTIONS)
+        if unknown:
+            raise ValueError(f"unsupported create environment data sync options: {sorted(unknown)}")
+
+        for option in disabled:
+            if not self._create_environment_data_sync_option_checked(option):
+                continue
+            self.cdp.click_element_by_script(self._active_drawer_form_checkbox_script("数据同步", option))
+            self._wait_create_environment_data_sync_option_checked(option, False)
+
+        selected = set(self.create_environment_selected_data_sync_options())
+        still_enabled = selected & disabled
+        if still_enabled:
+            raise AssertionError(
+                "create environment custom data sync options were not disabled: "
+                f"disabled={sorted(disabled)}, actual={sorted(selected)}"
+            )
+
     def _create_environment_data_sync_option_checked(self, option: str) -> bool:
         return bool(self.cdp.evaluate(self._active_drawer_form_checkbox_checked_script("数据同步", option)))
 
@@ -3350,6 +3458,71 @@ class EnvironmentPage(BasePage):
             time.sleep(0.2)
         raise TimeoutError(f"form control value did not become expected: label={label_text}")
 
+    def _select_edit_environment_clear_local_cache_mode(self, mode: str) -> None:
+        if self._active_drawer_form_radio_button_selected("清除本地缓存", mode):
+            return
+        self.cdp.click_element_by_script(self._active_drawer_form_radio_button_script("清除本地缓存", mode))
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self._active_drawer_form_radio_button_selected("清除本地缓存", mode):
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"edit environment clear local cache mode was not selected: {mode}")
+
+    def _active_drawer_form_radio_button_selected(self, label_text: str, option_text: str) -> bool:
+        return bool(self.cdp.evaluate(self._active_drawer_form_radio_button_selected_script(label_text, option_text)))
+
+    def _select_active_drawer_form_select_option(self, label_text: str, option_text: str) -> None:
+        if option_text in self._active_drawer_form_select_value(label_text):
+            return
+
+        last_error: TimeoutError | None = None
+        for _ in range(3):
+            self.cdp.click_element_by_script(self._active_drawer_form_select_script(label_text))
+            time.sleep(0.3)
+            try:
+                self.cdp.click_element_by_script(self._select_dropdown_option_script(option_text), timeout=3000)
+                self._wait_select_dropdown_closed()
+                self._wait_active_drawer_form_select_value(label_text, option_text)
+                return
+            except TimeoutError as exc:
+                last_error = exc
+                self.cdp.press("Escape")
+                time.sleep(0.2)
+        raise TimeoutError(
+            f"active drawer select option was not selected: label={label_text}, option={option_text}"
+        ) from last_error
+
+    def _active_drawer_form_select_value(self, label_text: str) -> str:
+        return str(self.cdp.evaluate(self._active_drawer_form_select_value_script(label_text)) or "").strip()
+
+    def _wait_active_drawer_form_select_value(self, label_text: str, expected_value: str) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        last_value = ""
+        while time.time() < deadline:
+            last_value = self._active_drawer_form_select_value(label_text)
+            if expected_value in last_value:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(
+            f"active drawer select value did not become expected: "
+            f"label={label_text}, expected={expected_value}, actual={last_value}"
+        )
+
+    def _set_active_drawer_switch_by_text(self, text: str, enabled: bool) -> None:
+        if self._active_drawer_switch_by_text_enabled(text) == enabled:
+            return
+        self.cdp.click_element_by_script(self._active_drawer_switch_by_text_script(text))
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self._active_drawer_switch_by_text_enabled(text) == enabled:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"active drawer switch state did not become expected: text={text}, enabled={enabled}")
+
+    def _active_drawer_switch_by_text_enabled(self, text: str) -> bool:
+        return bool(self.cdp.evaluate(self._active_drawer_switch_by_text_enabled_script(text)))
+
     def _active_drawer_form_control_script(self, label_text: str) -> str:
         return f"""
         () => {{
@@ -3387,6 +3560,57 @@ class EnvironmentPage(BasePage):
             const finder = {self._active_drawer_form_control_script(label_text)};
             const control = finder();
             return control ? String(control.value || "") : null;
+        }}
+        """
+
+    def _active_drawer_form_select_script(self, label_text: str) -> str:
+        return f"""
+        () => {{
+            const finder = {self._active_drawer_form_item_script(label_text)};
+            const item = finder();
+            if (!item) return null;
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.left < window.innerWidth
+                    && rect.right > 0;
+            }};
+            return Array.from(item.querySelectorAll(".el-select__wrapper, .el-select"))
+                .find((el) => visible(el)) || null;
+        }}
+        """
+
+    def _active_drawer_form_select_value_script(self, label_text: str) -> str:
+        return f"""
+        () => {{
+            const finder = {self._active_drawer_form_item_script(label_text)};
+            const item = finder();
+            if (!item) return "";
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && !String(el.className || "").includes("is-hidden");
+            }};
+            const preferred = Array.from(item.querySelectorAll(
+                ".el-select__placeholder, .el-select__selected-item span, .el-select__selected-item"
+            ))
+                .filter((el) => visible(el))
+                .map((el) => clean(el.innerText || el.textContent))
+                .filter(Boolean);
+            if (preferred.length) return preferred[0];
+            const select = Array.from(item.querySelectorAll(".el-select, .el-select__wrapper")).find((el) => visible(el));
+            return clean(select ? (select.innerText || select.textContent) : "");
         }}
         """
 
@@ -3553,6 +3777,56 @@ class EnvironmentPage(BasePage):
             const finder = {self._active_drawer_form_checkbox_script(label_text, option_text)};
             const checkbox = finder();
             return Boolean(checkbox && String(checkbox.className || "").includes("is-checked"));
+        }}
+        """
+
+    def _active_drawer_switch_by_text_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {text!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.left < window.innerWidth
+                    && rect.right > 0;
+            }};
+            const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
+            for (const drawer of drawers.reverse()) {{
+                const items = Array.from(drawer.querySelectorAll(".el-form-item"))
+                    .filter((el) => visible(el) && clean(el.innerText || el.textContent).includes(expectedText))
+                    .map((el) => {{
+                        const rect = el.getBoundingClientRect();
+                        return {{ el, area: rect.width * rect.height }};
+                    }})
+                    .sort((left, right) => left.area - right.area)
+                    .map((item) => item.el);
+                for (const item of items) {{
+                    const switchEl = item.classList.contains("el-switch")
+                        ? item
+                        : item.querySelector(".el-switch");
+                    if (switchEl && visible(switchEl)) return switchEl;
+                }}
+            }}
+            return null;
+        }}
+        """
+
+    def _active_drawer_switch_by_text_enabled_script(self, text: str) -> str:
+        return f"""
+        () => {{
+            const finder = {self._active_drawer_switch_by_text_script(text)};
+            const switchEl = finder();
+            if (!switchEl) return false;
+            const input = switchEl.querySelector("input");
+            return String(switchEl.className || "").includes("is-checked")
+                || switchEl.getAttribute("aria-checked") === "true"
+                || Boolean(input && input.checked);
         }}
         """
 

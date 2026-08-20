@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a P0 Environment Management case that creates `测试自定义代理` with `192.168.20.33:7897`, opens it, fails if a new `GinsBrowser` main process is not detected within 100 seconds, and then closes and deletes the environment.
+**Goal:** Add a P0 Environment Management case that creates `测试自定义代理` with `http://192.168.20.33:7897`, opens it, fails if a new `GinsBrowser` main process is not detected within 100 seconds, and then confirms close and deletes the environment.
 
 **Architecture:** First probe the live DICloak DOM and complete workflow with a disposable script under `/tmp`; no formal repository code is written until that probe succeeds. Then add narrow custom-proxy drawer operations to `EnvironmentPage`, cover their orchestration with a P1 contract test, and add one P0 business case whose assertions match only the supplied expected results.
 
@@ -49,8 +49,8 @@ from pages.environment_page import EnvironmentPage
 from pages.login_page import LoginPage
 
 ENVIRONMENT_NAME = "测试自定义代理"
-PROXY_ADDRESS = "192.168.20.33:7897"
-PROXY_IP = "192.168.20.33"
+PROXY_ADDRESS = "http://127.0.0.1:7897"
+PROXY_IP = "127.0.0.1"
 PROXY_PORT = "7897"
 OPEN_TIMEOUT_SECONDS = 100
 ```
@@ -72,9 +72,12 @@ create_button={visible: True, enabled: True}
 drawer_visible=True
 environment_name=测试自定义代理
 proxy_controls={quick_input_visible: True, parse_button_visible: True}
-proxy_values={ip: 192.168.20.33, port: 7897}
+proxy_values={ip: 127.0.0.1, port: 7897}
+proxy_type=HTTP
 environment_visible=True
 new_ginsbrowser_pids=[<positive pid>]
+environment_closed=True
+exists_after_delete=False
 cleanup=completed
 ```
 
@@ -97,14 +100,14 @@ class EnvironmentCustomProxyDrawerTests(unittest.TestCase):
 
         page.fill_create_environment_name("测试自定义代理")
         page.select_create_environment_proxy_mode("自定义代理")
-        page.parse_create_environment_proxy("192.168.20.33:7897")
+        page.parse_create_environment_proxy("http://192.168.20.33:7897")
 
         self.assertEqual(
             page.calls,
             [
                 ("fill-name", "测试自定义代理"),
                 ("select-mode", "自定义代理"),
-                ("fill-quick-input", "192.168.20.33:7897"),
+                ("fill-quick-input", "http://192.168.20.33:7897"),
                 ("click-parse", "解析"),
                 ("wait-parsed", ("192.168.20.33", "7897")),
             ],
@@ -246,7 +249,7 @@ Use:
 ```python
 CASE_MODULE = "环境管理"
 ENVIRONMENT_NAME = "测试自定义代理"
-PROXY_ADDRESS = "192.168.20.33:7897"
+PROXY_ADDRESS = "http://192.168.20.33:7897"
 PROXY_IP = "192.168.20.33"
 PROXY_PORT = "7897"
 ENVIRONMENT_OPEN_TIMEOUT_SECONDS = 100
@@ -304,11 +307,11 @@ except TimeoutError as exc:
 assert_true(bool(new_pids), f"未检测到新启动的 {browser_process_name} 主进程")
 ```
 
-Do not wait for or assert that the row button becomes【关闭】. Do not inspect browser contents or proxy connectivity.
+After the process assertion succeeds, operationally wait until the row can be closed, click【关闭】, confirm the visible close dialog with【确定】when present, and wait until the row returns to【打开】. Then delete the exact environment through the selected-row batch action and wait for it to disappear. Do not inspect browser contents or proxy connectivity.
 
 - [ ] **Step 3: Add non-asserting idempotent cleanup**
 
-Before creation, perform an exact-name search and best-effort removal of a stale environment. In `finally`, search the exact name; if its current action is【关闭】, click it and operationally wait for【打开】; then delete the environment and clear the search. Cleanup exceptions are logged at warning level and do not replace the body failure.
+Before creation, perform an exact-name search and best-effort removal of a stale environment. The body owns the normal close-confirm-delete sequence. In `finally`, search the exact name; if its current action is【关闭】, click it, confirm the close dialog when present, and operationally wait for【打开】; then delete the environment and clear the search. Cleanup exceptions are logged at warning level and do not replace the body failure.
 
 ### Task 5: Verify the formal case and regression scope
 

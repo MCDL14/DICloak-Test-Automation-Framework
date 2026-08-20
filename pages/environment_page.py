@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from core.app_config import resolve_app_config
 from core.config import timeout_seconds as config_timeout_seconds
@@ -53,6 +54,65 @@ class EnvironmentPage(BasePage):
         self.clear_search()
         self.clear_selected_environments()
         self.dismiss_blocking_overlays()
+
+    def create_environment_button_state(self) -> dict[str, bool]:
+        value = self.cdp.evaluate(self._create_environment_button_state_script())
+        if not isinstance(value, dict):
+            return {"visible": False, "enabled": False}
+        return {
+            "visible": bool(value.get("visible")),
+            "enabled": bool(value.get("enabled")),
+        }
+
+    def open_create_environment_drawer(self) -> None:
+        self.cdp.click_element_by_script(self._visible_locator_script("create_button"))
+        self._wait_create_environment_default_group_selected(
+            timeout_seconds=self.CREATE_ENVIRONMENT_DEFAULT_GROUP_SECONDS
+        )
+
+    def create_environment_drawer_visible(self) -> bool:
+        return self._create_environment_drawer_visible()
+
+    def fill_create_environment_name(self, name: str) -> None:
+        self.fill("environment_name_input", name)
+
+    def create_environment_name_value(self) -> str:
+        return self._active_environment_name_input_value()
+
+    def select_create_environment_proxy_mode(self, mode: str) -> None:
+        if self._active_drawer_form_radio_button_selected("代理设置", mode):
+            return
+        self.cdp.click_element_by_script(
+            self._active_drawer_form_radio_button_script("代理设置", mode)
+        )
+        self._wait_active_drawer_form_radio_button_selected("代理设置", mode)
+
+    def create_environment_proxy_controls_state(self) -> dict[str, bool]:
+        return {
+            "quick_input_visible": self._active_drawer_input_visible_by_placeholder("选填"),
+            "parse_button_visible": self._active_drawer_form_button_visible("快捷输入", "解析"),
+        }
+
+    def parse_create_environment_proxy(self, proxy_address: str) -> None:
+        expected_ip, expected_port = self._proxy_host_port_from_quick_input(proxy_address)
+        self.cdp.fill_element_by_script(
+            self._active_drawer_input_by_placeholder_script("选填"),
+            proxy_address,
+        )
+        self.cdp.click_element_by_script(
+            self._active_drawer_form_button_script("快捷输入", "解析")
+        )
+        self._wait_create_environment_proxy_values(expected_ip, expected_port)
+
+    def create_environment_proxy_values(self) -> tuple[str, str]:
+        return (
+            self._active_drawer_input_value_by_placeholder("代理主机"),
+            self._active_drawer_input_value_by_placeholder("代理端口"),
+        )
+
+    def submit_create_environment(self, context: str) -> None:
+        self._submit_active_create_environment_drawer(context)
+        self._wait_for_environment_list_not_loading_with_refresh_retry()
 
     def open_list(self) -> None:
         last_error: Exception | None = None
@@ -1051,6 +1111,12 @@ class EnvironmentPage(BasePage):
     def close_environment(self, name: str) -> None:
         self.search_environment(name)
         self.click_environment_action(name, "关闭")
+
+    def close_environment_and_confirm(self, name: str, timeout_seconds: int) -> None:
+        self.click_environment_action(name, "关闭")
+        if self._wait_active_overlay_visible(timeout_seconds=10):
+            self.confirm_secondary_dialog(preferred_texts=("确定", "确认"))
+        self.wait_environment_action_text(name, "打开", timeout_seconds=timeout_seconds)
 
     def delete_environment(self, name: str) -> None:
         self.search_environment(name)
@@ -3472,6 +3538,17 @@ class EnvironmentPage(BasePage):
     def _active_drawer_form_radio_button_selected(self, label_text: str, option_text: str) -> bool:
         return bool(self.cdp.evaluate(self._active_drawer_form_radio_button_selected_script(label_text, option_text)))
 
+    def _wait_active_drawer_form_radio_button_selected(self, label_text: str, option_text: str) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self._active_drawer_form_radio_button_selected(label_text, option_text):
+                return
+            time.sleep(0.2)
+        raise TimeoutError(
+            "active drawer radio option was not selected: "
+            f"label={label_text}, option={option_text}"
+        )
+
     def _select_active_drawer_form_select_option(self, label_text: str, option_text: str) -> None:
         if option_text in self._active_drawer_form_select_value(label_text):
             return
@@ -3562,6 +3639,101 @@ class EnvironmentPage(BasePage):
             return control ? String(control.value || "") : null;
         }}
         """
+
+    def _active_drawer_input_by_placeholder_script(self, placeholder: str) -> str:
+        return f"""
+        () => {{
+            const expectedPlaceholder = {placeholder!r};
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
+            for (const drawer of drawers.reverse()) {{
+                const input = Array.from(drawer.querySelectorAll("input"))
+                    .find((el) => visible(el) && el.getAttribute("placeholder") === expectedPlaceholder);
+                if (input) return input;
+            }}
+            return null;
+        }}
+        """
+
+    def _active_drawer_input_visible_by_placeholder(self, placeholder: str) -> bool:
+        return bool(
+            self.cdp.evaluate(
+                f"""
+                () => {{
+                    const finder = {self._active_drawer_input_by_placeholder_script(placeholder)};
+                    return Boolean(finder());
+                }}
+                """
+            )
+        )
+
+    def _active_drawer_input_value_by_placeholder(self, placeholder: str) -> str:
+        value = self.cdp.evaluate(
+            f"""
+            () => {{
+                const finder = {self._active_drawer_input_by_placeholder_script(placeholder)};
+                const input = finder();
+                return input ? String(input.value || "") : "";
+            }}
+            """
+        )
+        return str(value or "")
+
+    def _active_drawer_form_button_script(self, label_text: str, button_text: str) -> str:
+        return f"""
+        () => {{
+            const finder = {self._active_drawer_form_item_script(label_text)};
+            const item = finder();
+            if (!item) return null;
+            const expectedButton = {button_text!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            return Array.from(item.querySelectorAll("button"))
+                .find((button) => visible(button) && clean(button.innerText || button.textContent) === expectedButton)
+                || null;
+        }}
+        """
+
+    def _active_drawer_form_button_visible(self, label_text: str, button_text: str) -> bool:
+        return bool(
+            self.cdp.evaluate(
+                f"""
+                () => {{
+                    const finder = {self._active_drawer_form_button_script(label_text, button_text)};
+                    return Boolean(finder());
+                }}
+                """
+            )
+        )
+
+    def _wait_create_environment_proxy_values(self, expected_ip: str, expected_port: str) -> None:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        last_values = ("", "")
+        while time.time() < deadline:
+            last_values = self.create_environment_proxy_values()
+            if last_values == (expected_ip, expected_port):
+                return
+            time.sleep(0.2)
+        raise TimeoutError(
+            "create environment proxy values did not become expected: "
+            f"expected={(expected_ip, expected_port)}, actual={last_values}"
+        )
 
     def _active_drawer_form_select_script(self, label_text: str) -> str:
         return f"""
@@ -5201,6 +5373,26 @@ class EnvironmentPage(BasePage):
         value = self.cdp.evaluate(self._active_overlay_button_state_script(text))
         return value if isinstance(value, dict) else {}
 
+    def _create_environment_button_state_script(self) -> str:
+        return f"""
+        () => {{
+            const selector = {self.locator("create_button")!r};
+            const button = document.querySelector(selector);
+            if (!button) return {{ visible: false, enabled: false }};
+            const style = window.getComputedStyle(button);
+            const rect = button.getBoundingClientRect();
+            const visible = style.display !== "none"
+                && style.visibility !== "hidden"
+                && Number(style.opacity || "1") > 0.01
+                && rect.width > 0
+                && rect.height > 0;
+            const enabled = !button.disabled
+                && button.getAttribute("aria-disabled") !== "true"
+                && !button.classList.contains("is-disabled");
+            return {{ visible, enabled }};
+        }}
+        """
+
     def _create_environment_drawer_visible_script(self) -> str:
         return f"""
         () => {{
@@ -5544,6 +5736,18 @@ class EnvironmentPage(BasePage):
         status = int(response.get("status", 0) or 0)
         if not 200 <= status < 300:
             raise RuntimeError(f"{action_name} request failed: status={status}, response={response}")
+
+    @staticmethod
+    def _proxy_host_port_from_quick_input(proxy_address: str) -> tuple[str, str]:
+        value = str(proxy_address or "").strip()
+        parsed = urlsplit(value if "://" in value else f"//{value}")
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError(f"proxy quick input has an invalid port: {proxy_address}") from exc
+        if not parsed.hostname or port is None:
+            raise ValueError(f"proxy quick input must contain host and port: {proxy_address}")
+        return parsed.hostname, str(port)
 
     @staticmethod
     def _serials_match_sort(serials: list[int], direction: str) -> bool:

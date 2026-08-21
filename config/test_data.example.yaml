@@ -12,6 +12,11 @@ test_data:
     # 134 内核环境筛选关键字
     kernel_134_search_keyword: "134内核"
 
+  # 全局设置-开启扩展加密并防止篡改用例数据
+  extension_tamper_protection:
+    # 用例会搜索该关键字，并打开筛选结果中的第一个环境
+    environment_search_keyword: "142内核环境"
+
   # 创建多分组环境用例数据
   environment_create_multi_group:
     # 创建环境时需要补充选择的环境分组；如果创建抽屉默认已有分组，用例会保留并一起校验
@@ -191,6 +196,35 @@ test_data:
     package_name: "自动化-本地扩展.zip"
     # 本地扩展包所在目录；如果这里直接配置 zip 完整路径，也会兼容
     package_path: "test_data/extensions"
+    # 本地上传扩展的测试名称
+    extension_name: "自动化测试-创建本地上传的扩展"
+
+  # 扩展市场中的扩展测试数据
+  extension_market:
+    # 扩展市场搜索和添加后列表断言使用的扩展名称
+    extension_name: "网页元素隐藏器"
+    # 扩展市场搜索结果匹配和添加后列表断言使用的扩展描述
+    extension_description: "通过网页元素隐藏器，可隐藏多个网站的敏感操作或内容，防止隐私泄露（将对绑定该扩展的所有环境生效）"
+
+  # 谷歌扩展测试数据
+  google_extension:
+    # Chrome 应用商店扩展详情页 URL
+    extension_url: "https://chromewebstore.google.com/detail/proxy-switchyomega-3-zero/pfnededegaaopdmhkdmcofjmoldfiped?hl=zh-CN"
+    # 添加后扩展列表和环境内 chrome://extensions/ 断言使用的扩展名称
+    extension_name: "Proxy SwitchyOmega 3 (ZeroOmega)"
+    # 添加后扩展列表和环境内 chrome://extensions/ 断言使用的扩展描述
+    extension_description: "轻松快捷地管理和切换多个代理设置。"
+    # 用于验证扩展自动启用的预置环境名称
+    environment_name: "自动化扩展启用验证"
+
+  # 隐藏扩展测试数据
+  hide_extension:
+    # 环境内 chrome://extensions/ 页面中不应出现的扩展名称关键字
+    extension_keyword: "ZeroOmega"
+    # 隐藏设置打开后成员分组应选择的值
+    member_group: "全部分组"
+    # 用于验证隐藏扩展效果的预置环境名称
+    environment_name: "自动化扩展启用验证"
 
   # 本地模拟站登录账号；除 Cookie/Local Storage/IndexedDB 三条预置数据校验用例外，所有会登录本地模拟站的用例共用这一份配置。
   local_auth_lab_login:

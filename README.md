@@ -1,6 +1,6 @@
 # Dicloak 自动化框架
 
-本项目用于 Dicloak Electron APP 的自动化测试。当前框架已具备配置读取、环境预检、APP 生命周期管理、CDP 连接、飞书通知、用例运行编排，以及 P0 环境管理、全局设置、环境分组管理、成员管理、代理管理用例执行能力。
+本项目用于 Dicloak Electron APP 的自动化测试。当前框架已具备配置读取、环境预检、APP 生命周期管理、CDP 连接、飞书通知、用例运行编排，以及 P0 环境管理、全局设置、扩展管理、环境分组管理、成员分组管理、成员管理、代理管理用例执行能力。
 
 ## 环境准备
 
@@ -19,7 +19,9 @@ python run.py --config config/config.yaml --level P0
 python run.py --config config/config.yaml --level P0 --business-module 环境管理
 python run.py --config config/config.yaml --module environment_management
 python run.py --config config/config.yaml --module global_settings
+python run.py --config config/config.yaml --module extension_management
 python run.py --config config/config.yaml --module environment_group_management
+python run.py --config config/config.yaml --module member_group_management
 python run.py --config config/config.yaml --module proxy_management
 python run.py --config config/config.yaml --module test_02_group_containing_environment.py --attach-existing-app
 python run.py --config config/config.yaml --module test_01_kernel_integrity.py
@@ -28,7 +30,7 @@ python run.py --config config/config.yaml --module tests/p0/environment_manageme
 python run.py --config config/config.yaml --case test_142_kernel_integrity
 ```
 
-`--business-module` 用于按业务模块运行用例；当前支持：环境管理、代理管理、扩展管理、环境分组管理、成员管理、全局设置。
+`--business-module` 用于按业务模块运行用例；当前支持：环境管理、代理管理、扩展管理、环境分组管理、成员分组管理、成员管理、全局设置。
 
 `--module` 用于运行单个模块，优先按文件或目录精确发现用例；如果没有找到对应文件或目录，再按模块关键字过滤已发现的用例。
 
@@ -181,7 +183,7 @@ Mac 当前已验证：
 - `python run.py --config config/config.macos.yaml --level P0` 通过，结果 `total=59 passed=58 failed=0 errors=0 skipped=1 flaky=1`。
 - UI 远程节点模式已完成“同步当前代码”后执行 `P0 全量` 验证，结果 `total=59 passed=57 failed=0 errors=1 skipped=1 flaky=0`；唯一错误为代理创建弹窗确认后未关闭，保留为 Mac 远端代理业务/环境问题继续排查。
 
-以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 85 条，最新状态见“最近验证记录”。
+以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 91 条，最新状态见“最近验证记录”。
 
 Mac 当前跳过项：
 
@@ -348,7 +350,7 @@ CDP 9222: none
 恢复分三层：
 
 - 全局 APP 稳定态恢复：`pages/app_page.py` 只负责选择正确的 Dicloak 主页面、关闭阻塞弹窗/抽屉/下拉浮层、等待加载遮罩消失，并确认 APP 外壳可操作；这一层不进入任何业务模块。
-- 模块级恢复：当前环境管理模块通过 `EnvironmentPage.recover_to_module_home()` 进入环境管理列表并清理筛选和选中状态；环境分组管理模块通过 `EnvironmentGroupPage.recover_to_module_home()` 进入环境分组列表并关闭阻塞浮层；代理管理模块通过 `ProxyPage.recover_to_module_home()` 进入代理列表并关闭阻塞浮层。后续扩展管理等模块需要各自实现自己的模块首页恢复入口。
+- 模块级恢复：当前环境管理模块通过 `EnvironmentPage.recover_to_module_home()` 进入环境管理列表并清理筛选和选中状态；环境分组管理模块通过 `EnvironmentGroupPage.recover_to_module_home()` 进入环境分组列表并关闭阻塞浮层；扩展管理模块通过 `ExtensionPage.recover_to_module_home()` 进入扩展列表并关闭阻塞浮层；成员分组管理模块通过 `MemberGroupPage.recover_to_module_home()` 进入成员分组列表并关闭阻塞浮层；代理管理模块通过 `ProxyPage.recover_to_module_home()` 进入代理列表并关闭阻塞浮层。后续新增模块需要各自实现自己的模块首页恢复入口。
 - 用例级清理：具体用例创建的数据仍由用例自己的 `finally` 或后置逻辑清理，因为只有用例知道哪些数据是本次运行创建的。
 
 全局恢复不会强制跳回“环境管理”，所以后续新增其他模块用例时，不会被环境管理页面状态绑死。
@@ -420,7 +422,7 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 85 条 P0 用例：环境管理 41 条、全局设置 19 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 91 条 P0 用例：环境管理 41 条、全局设置 20 条、扩展管理 4 条、环境分组管理 6 条、成员分组管理 1 条、成员管理 15 条、代理管理 4 条。
 
 当前环境管理模块已接入 41 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
@@ -546,8 +548,19 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 代理管理新版列表不直接展示代理 ID，`ProxyPage` 已改为读取表格“序号”作为行 key，用于创建后等待、行内检测、勾选、批量删除和删除后消失校验。代理检测类用例仍依赖配置中的本机系统代理 `windows_system_proxy.host/port` 可用；若 `127.0.0.1:7897` 未监听，检测失败或列表加载失败属于环境前置问题，不归类为元素定位失败。
 
+当前已新增扩展管理模块 4 条 P0 用例，文件位于 `tests/p0/extension_management/`：
+
+- `test_01_create_local_extension.py`：创建本地上传扩展，进入扩展管理页点击“添加扩展”，添加方式切换为“安装包”，上传 `test_data.local_extension.package_path/package_name` 指向的 zip 安装包，扩展名称读取 `test_data.local_extension.extension_name`，扩展分组确保为“未分组”；保存后校验扩展卡片存在、名称正确、提供方为“本地扩展”，随后通过卡片右上角更多菜单删除并校验删除成功。由于 Electron 真实文件选择器返回的 `File.path` 是上传校验关键字段，自动化会在临时 ASCII zip 副本上通过浏览器 file chooser 注入文件，并在页面上下文补齐原始项目 zip 路径，保存后清理临时文件。
+- `test_02_add_market_extension.py`：添加扩展市场里的扩展，进入扩展管理后切换“扩展市场”，按 `test_data.extension_market.extension_name` 搜索，按 `test_data.extension_market.extension_description` 精确匹配搜索结果卡片并点击“添加”；添加弹窗会等待扩展名称和默认分组“未分组”异步回填完成后再确认，随后切回“添加扩展”列表，断言同一扩展卡片同时包含目标名称和描述，最后通过卡片右上角更多菜单删除并校验删除成功。用例开始和 finally 清理均会显式切回“添加扩展”TAB，避免误操作扩展市场搜索结果卡片。
+- `test_03_create_google_extension_and_enable.py`：创建 Chrome 应用商店扩展并同时启用，读取 `test_data.google_extension.extension_url/name/description/environment_name`，在“添加扩展”弹窗中保持“Chrome 应用商店”方式，填写扩展 URL，等待扩展分组回填或选择“未分组”，勾选“同时启用该扩展，在自动同步到对应环境”后保存；扩展列表按名称和描述断言，提供方期望为“谷歌商店”，提供方断言失败会记录为延迟断言并继续执行；随后进入环境管理搜索并打开“自动化扩展启用验证”，通过内核 CDP 访问 `chrome://extensions/`，递归读取 Chrome 扩展页 Shadow DOM 文本，断言目标扩展名称和描述存在，失败同样延迟到关闭环境、清空筛选和删除扩展后统一抛出。
+- `test_04_hide_extension.py`：隐藏扩展，目标扩展名称固定为 `ZeroOmega`，其余数据读取 `test_data.hide_extension.extension_keyword/member_group/environment_name`；用例开头必须在“添加扩展”列表中找到已有扩展 `ZeroOmega`，找不到会直接失败并提示缺少前置扩展，不会自动创建扩展。用例编辑目标扩展，打开“隐藏设置”，确保“成员分组”为“全部分组”，保存后打开扩展卡片右下角开关；进入环境管理搜索并打开 `自动化扩展启用验证`，访问 `chrome://extensions/` 并断言页面文本不包含 `ZeroOmega`。当前既有 `ZeroOmega` 暂无稳定扩展 ID 可用于内核 target 精确检测，因此该辅助检测仅记录跳过；随后关闭环境、清空筛选、关闭扩展开关（带确认弹窗和最多 2 次重试）、关闭隐藏设置，不删除已有扩展。
+
 最近验证记录：
 
+- `python run.py --config config/config.yaml --case tests.p0.extension_management.test_04_hide_extension.TestHideExtension.test_hide_extension_from_chrome_extensions_page --attach-existing-app`：2026-08-20 按用例前置口径修正“隐藏扩展”为必须使用已有 `ZeroOmega` 后真实单跑失败，`total=1 passed=0 failed=0 errors=1 skipped=0 flaky=0`，失败点为已有 `ZeroOmega` 编辑隐藏设置后点击“确定”弹窗未关闭：`TimeoutError: overlay did not close`。用例不会自动创建或删除扩展，缺少已有 `ZeroOmega` 时会在开头直接失败；当前 P0 发现为 91 条：环境管理 41、全局设置 20、扩展管理 4、环境分组管理 6、成员分组管理 1、成员管理 15、代理管理 4。
+- `python run.py --config config/config.yaml --business-module 扩展管理 --attach-existing-app`：2026-08-20 新增扩展管理“创建谷歌扩展同时启用扩展”用例后真实模块运行通过，`total=3 passed=3 failed=0 errors=0 skipped=0 flaky=0`。此前先用临时脚本验证添加弹窗默认 Chrome 应用商店模式、URL textarea、分组异步回填和“同时启用”复选框状态，再用临时完整流程跑通“Chrome 商店 URL 添加 → 勾选同时启用 → 列表名称/描述/提供方读取 → 打开自动化扩展启用验证环境 → chrome://extensions/ 名称和描述校验 → 关闭环境 → 删除扩展”闭环，输出 `TMP_GOOGLE_EXTENSION_ENABLE_FLOW_OK` 后才整理正式用例。新增单用例 `test_03_create_google_extension_and_enable.py` 真实单跑通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。当前 P0 发现为 90 条：环境管理 41、全局设置 20、扩展管理 3、环境分组管理 6、成员分组管理 1、成员管理 15、代理管理 4。
+- `python run.py --config config/config.yaml --business-module 扩展管理 --attach-existing-app`：2026-08-20 新增扩展市场“添加市场扩展并删除”用例后真实模块运行通过，`total=2 passed=2 failed=0 errors=0 skipped=0 flaky=0`。此前先用临时脚本完整验证“扩展市场搜索 → 按名称和描述匹配搜索结果 → 添加弹窗等待名称/分组回填 → 确认添加 → 添加扩展列表名称和描述校验 → 删除并校验删除成功”闭环，临时脚本输出 `TMP_EXTENSION_MARKET_ADD_FLOW_OK`。新增单用例 `test_02_add_market_extension.py` 真实单跑通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。当前 P0 发现为 89 条：环境管理 41、全局设置 20、扩展管理 2、环境分组管理 6、成员分组管理 1、成员管理 15、代理管理 4。
+- `python run.py --config config/config.yaml --business-module 扩展管理 --attach-existing-app`：2026-08-20 新增扩展管理“创建本地扩展”用例后真实模块运行通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。此前先用临时脚本完整验证“添加扩展 → 安装包上传 → 名称/分组填写 → 列表名称和提供方校验 → 删除并校验删除成功”闭环，临时脚本输出 `TMP_EXTENSION_LOCAL_UPLOAD_FLOW_OK`。当时 P0 发现为 88 条：环境管理 41、全局设置 20、扩展管理 1、环境分组管理 6、成员分组管理 1、成员管理 15、代理管理 4。
 - `python run.py --config config/config.yaml --case tests.p0.global_settings.test_19_clear_all_cache_every_open_no_cloud_sync.TestGlobalSettingsClearAllCacheEveryOpenNoCloudSync.test_clear_all_cache_every_open_without_cloud_sync_clears_site_login_state --attach-existing-app`：2026-08-19 新增全局设置“清除本地全部缓存-每次都清除-不同步云端数据”用例后真实单跑通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。用例首次打开新建默认配置环境后分别登录 Cookie、Local Storage、IndexedDB 三站，第二次打开环境只访问并读取状态不再登录，三站均为 `未登录`；结束时删除新建环境，并通过全局设置快照恢复其它配置，同时把“清除方式”恢复为“不清除”。同步验证完整 P1 `Ran 119 tests ... OK`，P0 发现为 85 条。
 - `python run.py --config config/config.yaml --case tests.p0.global_settings.test_18_clear_all_cache_every_open_sync_cloud.TestGlobalSettingsClearAllCacheEveryOpenSyncCloud.test_clear_all_cache_every_open_then_sync_cloud_data_keeps_sites_logged_in --attach-existing-app`：2026-08-19 新增全局设置“清除本地全部缓存-每次都清除-同步云端数据”用例后真实单跑通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。用例首次打开新建默认配置环境后分别登录 Cookie、Local Storage、IndexedDB 三站，第二次打开环境只访问并读取状态不再登录，三站直接恢复为 `MCDL004/MCDL005/MCDL006 / 已登录`；结束时删除新建环境，并通过全局设置快照恢复其它配置，同时把“清除方式”恢复为“不清除”。同步验证完整 P1 `Ran 118 tests ... OK`，P0 发现为 84 条。
 - `python run.py --config config/config.yaml --case tests.p0.environment_management.test_40_individual_environment_clear_all_cache_every_open_sync_cloud.TestIndividualEnvironmentClearAllCacheEveryOpenSyncCloud.test_clear_all_cache_every_open_then_sync_cloud_data_keeps_sites_logged_in --case tests.p0.environment_management.test_41_individual_environment_clear_all_cache_every_open_no_cloud_sync.TestIndividualEnvironmentClearAllCacheEveryOpenNoCloudSync.test_clear_all_cache_every_open_without_cloud_sync_clears_site_login_state --attach-existing-app`：2026-08-19 根据用例流程修正，“同步云端数据”场景第二次打开环境后只读取三站登录态，不再执行登录；同时验证“不同步云端数据”场景第二次打开后也只读取登录态。联合真实回归通过，`total=2 passed=2 failed=0 errors=0 skipped=0 flaky=0`；`test_40` 第二轮三站直接恢复为 `MCDL004/MCDL005/MCDL006 / 已登录`，`test_41` 第二轮三站均为 `未登录`。同步验证完整 P1 `Ran 116 tests ... OK`，P0 发现为 83 条。
@@ -618,4 +631,4 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 - `python -c "from streamlit_runner import discover_cases; cases=discover_cases(); print(len(cases))"`：新增代理管理用例后的早期发现数量为 59 条；当前 P0 可发现数量为 83 条。
 - `python run.py --config config/config.yaml --attach-existing-app`：早期全量 P0 运行通过，`total=54 passed=54 failed=0 errors=0 skipped=0 flaky=0`（2026-05-29 两次验证）；当前全量状态见 2026-07-01 记录。
 
-已预留扩展管理等模块目录，后续新增用例时按业务模块放入对应目录。
+扩展管理、成员分组管理等模块已开始接入 P0 用例，后续新增用例继续按业务模块放入对应目录。

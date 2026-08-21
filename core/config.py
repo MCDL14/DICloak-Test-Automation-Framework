@@ -121,6 +121,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "kernel_download_seconds": 300,
         "batch_import_seconds": 120,
         "batch_export_seconds": 120,
+        "extension_install_seconds": 180,
     },
     "test_data": {
         "naming": {
@@ -230,7 +231,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "process_name": "",
             "startup_path": "",
         },
-        "local_extension": {"package_name": "", "package_path": ""},
+        "local_extension": {"package_name": "", "package_path": "", "extension_name": ""},
+        "extension_market": {
+            "extension_name": "网页元素隐藏器",
+            "extension_description": "通过网页元素隐藏器，可隐藏多个网站的敏感操作或内容，防止隐私泄露（将对绑定该扩展的所有环境生效）",
+        },
+        "google_extension": {
+            "extension_url": "https://chromewebstore.google.com/detail/proxy-switchyomega-3-zero/pfnededegaaopdmhkdmcofjmoldfiped?hl=zh-CN",
+            "extension_name": "Proxy SwitchyOmega 3 (ZeroOmega)",
+            "extension_description": "轻松快捷地管理和切换多个代理设置。",
+            "environment_name": "自动化扩展启用验证",
+        },
+        "hide_extension": {
+            "extension_keyword": "ZeroOmega",
+            "member_group": "全部分组",
+            "environment_name": "自动化扩展启用验证",
+        },
     },
     "run": {
         "case_level": "P0",

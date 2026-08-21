@@ -25,7 +25,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--business-module",
         default=None,
-        help="Run cases from one business module, for example 环境管理, 代理管理, 扩展管理, 环境分组管理, 成员管理, 全局设置",
+        help="Run cases from one business module, for example 环境管理, 代理管理, 扩展管理, 环境分组管理, 成员分组管理, 成员管理, 全局设置",
     )
     parser.add_argument(
         "--case",

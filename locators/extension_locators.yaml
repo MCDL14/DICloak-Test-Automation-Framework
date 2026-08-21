@@ -1,0 +1,35 @@
+# 左侧菜单候选，用于进入扩展管理。
+menu_candidates:
+  selector: ".el-menu-item, .el-sub-menu__title, li, a, button"
+
+# 页面和弹层内按钮候选。
+button:
+  selector: "button"
+
+# 可能遮挡页面的弹层。
+blocking_overlay:
+  selector: ".el-drawer, .el-dialog, .el-message-box"
+
+# 弹层关闭按钮候选。
+overlay_close_button:
+  selector: ".el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn, .el-overlay button[aria-label='Close']"
+
+# Element Plus 对话框候选。
+dialog:
+  selector: ".el-dialog"
+
+# Element Plus 表单项候选。
+form_item:
+  selector: ".el-form-item"
+
+# 扩展卡片容器，列表当前以卡片形式展示扩展。
+extension_card:
+  selector: ".el-card"
+
+# 扩展卡片右上角更多菜单触发器。
+card_dropdown:
+  selector: ".el-dropdown"
+
+# Element Plus 下拉菜单候选。
+dropdown_item:
+  selector: ".el-dropdown-menu__item, .el-select-dropdown__item, li"

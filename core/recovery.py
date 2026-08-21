@@ -8,6 +8,8 @@ from core.case_module import get_test_case_module
 from pages.app_page import AppPage
 from pages.environment_group_page import EnvironmentGroupPage
 from pages.environment_page import EnvironmentPage
+from pages.extension_page import ExtensionPage
+from pages.member_group_page import MemberGroupPage
 
 
 class TestRecoveryManager:
@@ -49,6 +51,10 @@ class TestRecoveryManager:
             EnvironmentPage(cdp_driver=cdp, config=config).recover_to_module_home()
         elif module_name == "环境分组管理":
             EnvironmentGroupPage(cdp_driver=cdp, config=config).recover_to_module_home()
+        elif module_name == "扩展管理":
+            ExtensionPage(cdp_driver=cdp, config=config).recover_to_module_home()
+        elif module_name == "成员分组管理":
+            MemberGroupPage(cdp_driver=cdp, config=config).recover_to_module_home()
 
     def _recovery_enabled(self, config: dict[str, Any]) -> bool:
         return bool(config.get("run", {}).get("recovery_enabled", True))

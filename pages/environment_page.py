@@ -110,6 +110,28 @@ class EnvironmentPage(BasePage):
             self._active_drawer_input_value_by_placeholder("代理端口"),
         )
 
+    def create_environment_existing_proxy_select_visible(self) -> bool:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self._active_drawer_select_visible_by_placeholder_text("请选择已有代理"):
+                return True
+            time.sleep(0.2)
+        return False
+
+    def select_first_create_environment_existing_proxy(self, search_text: str) -> str:
+        input_script = self._active_drawer_select_search_input_by_placeholder_text_script(
+            "请选择已有代理"
+        )
+        control_id = self._select_search_input_control_id(input_script)
+        self.cdp.click_element_by_script(input_script)
+        self.cdp.fill_element_by_script(input_script, search_text)
+        self._wait_first_visible_enabled_select_dropdown_item()
+        self.cdp.click_element_by_script(
+            self._first_visible_enabled_select_dropdown_item_script()
+        )
+        self._wait_select_dropdown_closed()
+        return self._wait_create_environment_existing_proxy_selected_text(control_id)
+
     def submit_create_environment(self, context: str) -> None:
         self._submit_active_create_environment_drawer(context)
         self._wait_for_environment_list_not_loading_with_refresh_retry()
@@ -3686,6 +3708,188 @@ class EnvironmentPage(BasePage):
             """
         )
         return str(value or "")
+
+    def _active_drawer_select_visible_by_placeholder_text(self, placeholder: str) -> bool:
+        finder = self._active_drawer_select_by_placeholder_text_script(placeholder)
+        return bool(
+            self.cdp.evaluate(
+                f"""
+                () => {{
+                    const findSelect = {finder};
+                    return Boolean(findSelect());
+                }}
+                """
+            )
+        )
+
+    def _active_drawer_select_by_placeholder_text_script(self, placeholder: str) -> str:
+        return f"""
+        () => {{
+            const expectedPlaceholder = {placeholder!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
+            for (const drawer of drawers.reverse()) {{
+                const select = Array.from(drawer.querySelectorAll(".el-select"))
+                    .find((el) => visible(el)
+                        && Array.from(el.querySelectorAll(".el-select__placeholder"))
+                            .some((placeholderElement) => visible(placeholderElement)
+                                && clean(
+                                    placeholderElement.innerText
+                                    || placeholderElement.textContent
+                                ) === expectedPlaceholder));
+                if (select) return select;
+            }}
+            return null;
+        }}
+        """
+
+    def _active_drawer_select_search_input_by_placeholder_text_script(
+        self,
+        placeholder: str,
+    ) -> str:
+        select_finder = self._active_drawer_select_by_placeholder_text_script(placeholder)
+        return f"""
+        () => {{
+            const findSelect = {select_finder};
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const select = findSelect();
+            return select
+                ? Array.from(select.querySelectorAll('input[role="combobox"], input'))
+                    .find(visible) || null
+                : null;
+        }}
+        """
+
+    def _select_search_input_control_id(self, input_script: str) -> str:
+        value = self.cdp.evaluate(
+            f"""
+            () => {{
+                const findInput = {input_script};
+                const input = findInput();
+                return input ? String(input.getAttribute("aria-controls") || "") : "";
+            }}
+            """
+        )
+        control_id = str(value or "").strip()
+        if not control_id:
+            raise RuntimeError("existing proxy select input has no aria-controls id")
+        return control_id
+
+    def _wait_first_visible_enabled_select_dropdown_item(self) -> None:
+        finder = self._first_visible_enabled_select_dropdown_item_script()
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            if self.cdp.evaluate(
+                f"""
+                () => {{
+                    const findItem = {finder};
+                    return Boolean(findItem());
+                }}
+                """
+            ):
+                return
+            time.sleep(0.2)
+        raise TimeoutError("no visible enabled existing-proxy dropdown item appeared")
+
+    def _first_visible_enabled_select_dropdown_item_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const poppers = Array.from(document.querySelectorAll(
+                ".el-select__popper, .el-select-dropdown, .el-popper"
+            )).filter(visible);
+            for (const popper of poppers.reverse()) {
+                const item = Array.from(
+                    popper.querySelectorAll(".el-select-dropdown__item")
+                ).find((el) => visible(el)
+                    && !el.classList.contains("is-disabled")
+                    && el.getAttribute("aria-disabled") !== "true");
+                if (item) return item;
+            }
+            return null;
+        }
+        """
+
+    def _create_environment_existing_proxy_selected_text(self, control_id: str) -> str:
+        value = self.cdp.evaluate(
+            self._active_drawer_select_selected_text_by_control_id_script(control_id)
+        )
+        return str(value or "").strip()
+
+    def _active_drawer_select_selected_text_by_control_id_script(
+        self,
+        control_id: str,
+    ) -> str:
+        return f"""
+        () => {{
+            const expectedControlId = {control_id!r};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
+            for (const drawer of drawers.reverse()) {{
+                const input = Array.from(drawer.querySelectorAll('input[role="combobox"]'))
+                    .find((candidate) =>
+                        candidate.getAttribute("aria-controls") === expectedControlId
+                    );
+                if (!input) continue;
+                const select = input.closest(".el-select");
+                if (!select) continue;
+                const selected = Array.from(select.querySelectorAll(
+                    ".el-select__selected-item, .el-select__selected-item span"
+                ))
+                    .filter(visible)
+                    .map((el) => clean(el.innerText || el.textContent))
+                    .find(Boolean);
+                if (selected) return selected;
+            }}
+            return "";
+        }}
+        """
+
+    def _wait_create_environment_existing_proxy_selected_text(
+        self,
+        control_id: str,
+    ) -> str:
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            selected_text = self._create_environment_existing_proxy_selected_text(control_id)
+            if selected_text:
+                return selected_text
+            time.sleep(0.2)
+        raise TimeoutError("existing proxy did not become selected")
 
     def _active_drawer_form_button_script(self, label_text: str, button_text: str) -> str:
         return f"""

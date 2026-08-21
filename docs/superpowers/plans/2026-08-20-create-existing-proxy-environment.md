@@ -69,7 +69,8 @@ It must never print credentials, cookies, tokens, launch command lines, webhook 
 The temporary DOM interaction must:
 
 ```python
-# Locate the visible input in the active .el-drawer by exact placeholder.
+# Locate the right-hand .el-select by its displayed .el-select__placeholder text.
+# The nested input[role="combobox"] has an empty placeholder attribute.
 EXISTING_PROXY_PLACEHOLDER = "请选择已有代理"
 
 # Click the input, fill the search text through CDPDriver.fill_element_by_script,
@@ -93,8 +94,9 @@ create_button={visible: True, enabled: True}
 drawer_visible=True
 environment_name=测试已有代理
 existing_proxy_select_visible=True
-matching_option_count=<positive integer>
-selected_proxy_text=<non-empty text>
+matching_option_count=2
+first_option_text=SOCKS5://127.0.0.1:7897 IP: 103.172.183.85 (SG - Singapore) 序号:604 | 已绑0个
+selected_proxy_text=SOCKS5://127.0.0.1:7897 (序号:604 | 已绑0个)
 environment_visible=True
 new_ginsbrowser_pids=[<positive pid>]
 environment_closed=True
@@ -116,32 +118,44 @@ The recorder double subclasses `EnvironmentPage`, provides `self.cdp = self`, an
 
 ```python
 class EnvironmentExistingProxyDrawerTests(unittest.TestCase):
-    def test_existing_proxy_select_visibility_uses_exact_placeholder(self) -> None:
+    def test_existing_proxy_select_visibility_uses_displayed_placeholder_text(self) -> None:
         page = _ExistingProxyDrawerProbe()
 
         self.assertTrue(page.create_environment_existing_proxy_select_visible())
-        self.assertEqual(page.calls, [("input-visible", "请选择已有代理")])
+        self.assertEqual(page.calls, [("select-visible", "请选择已有代理")])
 
-    def test_searches_existing_proxy_and_selects_first_visible_result(self) -> None:
+    def test_existing_proxy_select_visibility_waits_for_async_render(self) -> None:
+        page = _ExistingProxyDrawerProbe(visible_sequence=[False, False, True])
+
+        self.assertTrue(page.create_environment_existing_proxy_select_visible())
+        self.assertEqual(len(page.calls), 3)
+
+    def test_searches_right_hand_existing_proxy_select_and_chooses_first_result(self) -> None:
         page = _ExistingProxyDrawerProbe()
 
         selected_text = page.select_first_create_environment_existing_proxy("7897")
 
-        self.assertEqual(selected_text, "HTTP 127.0.0.1:7897")
+        self.assertEqual(
+            selected_text,
+            "SOCKS5://127.0.0.1:7897 (序号:604 | 已绑0个)",
+        )
         self.assertEqual(
             page.calls,
             [
-                ("click-existing-proxy", "请选择已有代理"),
-                ("fill-existing-proxy", ("请选择已有代理", "7897")),
+                ("input-script", "请选择已有代理"),
+                ("control-id", "existing-proxy-input"),
+                ("click-search-input", "existing-proxy-input"),
+                ("fill-search-input", ("existing-proxy-input", "7897")),
                 ("wait-first-option", None),
-                ("click-first-option", None),
+                ("first-option-script", None),
+                ("click-first-option", "first-existing-proxy-option"),
                 ("wait-dropdown-closed", None),
-                ("wait-selected-text", None),
+                ("wait-selected-text", "existing-proxy-listbox"),
             ],
         )
 ```
 
-The probe overrides `_active_drawer_input_visible_by_placeholder`, `_active_drawer_input_by_placeholder_script`, `_wait_first_visible_enabled_select_dropdown_item`, `_first_visible_enabled_select_dropdown_item_script`, `_wait_select_dropdown_closed`, and `_wait_create_environment_existing_proxy_selected_text` so the test verifies orchestration without opening DICloak. Its wait method records `("wait-selected-text", None)` and returns `"HTTP 127.0.0.1:7897"`.
+The probe overrides the displayed-placeholder select locator, async visibility sequence, exact select search-input locator, `aria-controls` reader, dropdown-item wait/click, dropdown-close wait, and selected-text wait so the tests verify orchestration without opening DICloak.
 
 - [ ] **Step 2: Run the new tests and verify RED**
 
@@ -165,11 +179,18 @@ Add these methods near the existing create-environment proxy methods:
 
 ```python
 def create_environment_existing_proxy_select_visible(self) -> bool:
-    return self._active_drawer_input_visible_by_placeholder("请选择已有代理")
+    deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+    while time.time() < deadline:
+        if self._active_drawer_select_visible_by_placeholder_text("请选择已有代理"):
+            return True
+        time.sleep(0.2)
+    return False
 
 def select_first_create_environment_existing_proxy(self, search_text: str) -> str:
-    placeholder = "请选择已有代理"
-    input_script = self._active_drawer_input_by_placeholder_script(placeholder)
+    input_script = self._active_drawer_select_search_input_by_placeholder_text_script(
+        "请选择已有代理"
+    )
+    control_id = self._select_search_input_control_id(input_script)
     self.cdp.click_element_by_script(input_script)
     self.cdp.fill_element_by_script(input_script, search_text)
     self._wait_first_visible_enabled_select_dropdown_item()
@@ -177,28 +198,28 @@ def select_first_create_environment_existing_proxy(self, search_text: str) -> st
         self._first_visible_enabled_select_dropdown_item_script()
     )
     self._wait_select_dropdown_closed()
-    return self._wait_create_environment_existing_proxy_selected_text()
-
-def create_environment_existing_proxy_selected_text(self) -> str:
-    value = self.cdp.evaluate(
-        self._active_drawer_select_selected_text_by_placeholder_script(
-            "请选择已有代理"
-        )
-    )
-    return str(value or "").strip()
+    return self._wait_create_environment_existing_proxy_selected_text(control_id)
 ```
 
-The live probe may require the order `click → fill` to be adjusted, but the final public method must still own the complete search-and-first-selection operation.
+The live probe proved the order `click → fill`, the exact right-hand component scope, and the `aria-controls` identity used after the placeholder disappears.
 
 - [ ] **Step 2: Add only the private DOM helpers required by the public API**
 
-Implement the helpers with the project's existing visibility and polling conventions:
+Implement `_active_drawer_select_visible_by_placeholder_text`, `_active_drawer_select_by_placeholder_text_script`, `_active_drawer_select_search_input_by_placeholder_text_script`, `_select_search_input_control_id`, `_wait_first_visible_enabled_select_dropdown_item`, `_first_visible_enabled_select_dropdown_item_script`, `_create_environment_existing_proxy_selected_text`, `_active_drawer_select_selected_text_by_control_id_script`, and `_wait_create_environment_existing_proxy_selected_text` with the project's existing visibility and polling conventions. The core waits and selected-text reader are:
 
 ```python
 def _wait_first_visible_enabled_select_dropdown_item(self) -> None:
+    finder = self._first_visible_enabled_select_dropdown_item_script()
     deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
     while time.time() < deadline:
-        if self.cdp.evaluate(self._first_visible_enabled_select_dropdown_item_script()):
+        if self.cdp.evaluate(
+            f"""
+            () => {{
+                const findItem = {finder};
+                return Boolean(findItem());
+            }}
+            """
+        ):
             return
         time.sleep(0.2)
     raise TimeoutError("no visible enabled existing-proxy dropdown item appeared")
@@ -229,13 +250,13 @@ def _first_visible_enabled_select_dropdown_item_script(self) -> str:
     }
     """
 
-def _active_drawer_select_selected_text_by_placeholder_script(
+def _active_drawer_select_selected_text_by_control_id_script(
     self,
-    placeholder: str,
+    control_id: str,
 ) -> str:
     return f"""
     () => {{
-        const expectedPlaceholder = {placeholder!r};
+        const expectedControlId = {control_id!r};
         const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
         const visible = (el) => {{
             if (!el) return false;
@@ -248,11 +269,12 @@ def _active_drawer_select_selected_text_by_placeholder_script(
         }};
         const drawers = Array.from(document.querySelectorAll(".el-drawer")).filter(visible);
         for (const drawer of drawers.reverse()) {{
-            const input = Array.from(drawer.querySelectorAll("input"))
-                .find((el) => visible(el)
-                    && el.getAttribute("placeholder") === expectedPlaceholder);
+            const input = Array.from(drawer.querySelectorAll('input[role="combobox"]'))
+                .find((candidate) =>
+                    candidate.getAttribute("aria-controls") === expectedControlId
+                );
             if (!input) continue;
-            const select = input.closest(".el-select") || input.closest(".el-select__wrapper");
+            const select = input.closest(".el-select");
             if (!select) continue;
             const selected = Array.from(select.querySelectorAll(
                 ".el-select__selected-item, .el-select__selected-item span"
@@ -261,17 +283,15 @@ def _active_drawer_select_selected_text_by_placeholder_script(
                 .map((el) => clean(el.innerText || el.textContent))
                 .find(Boolean);
             if (selected) return selected;
-            const value = clean(input.value);
-            if (value) return value;
         }}
         return "";
     }}
     """
 
-def _wait_create_environment_existing_proxy_selected_text(self) -> str:
+def _wait_create_environment_existing_proxy_selected_text(self, control_id: str) -> str:
     deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
     while time.time() < deadline:
-        selected_text = self.create_environment_existing_proxy_selected_text()
+        selected_text = self._create_environment_existing_proxy_selected_text(control_id)
         if selected_text:
             return selected_text
         time.sleep(0.2)
@@ -280,9 +300,10 @@ def _wait_create_environment_existing_proxy_selected_text(self) -> str:
 
 Required DOM rules:
 
-- Search input: exact placeholder `请选择已有代理`, scoped to the active visible `.el-drawer` through the existing placeholder helper.
+- Select component: displayed `.el-select__placeholder` text exactly equals `请选择已有代理`; do not inspect the nested input's empty placeholder attribute.
+- Search input: obtain the `input[role="combobox"]` only from that exact right-hand select and capture its `aria-controls` before selection, so the left【代理分组】select cannot be chosen.
 - Result item: the first visible `.el-select-dropdown__item` in a visible Element Plus popper, excluding `.is-disabled` and nodes with `aria-disabled="true"`.
-- Selected text: locate the select containing the exact-placeholder input, then read visible text from `.el-select__selected-item` or the component input value after the dropdown has closed.
+- Selected text: after the displayed placeholder disappears, find the original input by captured `aria-controls`, then require non-empty visible text from its `.el-select__selected-item` after the dropdown has closed. Never fall back to the uncommitted search input value.
 - Never use a global list item by ordinal without first restricting to the visible select dropdown.
 - `_wait_create_environment_existing_proxy_selected_text` polls until the component reports non-empty selected text and returns that text.
 - All waits use the existing `page_seconds` timeout and 0.2-second polling style.

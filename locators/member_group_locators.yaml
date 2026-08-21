@@ -1,0 +1,44 @@
+# 左侧菜单候选。成员分组位于“团队管理”展开区域内。
+menu_candidates:
+  selector: ".el-menu-item, .el-sub-menu__title, li, a, button"
+
+# 页面或弹层内按钮候选。
+button:
+  selector: "button"
+
+# 页面可见文本候选，例如“创建成员分组”。
+visible_text_candidates:
+  selector: "button, div, span, a"
+
+# 可能遮挡页面的弹层。
+blocking_overlay:
+  selector: ".el-drawer, .el-dialog, .el-message-box"
+
+# 弹层关闭按钮候选。
+overlay_close_button:
+  selector: ".el-drawer__close-btn, .el-dialog__headerbtn, .el-message-box__headerbtn, .el-overlay button[aria-label='Close']"
+
+# Element Plus 对话框候选。
+dialog:
+  selector: ".el-dialog"
+
+# Element Plus 表单项候选。
+form_item:
+  selector: ".el-form-item"
+
+# 表格容器、表头、单元格与行候选。
+table_container:
+  selector: ".el-table, table"
+
+table_header:
+  selector: ".el-table__header-wrapper th, thead th"
+
+table_row:
+  selector: ".el-table__row, tbody tr"
+
+table_cell:
+  selector: ".el-table__cell, td"
+
+# 成员分组行内删除图标。
+delete_icon:
+  selector: ".icon-delete"

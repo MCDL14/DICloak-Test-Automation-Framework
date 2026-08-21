@@ -25,7 +25,13 @@ class GlobalSettingsPage(BasePage):
     CLEAR_LOCAL_CACHE_ALL_TEXT = "清除本地全部缓存"
     CLEAR_LOCAL_CACHE_EVERY_OPEN_TEXT = "每次打开环境时都清除"
     CLEAR_LOCAL_CACHE_SYNC_CLOUD_TEXT = "清除后，再同步云端数据"
+    EXTENSION_TAMPER_PROTECTION_LABEL = "开启扩展加密并防止篡改"
     DISABLE_DEVTOOLS_LABELS = ("禁止打开浏览器开发者工具", "禁止打开浏览器开发者工具界面")
+    EXTENSION_TAMPER_PROTECTION_CASCADE_LABELS = (
+        DISABLE_DEVTOOLS_LABELS,
+        "禁止管理/移除扩展，以及从本地安装扩展至浏览器",
+        "禁止成员访问谷歌扩展商店和扩展设置页面",
+    )
     ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS = ("环境列表字段权限", "环境字段显示限制")
     ENVIRONMENT_FIELD_DISPLAY_LIMIT_DIALOG_TITLES = ("列表字段", "列表字段设置")
     GOOGLE_EXTENSION_SHORTCUT_LABELS = ("Chrome 应用商店", "谷歌应用商店")
@@ -51,6 +57,7 @@ class GlobalSettingsPage(BasePage):
         total_attempts = self.GLOBAL_SETTINGS_REENTRY_RETRIES + 1
         for attempt_index in range(total_attempts):
             if force_reentry or attempt_index > 0:
+                self._dismiss_blocking_overlays()
                 self._open_environment_management_for_retry()
 
             self._dismiss_blocking_overlays()
@@ -98,6 +105,7 @@ class GlobalSettingsPage(BasePage):
             "environment_list_sort": self.environment_list_sort_state(),
             "data_sync": self.data_sync_one_way_state(),
             "clear_local_cache": self.clear_local_cache_state(),
+            "extension_tamper_protection": self.extension_tamper_protection_state(),
         }
 
     def restore_global_settings_snapshot(self, snapshot: dict[str, object]) -> None:
@@ -105,6 +113,7 @@ class GlobalSettingsPage(BasePage):
         if not isinstance(snapshot, dict):
             raise TypeError(f"global settings snapshot must be a dict: {type(snapshot)!r}")
 
+        self.restore_extension_tamper_protection_state(snapshot.get("extension_tamper_protection", {}))
         self._restore_simple_checkbox_snapshot(snapshot.get("simple_checkboxes", {}))
         self.restore_website_restriction_state(snapshot.get("website_restriction", {}))
         self.restore_packet_capture_blocking_state(snapshot.get("packet_capture_blocking", {}))
@@ -215,6 +224,83 @@ class GlobalSettingsPage(BasePage):
     def ensure_disable_member_google_extension_pages_disabled(self) -> bool:
         """Return True when this method changed the setting."""
         return self.ensure_checkbox_disabled("禁止成员访问谷歌扩展商店和扩展设置页面")
+
+    def extension_tamper_protection_state(self) -> dict[str, bool]:
+        return {"enabled": self.extension_tamper_protection_enabled()}
+
+    def extension_tamper_protection_enabled(self) -> bool:
+        label_text = self._resolve_visible_checkbox_label(self.EXTENSION_TAMPER_PROTECTION_LABEL)
+        return self.checkbox_checked(label_text)
+
+    def ensure_extension_tamper_protection_enabled(self) -> bool:
+        """Enable 浏览器设置 → 开启扩展加密并防止篡改 through its confirmation dialog."""
+        return self._set_extension_tamper_protection_enabled(True)
+
+    def ensure_extension_tamper_protection_disabled(self) -> bool:
+        """Disable 浏览器设置 → 开启扩展加密并防止篡改 through its confirmation dialog."""
+        return self._set_extension_tamper_protection_enabled(False)
+
+    def restore_extension_tamper_protection_state(self, state: object) -> None:
+        if not isinstance(state, dict) or "enabled" not in state:
+            return
+        self._set_extension_tamper_protection_enabled(bool(state.get("enabled")))
+
+    def _set_extension_tamper_protection_enabled(self, expected: bool) -> bool:
+        label_text = self._resolve_visible_checkbox_label(self.EXTENSION_TAMPER_PROTECTION_LABEL)
+        self._wait_for_checkbox(label_text)
+        before_states = self._wait_checkbox_states_stable()
+        if self.checkbox_checked(label_text) is expected:
+            return False
+
+        self.cdp.click_element_by_script(self._checkbox_script(label_text))
+        self._wait_operation_prompt_visible()
+        self.cdp.click_element_by_script(
+            self._active_dialog_button_script("确定开启" if expected else "确定关闭")
+        )
+        self._wait_for_overlay_closed()
+        self._wait_checkbox_checked(label_text, expected)
+        after_states = self.checkbox_states()
+        self._assert_extension_tamper_protection_checkbox_changes(label_text, before_states, after_states, expected)
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        self._wait_save_finished()
+        self.open(force_reentry=True)
+        self._wait_for_checkbox(label_text)
+        self._wait_checkbox_checked(label_text, expected)
+        return True
+
+    def _assert_extension_tamper_protection_checkbox_changes(
+        self,
+        label_text: str,
+        before_states: dict[str, bool],
+        after_states: dict[str, bool],
+        expected: bool,
+    ) -> None:
+        if self.checkbox_checked(label_text) is not expected:
+            raise AssertionError(
+                "extension tamper protection checkbox did not reach expected state before save: "
+                f"label={label_text}, expected={expected}"
+            )
+
+        allowed_label_fragments = {label_text, self.EXTENSION_TAMPER_PROTECTION_LABEL}
+        for cascade_label in self.EXTENSION_TAMPER_PROTECTION_CASCADE_LABELS:
+            for candidate in self._label_candidates(cascade_label):
+                allowed_label_fragments.add(candidate)
+
+        changed = {
+            name: (before_states.get(name), after_states.get(name))
+            for name in sorted(set(before_states) & set(after_states))
+            if before_states.get(name) != after_states.get(name)
+        }
+        unexpected = {
+            name: value
+            for name, value in changed.items()
+            if not any(fragment and fragment in name for fragment in allowed_label_fragments)
+        }
+        if unexpected:
+            raise AssertionError(
+                "unexpected checkbox changes when toggling extension tamper protection: "
+                f"unexpected={unexpected}, allowed_fragments={sorted(allowed_label_fragments)}"
+            )
 
     def ensure_cookie_data_sync_enabled(self) -> bool:
         """Enable and persist only the Cookie item under 数据设置 → 数据同步."""
@@ -1672,6 +1758,41 @@ class GlobalSettingsPage(BasePage):
             time.sleep(0.3)
         raise TimeoutError("overlay did not close")
 
+    def _wait_operation_prompt_visible(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_text = ""
+        while time.time() < deadline:
+            last_text = str(
+                self.cdp.evaluate(
+                    """
+                    () => {
+                        const visible = (el) => {
+                            const style = window.getComputedStyle(el);
+                            const rect = el.getBoundingClientRect();
+                            return style.display !== "none"
+                                && style.visibility !== "hidden"
+                                && rect.width > 0
+                                && rect.height > 0;
+                        };
+                        const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                        return Array.from(document.querySelectorAll(__DIALOG_OR_MESSAGE_BOX_SELECTOR__))
+                            .filter(visible)
+                            .map((overlay) => clean(overlay.innerText || overlay.textContent))
+                            .join("\\n");
+                    }
+                    """.replace(
+                        "__DIALOG_OR_MESSAGE_BOX_SELECTOR__",
+                        repr(self.locator("dialog_or_message_box")),
+                    )
+                )
+                or ""
+            )
+            if "操作提示" in last_text:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"操作提示 dialog did not appear: last_text={last_text}")
+
     def _wait_for_checkbox(self, label_text: str, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
         deadline = time.time() + timeout_seconds
@@ -2766,9 +2887,25 @@ class GlobalSettingsPage(BasePage):
                     () => {
                         const closeButtonSelector = __CLOSE_BUTTON_SELECTOR__;
                         const visible = (el) => {
+                            const style = window.getComputedStyle(el);
                             const rect = el.getBoundingClientRect();
-                            return rect.width > 0 && rect.height > 0;
+                            return style.display !== "none"
+                                && style.visibility !== "hidden"
+                                && rect.width > 0
+                                && rect.height > 0;
                         };
+                        const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                        const overlays = Array.from(document.querySelectorAll(".el-drawer, .el-dialog, .el-message-box"))
+                            .filter(visible);
+                        for (const overlay of overlays.reverse()) {
+                            const cancel = Array.from(overlay.querySelectorAll("button"))
+                                .filter(visible)
+                                .find((button) => clean(button.innerText || button.textContent) === "取消");
+                            if (cancel) {
+                                cancel.click();
+                                return true;
+                            }
+                        }
                         const button = Array.from(document.querySelectorAll(closeButtonSelector)).find(visible);
                         if (button) {
                             button.click();

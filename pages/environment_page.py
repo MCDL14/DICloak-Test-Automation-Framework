@@ -1841,6 +1841,25 @@ class EnvironmentPage(BasePage):
         self.cdp.click_element_by_script(self._forbidden_open_environment_dialog_close_button_script())
         self._wait_for_overlay_closed()
 
+    def open_environment_failure_dialog_visible(self) -> bool:
+        return bool(self.cdp.evaluate(self._open_environment_failure_dialog_visible_script()))
+
+    def wait_open_environment_failure_dialog(self, timeout_seconds: int | None = None) -> bool:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.open_environment_failure_dialog_visible():
+                return True
+            time.sleep(0.2)
+        return False
+
+    def open_environment_failure_dialog_text(self) -> str:
+        return str(self.cdp.evaluate(self._open_environment_failure_dialog_text_script()) or "").strip()
+
+    def close_open_environment_failure_dialog(self) -> None:
+        self.cdp.click_element_by_script(self._open_environment_failure_dialog_close_button_script())
+        self._wait_for_overlay_closed()
+
     def select_environments(self, names: list[str]) -> None:
         self.clear_selected_environments()
         for name in names:
@@ -5726,6 +5745,69 @@ class EnvironmentPage(BasePage):
                 const closeButton = Array.from(overlay.querySelectorAll("button"))
                     .find((button) => visible(button) && (button.innerText || button.textContent || "").trim() === "关闭");
                 if (closeButton) return closeButton;
+                const headerClose = overlay.querySelector(".el-message-box__headerbtn, .el-dialog__headerbtn, button[aria-label='Close']");
+                if (headerClose && visible(headerClose)) return headerClose;
+            }
+            return null;
+        }
+        """
+
+    def _open_environment_failure_dialog_visible_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            return Array.from(document.querySelectorAll(".el-message-box, .el-dialog"))
+                .some((overlay) => visible(overlay) && clean(overlay.innerText || overlay.textContent).includes("打开环境失败"));
+        }
+        """
+
+    def _open_environment_failure_dialog_text_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const overlays = Array.from(document.querySelectorAll(".el-message-box, .el-dialog"))
+                .filter((overlay) => visible(overlay) && clean(overlay.innerText || overlay.textContent).includes("打开环境失败"));
+            return overlays.length ? clean(overlays[overlays.length - 1].innerText || overlays[overlays.length - 1].textContent) : "";
+        }
+        """
+
+    def _open_environment_failure_dialog_close_button_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const overlays = Array.from(document.querySelectorAll(".el-message-box, .el-dialog"))
+                .filter((overlay) => visible(overlay) && clean(overlay.innerText || overlay.textContent).includes("打开环境失败"));
+            for (const overlay of overlays.reverse()) {
+                const buttons = Array.from(overlay.querySelectorAll("button")).filter(visible);
+                const preferred = buttons.find((button) => {
+                    const text = clean(button.innerText || button.textContent);
+                    return text === "确定" || text === "确认" || text === "关闭";
+                });
+                if (preferred) return preferred;
                 const headerClose = overlay.querySelector(".el-message-box__headerbtn, .el-dialog__headerbtn, button[aria-label='Close']");
                 if (headerClose && visible(headerClose)) return headerClose;
             }

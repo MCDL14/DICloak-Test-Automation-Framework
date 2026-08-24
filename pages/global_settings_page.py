@@ -28,6 +28,7 @@ class GlobalSettingsPage(BasePage):
     CLEAR_LOCAL_CACHE_EVERY_OPEN_TEXT = "每次打开环境时都清除"
     CLEAR_LOCAL_CACHE_SYNC_CLOUD_TEXT = "清除后，再同步云端数据"
     EXTENSION_TAMPER_PROTECTION_LABEL = "开启扩展加密并防止篡改"
+    PROXY_CHECK_FAILURE_BLOCK_OPEN_LABEL = "代理检测失败时，不打开环境"
     DISABLE_DEVTOOLS_LABELS = ("禁止打开浏览器开发者工具", "禁止打开浏览器开发者工具界面")
     EXTENSION_TAMPER_PROTECTION_CASCADE_LABELS = (
         DISABLE_DEVTOOLS_LABELS,
@@ -252,6 +253,35 @@ class GlobalSettingsPage(BasePage):
     def ensure_disable_member_google_extension_pages_disabled(self) -> bool:
         """Return True when this method changed the setting."""
         return self.ensure_checkbox_disabled("禁止成员访问谷歌扩展商店和扩展设置页面")
+
+    def ensure_proxy_check_failure_block_open_enabled(self) -> bool:
+        """Return True when this method changed the proxy failure blocking setting."""
+        return self._set_proxy_check_failure_block_open_enabled(True)
+
+    def ensure_proxy_check_failure_block_open_disabled(self) -> bool:
+        """Return True when this method changed the proxy failure blocking setting."""
+        return self._set_proxy_check_failure_block_open_enabled(False)
+
+    def proxy_check_failure_block_open_enabled(self) -> bool:
+        label_text = self._resolve_visible_checkbox_label(self.PROXY_CHECK_FAILURE_BLOCK_OPEN_LABEL)
+        return self.checkbox_checked(label_text)
+
+    def _set_proxy_check_failure_block_open_enabled(self, expected: bool) -> bool:
+        label_text = self._resolve_visible_checkbox_label(self.PROXY_CHECK_FAILURE_BLOCK_OPEN_LABEL)
+        self._wait_for_checkbox(label_text)
+        if self.checkbox_checked(label_text) is expected:
+            return False
+
+        self.cdp.click_element_by_script(self._checkbox_script(label_text))
+        self._wait_checkbox_checked(label_text, expected)
+        self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+        save_success = self._wait_save_finished()
+        if not save_success:
+            self.open(force_reentry=True)
+            self._wait_for_checkbox(label_text)
+        self._wait_checkbox_states_stable()
+        self._wait_checkbox_checked(label_text, expected)
+        return True
 
     def extension_tamper_protection_state(self) -> dict[str, bool]:
         return {"enabled": self.extension_tamper_protection_enabled()}

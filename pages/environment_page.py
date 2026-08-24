@@ -1861,6 +1861,21 @@ class EnvironmentPage(BasePage):
     def open_environment_failure_dialog_text(self) -> str:
         return str(self.cdp.evaluate(self._open_environment_failure_dialog_text_script()) or "").strip()
 
+    def wait_open_environment_failure_dialog_text_contains(
+        self,
+        expected_text: str,
+        timeout_seconds: int | None = None,
+    ) -> str:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_text = ""
+        while time.time() < deadline:
+            last_text = self.open_environment_failure_dialog_text()
+            if expected_text in last_text:
+                return last_text
+            time.sleep(0.2)
+        return last_text
+
     def close_open_environment_failure_dialog(self) -> None:
         self.cdp.click_element_by_script(self._open_environment_failure_dialog_close_button_script())
         self._wait_for_overlay_closed()

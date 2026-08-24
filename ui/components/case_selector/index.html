@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Source Sans 3", "Microsoft YaHei", sans-serif;
+      color: #0f172a;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: transparent; }
+    #root { display: grid; gap: 9px; }
+    .module { min-width: 0; }
+    .card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      min-height: 72px;
+      padding: 10px 12px;
+      border: 1px solid #d5dde8;
+      border-radius: 6px;
+      background: #f7faff;
+      cursor: pointer;
+      transition: border-color 120ms ease, background-color 120ms ease;
+    }
+    .module.expanded .card { border-color: #078f9a; background: #dffafa; }
+    .card:focus-visible { outline: 2px solid #078f9a; outline-offset: 2px; }
+    .main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 170px;
+      align-items: center;
+      gap: 16px;
+      min-width: 0;
+    }
+    .copy { min-width: 0; }
+    .title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+    .state {
+      width: 13px;
+      height: 13px;
+      flex: 0 0 auto;
+      border: 1.5px solid #0f172a;
+      border-radius: 50%;
+      background: transparent;
+    }
+    .module.expanded .state {
+      border-color: #078f9a;
+      background: #13a1a8;
+      box-shadow: inset 0 0 0 3px #dffafa;
+    }
+    .description {
+      overflow: hidden;
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.35;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .count { color: #334155; font-size: 13px; line-height: 1.25; white-space: nowrap; }
+    .progress { height: 5px; margin-top: 8px; overflow: hidden; border-radius: 999px; background: #e7edf5; }
+    .progress > span { display: block; height: 100%; border-radius: inherit; background: #13a1a8; }
+    .actions { display: flex; align-items: center; gap: 8px; }
+    button {
+      min-width: 54px;
+      min-height: 32px;
+      padding: 4px 10px;
+      border: 1px solid #c9d3e1;
+      border-radius: 6px;
+      background: #fff;
+      color: #0f172a;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover { border-color: #078f9a; background: #f8ffff; }
+    button:focus-visible { outline: 2px solid #078f9a; outline-offset: 1px; }
+    .cases {
+      display: none;
+      padding: 9px 12px 5px 12px;
+    }
+    .module.expanded .cases { display: grid; gap: 8px; }
+    .filter-note { margin-bottom: 2px; color: #64748b; font-size: 12px; }
+    .case {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      min-width: 0;
+      color: #172033;
+      font-size: 13px;
+      line-height: 1.35;
+      cursor: pointer;
+    }
+    .case input { width: 16px; height: 16px; margin: 1px 0 0; accent-color: #13a1a8; cursor: pointer; }
+    .case span { min-width: 0; overflow-wrap: anywhere; }
+    @media (max-width: 760px) {
+      .card { grid-template-columns: 1fr; }
+      .main { grid-template-columns: 1fr; }
+      .actions { justify-content: flex-end; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    const root = document.getElementById("root");
+    const expandedModules = new Set();
+    let currentArgs = { modules: [], selected_ids: [] };
+    let expandedStateInitialized = false;
+
+    function post(type, payload = {}) {
+      window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
+    }
+
+    function resizeFrame() {
+      requestAnimationFrame(() => {
+        const contentHeight = Math.ceil(root.getBoundingClientRect().height);
+        post("streamlit:setFrameHeight", { height: Math.max(contentHeight, 1) });
+      });
+    }
+
+    function emitSelection(selectedIds) {
+      post("streamlit:setComponentValue", {
+        dataType: "json",
+        value: {
+          event_id: `${Date.now()}-${Math.random()}`,
+          selected_ids: Array.from(selectedIds),
+          expanded_modules: Array.from(expandedModules),
+        },
+      });
+    }
+
+    function element(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function render(args) {
+      currentArgs = args || currentArgs;
+      if (!expandedStateInitialized) {
+        const initialExpandedModule = (currentArgs.expanded_modules || [])[0];
+        if (initialExpandedModule) expandedModules.add(initialExpandedModule);
+        expandedStateInitialized = true;
+      }
+      const selectedIds = new Set(currentArgs.selected_ids || []);
+      root.replaceChildren();
+
+      for (const moduleData of currentArgs.modules || []) {
+        const moduleNode = element("section", "module");
+        moduleNode.dataset.module = moduleData.name;
+        if (expandedModules.has(moduleData.name)) moduleNode.classList.add("expanded");
+
+        const card = element("div", "card");
+        card.tabIndex = 0;
+        card.setAttribute("role", "button");
+        card.setAttribute("aria-expanded", String(expandedModules.has(moduleData.name)));
+        card.setAttribute("aria-label", `展开或收起${moduleData.name}用例`);
+
+        const main = element("div", "main");
+        const copy = element("div", "copy");
+        const title = element("div", "title");
+        title.append(element("span", "state"), element("span", "", moduleData.name));
+        copy.append(title, element("div", "description", moduleData.description || ""));
+
+        const status = element("div", "status");
+        const selectedCount = moduleData.case_ids.filter((id) => selectedIds.has(id)).length;
+        status.append(element("div", "count", `已选 ${selectedCount} / ${moduleData.total_count}`));
+        const progress = element("div", "progress");
+        const progressBar = element("span");
+        progressBar.style.width = `${moduleData.total_count ? Math.round(selectedCount / moduleData.total_count * 100) : 0}%`;
+        progress.append(progressBar);
+        status.append(progress);
+        main.append(copy, status);
+
+        const actions = element("div", "actions");
+        const selectButton = element("button", "", "全选");
+        const clearButton = element("button", "", "清空");
+        selectButton.type = clearButton.type = "button";
+        selectButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          moduleData.case_ids.forEach((id) => selectedIds.add(id));
+          emitSelection(selectedIds);
+        });
+        clearButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          moduleData.case_ids.forEach((id) => selectedIds.delete(id));
+          emitSelection(selectedIds);
+        });
+        actions.append(selectButton, clearButton);
+        card.append(main, actions);
+
+        const cases = element("div", "cases");
+        if (moduleData.visible_count !== moduleData.total_count) {
+          cases.append(element("div", "filter-note", `当前筛选显示 ${moduleData.visible_count} 条`));
+        }
+        for (const caseData of moduleData.cases) {
+          const label = element("label", "case");
+          const checkbox = element("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = selectedIds.has(caseData.id);
+          checkbox.addEventListener("change", () => {
+            if (checkbox.checked) selectedIds.add(caseData.id);
+            else selectedIds.delete(caseData.id);
+            emitSelection(selectedIds);
+          });
+          label.append(checkbox, element("span", "", caseData.name));
+          cases.append(label);
+        }
+
+        const toggle = () => {
+          const shouldExpand = !expandedModules.has(moduleData.name);
+          expandedModules.clear();
+          for (const openModule of root.querySelectorAll(".module.expanded")) {
+            openModule.classList.remove("expanded");
+            openModule.querySelector(".card")?.setAttribute("aria-expanded", "false");
+          }
+          if (shouldExpand) {
+            expandedModules.add(moduleData.name);
+            moduleNode.classList.add("expanded");
+            card.setAttribute("aria-expanded", "true");
+          }
+          resizeFrame();
+        };
+        card.addEventListener("click", toggle);
+        card.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+          }
+        });
+
+        moduleNode.append(card, cases);
+        root.append(moduleNode);
+      }
+      resizeFrame();
+    }
+
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === "streamlit:render") render(event.data.args || {});
+    });
+    post("streamlit:componentReady", { apiVersion: 1 });
+  </script>
+</body>
+</html>

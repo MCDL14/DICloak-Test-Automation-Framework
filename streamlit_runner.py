@@ -31,6 +31,7 @@ from typing import Any, Callable
 import yaml
 
 from core.app import AppManager
+from core.case_display import case_display_name
 from core.case_module import get_test_case_module
 from core.config import ConfigError, load_config
 from core.remote_runner import (
@@ -227,6 +228,7 @@ def discover_cases() -> list[dict[str, str]]:
         module:  业务模块名（如 成员管理）
         class_name: 测试类名
         method_name: 测试方法名
+        display_name: 中文用例名
     """
     config = _build_config()
     logger = _discovery_logger()
@@ -237,11 +239,14 @@ def discover_cases() -> list[dict[str, str]]:
     for test in runner._iter_tests(suite):
         tid = test.id()
         parts = tid.split(".")
+        class_name = parts[-2] if len(parts) >= 2 else ""
+        method_name = parts[-1] if parts else ""
         cases.append({
             "id": tid,
             "module": get_test_case_module(test) or "未知",
-            "class_name": parts[-2] if len(parts) >= 2 else "",
-            "method_name": parts[-1] if parts else "",
+            "class_name": class_name,
+            "method_name": method_name,
+            "display_name": case_display_name(tid, class_name=class_name, method_name=method_name),
         })
     return cases
 

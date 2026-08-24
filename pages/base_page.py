@@ -5,6 +5,8 @@ from typing import Any
 
 import yaml
 
+from core.timing import phase_timing
+
 
 class LocatorError(RuntimeError):
     pass
@@ -41,6 +43,10 @@ class BasePage:
 
     def wait_visible(self, name: str) -> None:
         self.cdp.wait_for_selector(self.locator(name))
+
+    def phase_timing(self, phase: str, **fields: object):
+        cdp_driver = getattr(self, "cdp", None)
+        return phase_timing(getattr(cdp_driver, "logger", None), phase, **fields)
 
     def _load_locators(self) -> dict[str, Any]:
         if not self.locator_file:

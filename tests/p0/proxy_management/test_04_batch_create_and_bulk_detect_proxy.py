@@ -142,7 +142,7 @@ class TestBatchCreateAndBulkDetectProxy(unittest.TestCase):
         remark = "批量检测代理"
         expected_rows = [
             {
-                "type": "HTTP",
+                "type": "SOCKS5",
                 "host": "192.168.20.33",
                 "port": "7897",
                 "account": "--",
@@ -168,7 +168,7 @@ class TestBatchCreateAndBulkDetectProxy(unittest.TestCase):
         ]
         batch_text = "\n".join(
             [
-                "HTTP://192.168.20.33:7897{批量检测代理}",
+                "SOCKS5://192.168.20.33:7897{批量检测代理}",
                 "HTTP://127.0.0.1:7897{批量检测代理}",
                 f"HTTP://gate.nodemaven.com:8080:{nodemaven_account}:{nodemaven_password}{{批量检测代理}}",
             ]

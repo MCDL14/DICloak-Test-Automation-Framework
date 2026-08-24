@@ -137,30 +137,31 @@ class EnvironmentPage(BasePage):
         self._wait_for_environment_list_not_loading_with_refresh_retry()
 
     def open_list(self) -> None:
-        last_error: Exception | None = None
-        for _ in range(5):
-            self.dismiss_blocking_overlays()
-            try:
-                self.cdp.click_element_by_script(self._environment_management_menu_item_script(), timeout=3000)
-            except Exception as exc:
-                last_error = exc
+        with self.phase_timing("environment.open_list"):
+            last_error: Exception | None = None
+            for _ in range(5):
+                self.dismiss_blocking_overlays()
                 try:
-                    self._click_menu_item_by_text("环境管理")
-                except Exception:
-                    pass
+                    self.cdp.click_element_by_script(self._environment_management_menu_item_script(), timeout=3000)
+                except Exception as exc:
+                    last_error = exc
+                    try:
+                        self._click_menu_item_by_text("环境管理")
+                    except Exception:
+                        pass
+                    try:
+                        self._click_known_left_menu_position("环境管理")
+                    except Exception:
+                        pass
                 try:
-                    self._click_known_left_menu_position("环境管理")
-                except Exception:
-                    pass
-            try:
-                self._wait_for_environment_list(timeout_seconds=5)
-                self._wait_for_environment_list_not_loading_with_refresh_retry()
-                self.clear_selected_environments()
-                return
-            except Exception as exc:
-                last_error = exc
-                time.sleep(0.5)
-        raise TimeoutError(f"environment list did not appear after menu retry: {last_error}")
+                    self._wait_for_environment_list(timeout_seconds=5)
+                    self._wait_for_environment_list_not_loading_with_refresh_retry()
+                    self.clear_selected_environments()
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    time.sleep(0.5)
+            raise TimeoutError(f"environment list did not appear after menu retry: {last_error}")
 
     def create_environment(self, name: str) -> None:
         def open_drawer() -> None:
@@ -414,33 +415,34 @@ class EnvironmentPage(BasePage):
         )
 
     def _run_create_environment_drawer_flow(self, open_drawer, populate_drawer, *, context: str):
-        attempts = self.CREATE_ENVIRONMENT_DRAWER_REOPEN_RETRIES + 1
-        last_error: Exception | None = None
-        for attempt in range(1, attempts + 1):
-            self.dismiss_blocking_overlays()
-            open_drawer()
-            try:
-                self._wait_create_environment_default_group_selected(
-                    timeout_seconds=self.CREATE_ENVIRONMENT_DEFAULT_GROUP_SECONDS
-                )
-            except TimeoutError as exc:
-                last_error = exc
-                continue
+        with self.phase_timing("environment.create_environment_flow", context=context):
+            attempts = self.CREATE_ENVIRONMENT_DRAWER_REOPEN_RETRIES + 1
+            last_error: Exception | None = None
+            for attempt in range(1, attempts + 1):
+                self.dismiss_blocking_overlays()
+                open_drawer()
+                try:
+                    self._wait_create_environment_default_group_selected(
+                        timeout_seconds=self.CREATE_ENVIRONMENT_DEFAULT_GROUP_SECONDS
+                    )
+                except TimeoutError as exc:
+                    last_error = exc
+                    continue
 
-            result = populate_drawer()
-            try:
-                self._submit_active_create_environment_drawer(context)
-            except _CreateEnvironmentSubmitNotStarted as exc:
-                last_error = exc
-                continue
-            self._wait_for_environment_list_not_loading_with_refresh_retry()
-            return result
+                result = populate_drawer()
+                try:
+                    self._submit_active_create_environment_drawer(context)
+                except _CreateEnvironmentSubmitNotStarted as exc:
+                    last_error = exc
+                    continue
+                self._wait_for_environment_list_not_loading_with_refresh_retry()
+                return result
 
-        raise TimeoutError(
-            "create environment drawer did not become ready after "
-            f"{self.CREATE_ENVIRONMENT_DRAWER_REOPEN_RETRIES} reopen retries: context={context}; "
-            f"last_error={last_error}"
-        )
+            raise TimeoutError(
+                "create environment drawer did not become ready after "
+                f"{self.CREATE_ENVIRONMENT_DRAWER_REOPEN_RETRIES} reopen retries: context={context}; "
+                f"last_error={last_error}"
+            )
 
     def _wait_create_environment_default_group_selected(self, timeout_seconds: int) -> None:
         deadline = time.time() + timeout_seconds
@@ -456,32 +458,33 @@ class EnvironmentPage(BasePage):
         )
 
     def _submit_active_create_environment_drawer(self, context: str) -> None:
-        self._close_select_dropdowns()
-        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        state = self._wait_create_environment_submit_state(
-            timeout_seconds=self.CREATE_ENVIRONMENT_SUBMIT_STATE_SECONDS
-        )
-        if state == "closed":
-            return
-        if state == "loading":
-            self._wait_for_overlay_closed()
-            return
+        with self.phase_timing("environment.submit_create_environment", context=context):
+            self._close_select_dropdowns()
+            self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
+            state = self._wait_create_environment_submit_state(
+                timeout_seconds=self.CREATE_ENVIRONMENT_SUBMIT_STATE_SECONDS
+            )
+            if state == "closed":
+                return
+            if state == "loading":
+                self._wait_for_overlay_closed()
+                return
 
-        time.sleep(self.CREATE_ENVIRONMENT_SECOND_SUBMIT_DELAY_SECONDS)
-        self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
-        second_state = self._wait_create_environment_submit_state(
-            timeout_seconds=self.CREATE_ENVIRONMENT_SUBMIT_STATE_SECONDS
-        )
-        if second_state == "closed":
-            return
-        if second_state == "loading":
-            self._wait_for_overlay_closed()
-            return
+            time.sleep(self.CREATE_ENVIRONMENT_SECOND_SUBMIT_DELAY_SECONDS)
+            self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
+            second_state = self._wait_create_environment_submit_state(
+                timeout_seconds=self.CREATE_ENVIRONMENT_SUBMIT_STATE_SECONDS
+            )
+            if second_state == "closed":
+                return
+            if second_state == "loading":
+                self._wait_for_overlay_closed()
+                return
 
-        raise _CreateEnvironmentSubmitNotStarted(
-            "create environment drawer submit did not start loading after second confirm click and drawer stayed open: "
-            f"context={context}; button_state={self._active_overlay_button_state('确定')}"
-        )
+            raise _CreateEnvironmentSubmitNotStarted(
+                "create environment drawer submit did not start loading after second confirm click and drawer stayed open: "
+                f"context={context}; button_state={self._active_overlay_button_state('确定')}"
+            )
 
     def _wait_create_environment_submit_state(self, timeout_seconds: int) -> str:
         deadline = time.time() + timeout_seconds
@@ -1135,10 +1138,11 @@ class EnvironmentPage(BasePage):
         self.click_environment_action(name, "关闭")
 
     def close_environment_and_confirm(self, name: str, timeout_seconds: int) -> None:
-        self.click_environment_action(name, "关闭")
-        if self._wait_active_overlay_visible(timeout_seconds=10):
-            self.confirm_secondary_dialog(preferred_texts=("确定", "确认"))
-        self.wait_environment_action_text(name, "打开", timeout_seconds=timeout_seconds)
+        with self.phase_timing("environment.close_environment", name=name, timeout_seconds=timeout_seconds):
+            self.click_environment_action(name, "关闭")
+            if self._wait_active_overlay_visible(timeout_seconds=10):
+                self.confirm_secondary_dialog(preferred_texts=("确定", "确认"))
+            self.wait_environment_action_text(name, "打开", timeout_seconds=timeout_seconds)
 
     def delete_environment(self, name: str) -> None:
         self.search_environment(name)
@@ -1146,17 +1150,18 @@ class EnvironmentPage(BasePage):
         self.wait_environment_deleted(name)
 
     def delete_environment_from_current_list(self, name: str) -> None:
-        for _ in range(3):
-            self.click_environment_more(name)
-            self.click_visible_dropdown_item("删除")
-            if self._wait_delete_environment_secondary_dialog_visible(name, timeout_seconds=2):
-                break
-            self.cdp.press("Escape")
-            time.sleep(0.3)
-        else:
-            raise TimeoutError(f"delete environment secondary dialog did not appear: {name}")
-        self.confirm_secondary_dialog(preferred_texts=("确定删除", "确定", "确认"))
-        self.wait_environment_absent_in_current_list(name)
+        with self.phase_timing("environment.delete_environment", name=name):
+            for _ in range(3):
+                self.click_environment_more(name)
+                self.click_visible_dropdown_item("删除")
+                if self._wait_delete_environment_secondary_dialog_visible(name, timeout_seconds=2):
+                    break
+                self.cdp.press("Escape")
+                time.sleep(0.3)
+            else:
+                raise TimeoutError(f"delete environment secondary dialog did not appear: {name}")
+            self.confirm_secondary_dialog(preferred_texts=("确定删除", "确定", "确认"))
+            self.wait_environment_absent_in_current_list(name)
 
     def delete_environments_by_prefix_from_current_list(self, name_prefix: str) -> None:
         # 批量删除当前筛选结果中指定前缀的环境：勾选行 -> 顶部“更多操作” -> “删除环境” -> 确定。
@@ -2002,13 +2007,14 @@ class EnvironmentPage(BasePage):
 
     def open_environment_and_capture_pid(self, name: str, timeout_seconds: int | None = None) -> int:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "environment_open_seconds", 90)
-        request = self.cdp.click_element_by_script_and_wait_for_request(
-            script=self._environment_action_element_script(name, "打开"),
-            url_contains="/open_env",
-            method="PATCH",
-            timeout=timeout_seconds * 1000,
-        )
-        return self._pid_from_open_env_request(request)
+        with self.phase_timing("environment.open_environment", name=name, timeout_seconds=timeout_seconds):
+            request = self.cdp.click_element_by_script_and_wait_for_request(
+                script=self._environment_action_element_script(name, "打开"),
+                url_contains="/open_env",
+                method="PATCH",
+                timeout=timeout_seconds * 1000,
+            )
+            return self._pid_from_open_env_request(request)
 
     def edit_environment_name_by_serial(self, serial: str, new_name: str) -> None:
         self.click_environment_more_by_serial(serial)
@@ -5882,12 +5888,18 @@ class EnvironmentPage(BasePage):
         default_key = "environment_open_seconds" if action_text == "关闭" else "environment_close_seconds"
         default_value = 90 if action_text in {"打开", "关闭"} else 60
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, default_key, default_value)
-        deadline = time.time() + timeout_seconds
-        while time.time() < deadline:
-            if self.environment_action_text(name) == action_text:
-                return
-            time.sleep(0.5)
-        raise TimeoutError(f"environment action text did not become {action_text}: {name}")
+        with self.phase_timing(
+            "environment.wait_action_text",
+            name=name,
+            action_text=action_text,
+            timeout_seconds=timeout_seconds,
+        ):
+            deadline = time.time() + timeout_seconds
+            while time.time() < deadline:
+                if self.environment_action_text(name) == action_text:
+                    return
+                time.sleep(0.5)
+            raise TimeoutError(f"environment action text did not become {action_text}: {name}")
 
     def _environment_row(self, name: str) -> dict:
         for row in self._environment_rows():
@@ -6106,7 +6118,9 @@ class EnvironmentPage(BasePage):
             tags.append(text)
         return self._unique_non_empty(tags)
 
-    def _environment_rows(self) -> list[dict]:
+    def _environment_rows(self, *, wait_for_loading: bool = True) -> list[dict]:
+        if wait_for_loading:
+            self._wait_before_read_environment_list()
         # Element Plus 表格列可能动态隐藏/冻结；这里读取可见 tr/td，并约定 cells[1] 是环境名称列。
         script = """
         () => {
@@ -6148,7 +6162,7 @@ class EnvironmentPage(BasePage):
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             try:
-                if self._environment_list_shell_visible() or self._environment_rows():
+                if self._environment_list_shell_visible() or self._environment_rows(wait_for_loading=False):
                     return
             except Exception:
                 pass
@@ -6171,6 +6185,18 @@ class EnvironmentPage(BasePage):
                 return
             time.sleep(0.3)
         raise TimeoutError("environment table is still loading")
+
+    def _wait_before_read_environment_list(self, timeout_seconds: int | None = None) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            try:
+                if not self._environment_table_loading_visible():
+                    return
+            except Exception:
+                return
+            time.sleep(0.2)
+        raise TimeoutError("environment table is still loading before reading list content")
 
     def _wait_for_environment_list_not_loading_with_refresh_retry(
         self,

@@ -45,6 +45,11 @@ from core.account_groups import (
     runtime_account_profile,
 )
 from core.config import ConfigError, load_config
+from core.ui_log_filter import (
+    failure_detail_text as _failure_detail_text,
+    unsuccessful_log_text as _unsuccessful_log_text,
+)
+from core.ui_progress import case_progress_snapshot
 from streamlit_runner import (
     check_remote_host,
     check_remote_code,
@@ -65,7 +70,7 @@ from streamlit_runner import (
 )
 
 _LOG_IDLE_WARNING_SECONDS = 300
-_LOG_DISPLAY_LINES = 200
+_LOG_DISPLAY_LINES = 50
 _LOG_DISPLAY_HEIGHT = 420
 _RESULT_SUMMARY_RE = re.compile(
     r"运行完成 → 总计=(\d+) 通过=(\d+) 失败=(\d+) 错误=(\d+) 跳过=(\d+) flaky=(\d+) 通过率=([\d.]+)%"
@@ -77,16 +82,6 @@ _CLI_SUMMARY_RE = re.compile(
 _REMOTE_EXIT_RE = re.compile(r"远程(?:执行完成|健康检查结束) → 节点=([^\s]+) 退出码=(\d+) 耗时=([\d.]+)s")
 _REMOTE_HEALTH_DONE_RE = re.compile(r"远程健康检查完成 → 失败=(\d+)")
 _REMOTE_ARTIFACT_RE = re.compile(r"远程产物归档 → 文件数=(\d+) 本地目录=(.+)")
-_CASE_ERROR_BLOCK_RE = re.compile(
-    r"(\d{4}-\d{2}-\d{2}.*?CASE (?:FAIL|ERROR).*?)(?="
-    r"\n\d{4}-\d{2}-\d{2}.*?CASE START|\n\d{4}-\d{2}-\d{2}.*?Final test summary:|"
-    r"\n远程执行完成|\Z)",
-    re.DOTALL,
-)
-_UNITTEST_ERROR_BLOCK_RE = re.compile(
-    r"(=+\n(?:ERROR|FAIL): .*?)(?=\n-+\nRan \d+ test|\Z)",
-    re.DOTALL,
-)
 
 _REMOTE_RUN_TYPE_OPTIONS = ("远程预检", "执行用例")
 _ACCOUNT_GROUPS_PATH = _PROJECT_ROOT / "config" / "account_groups.yaml"
@@ -213,7 +208,7 @@ def _case_matches_keyword(case: dict, keyword: str) -> bool:
         return True
     haystack = " ".join(
         str(case.get(field, ""))
-        for field in ("id", "module", "class_name", "method_name")
+        for field in ("id", "module", "display_name", "class_name", "method_name")
     ).lower()
     return keyword.lower() in haystack
 
@@ -295,26 +290,68 @@ def _render_metrics(summary: tuple[int, int, int, int, int, int, str]) -> None:
     cols[5].metric("通过率", f"{rate}%")
 
 
-def _failure_detail_text(log_text: str) -> str:
-    blocks: list[str] = []
-    for pattern in (_CASE_ERROR_BLOCK_RE, _UNITTEST_ERROR_BLOCK_RE):
-        for match in pattern.finditer(log_text):
-            block = match.group(1).strip()
-            if block and block not in blocks:
-                blocks.append(block)
+def _render_case_progress(
+    container,
+    *,
+    selected_cases: list[dict],
+    log_lines: list[str],
+    platforms: list[str],
+    default_platform: str,
+) -> None:
+    snapshot = case_progress_snapshot(
+        selected_cases,
+        log_lines,
+        platforms=platforms,
+        default_platform=default_platform,
+    )
+    with container.container():
+        st.markdown("**执行进度**")
+        total = int(snapshot["total"])
+        finished = int(snapshot["finished"])
+        st.progress(
+            float(snapshot["progress"]),
+            text=f"已完成 {finished}/{total} 条",
+        )
+        cols = st.columns(5)
+        cols[0].metric("总计", total)
+        cols[1].metric("已完成", finished)
+        cols[2].metric("运行中", int(snapshot["active"]))
+        cols[3].metric("待执行", int(snapshot["pending"]))
+        cols[4].metric("失败/错误", int(snapshot["problem"]))
+        rows = snapshot["rows"]
+        if rows:
+            display_rows = [
+                {key: row.get(key, "") for key in ("执行端", "序号", "状态", "模块", "用例")}
+                for row in rows
+            ]
+            st.dataframe(
+                display_rows,
+                hide_index=True,
+                use_container_width=True,
+                height=320,
+            )
 
-    if blocks:
-        return "\n\n".join(blocks)
 
-    focused_lines = [
-        line
-        for line in log_text.splitlines()
-        if "CASE FAIL" in line
+def _case_progress_log_relevant(line: str) -> bool:
+    return (
+        "CASE START" in line
+        or "CASE PASS" in line
+        or "CASE FAIL" in line
         or "CASE ERROR" in line
-        or line.startswith("FAIL: ")
-        or line.startswith("ERROR: ")
-    ]
-    return "\n".join(focused_lines)
+        or "CASE SKIP" in line
+        or "Retrying " in line
+        or "Test passed after retry:" in line
+    )
+
+
+def _progress_platforms_for_run(execution_mode: str, remote_scope: str) -> tuple[list[str], str, bool]:
+    if execution_mode == "远程节点" and remote_scope == "precheck":
+        return [], "远程", False
+    if execution_mode == "本机 + Mac 远程":
+        return ["Windows", "macOS"], "Windows", True
+    if execution_mode == "远程节点":
+        return ["远程"], "远程", True
+    return ["本机"], "本机", True
 
 
 def _remote_log_summary(log_lines: list[str]) -> dict[str, object]:
@@ -504,6 +541,8 @@ selected_ids: list[str] = [
     for case in cases
     if bool(st.session_state.get(_case_key(case["id"]), True))
 ]
+case_by_id = {case["id"]: case for case in cases}
+selected_cases: list[dict] = [case_by_id[case_id] for case_id in selected_ids if case_id in case_by_id]
 selected_count = len(selected_ids)
 (
     require_internal_account,
@@ -552,7 +591,7 @@ with st.sidebar:
     )
     case_keyword = st.text_input(
         "搜索显示",
-        placeholder="输入模块、类名、方法名或 test_id",
+        placeholder="输入模块、中文名、类名、方法名或 test_id",
         help="只缩小下方列表显示；不会清空已勾选状态，也不会改变本机执行范围。",
     ).strip()
     hidden_module_count = len(set(module_names) - set(show_modules))
@@ -977,9 +1016,9 @@ else:
             for c in mod_cases:
                 key = _case_key(c["id"])
                 st.checkbox(
-                    f"`{c['class_name']}.{c['method_name']}`",
+                    str(c.get("display_name") or f"{c['class_name']}.{c['method_name']}"),
                     key=key,
-                    help=c["id"],
+                    help=f"原始用例：{c['id']}",
                 )
 
     if visible_case_count == 0:
@@ -1040,9 +1079,15 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
     # ── 占位容器（运行中动态更新） ──
     log_placeholder = st.empty()
     status_placeholder = st.empty()
+    progress_placeholder = st.empty()
 
     log_queue: queue.Queue = queue.Queue()
     stop_event = create_ui_stop_event()
+    progress_platforms, progress_default_platform, show_case_progress = _progress_platforms_for_run(
+        execution_mode,
+        remote_scope,
+    )
+    show_case_progress = show_case_progress and bool(selected_cases) and bool(run_clicked)
 
     if execution_mode == "远程节点" and remote_cache_enabled and remote_connection_ready:
         try:
@@ -1151,6 +1196,14 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
     log_lines: list[str] = []
     last_log_time = time.time()
     idle_warning_shown = False
+    if show_case_progress:
+        _render_case_progress(
+            progress_placeholder,
+            selected_cases=selected_cases,
+            log_lines=log_lines,
+            platforms=progress_platforms,
+            default_platform=progress_default_platform,
+        )
     if health_clicked:
         status_placeholder.info("⏳ 正在检查远程节点...")
     elif code_status_clicked:
@@ -1175,6 +1228,14 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
                 # 只保留最近日志行避免 UI 卡顿
                 display = "\n".join(log_lines[-_LOG_DISPLAY_LINES:])
                 log_placeholder.code(display, language="text", height=_LOG_DISPLAY_HEIGHT)
+                if show_case_progress and _case_progress_log_relevant(msg):
+                    _render_case_progress(
+                        progress_placeholder,
+                        selected_cases=selected_cases,
+                        log_lines=log_lines,
+                        platforms=progress_platforms,
+                        default_platform=progress_default_platform,
+                    )
             except queue.Empty:
                 _refresh_execution_status(task_status_container, thread=thread)
                 if not thread.is_alive():
@@ -1191,12 +1252,25 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
         if not received_sentinel and thread.is_alive():
             request_ui_task_stop(stop_event)
     _refresh_execution_status(task_status_container)
+    if show_case_progress:
+        _render_case_progress(
+            progress_placeholder,
+            selected_cases=selected_cases,
+            log_lines=log_lines,
+            platforms=progress_platforms,
+            default_platform=progress_default_platform,
+        )
 
     # ═══════════════════════════════════════════════════════════════
     # 结果解析与展示
     # ═══════════════════════════════════════════════════════════════
 
     full_text = "\n".join(log_lines)
+    log_placeholder.code(
+        _unsuccessful_log_text(full_text),
+        language="text",
+        height=_LOG_DISPLAY_HEIGHT,
+    )
 
     if health_clicked or code_status_clicked or code_sync_clicked or execution_mode in {"远程节点", "本机 + Mac 远程"}:
         _render_remote_result_summary(log_lines)

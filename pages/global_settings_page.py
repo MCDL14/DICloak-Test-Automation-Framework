@@ -13,6 +13,8 @@ class GlobalSettingsPage(BasePage):
     locator_file = "global_settings_locators.yaml"
     MINIMUM_CHECKED_CHECKBOXES = 3
     GLOBAL_SETTINGS_REENTRY_RETRIES = 2
+    SAVE_SUCCESS_MESSAGE = "保存成功"
+    SAVE_SUCCESS_MESSAGE_SECONDS = 10
     DATA_SYNC_COOKIE_LABEL = "Cookie"
     DATA_SYNC_LOCAL_STORAGE_LABEL = "Local Storage"
     DATA_SYNC_INDEXEDDB_LABEL = "IndexedDB"
@@ -53,6 +55,10 @@ class GlobalSettingsPage(BasePage):
 
     def open(self, *, force_reentry: bool = False) -> None:
         """Open a fully loaded global-settings page, retrying through Environment Management."""
+        with self.phase_timing("global_settings.open", force_reentry=force_reentry):
+            self._open(force_reentry=force_reentry)
+
+    def _open(self, *, force_reentry: bool = False) -> None:
         observations: list[dict[str, object]] = []
         total_attempts = self.GLOBAL_SETTINGS_REENTRY_RETRIES + 1
         for attempt_index in range(total_attempts):
@@ -93,40 +99,47 @@ class GlobalSettingsPage(BasePage):
 
     def capture_global_settings_snapshot(self) -> dict[str, object]:
         """Capture the global-setting fields that current P0 cases are allowed to mutate."""
-        self._wait_global_setting_states_stable()
-        return {
-            "schema_version": 1,
-            "simple_checkboxes": self._simple_checkbox_snapshot(),
-            "website_restriction": self.website_restriction_state(),
-            "packet_capture_blocking": self.packet_capture_blocking_state(),
-            "bookmark_setting": self.bookmark_setting_state(),
-            "environment_field_display_limit": self.environment_field_display_limit_state(),
-            "environment_list_pagination": self.environment_list_pagination_setting_state(),
-            "environment_list_sort": self.environment_list_sort_state(),
-            "data_sync": self.data_sync_one_way_state(),
-            "clear_local_cache": self.clear_local_cache_state(),
-            "extension_tamper_protection": self.extension_tamper_protection_state(),
-        }
+        with self.phase_timing("global_settings.capture_snapshot"):
+            self._wait_global_setting_states_stable()
+            return {
+                "schema_version": 1,
+                "simple_checkboxes": self._simple_checkbox_snapshot(),
+                "website_restriction": self.website_restriction_state(),
+                "packet_capture_blocking": self.packet_capture_blocking_state(),
+                "bookmark_setting": self.bookmark_setting_state(),
+                "environment_field_display_limit": self.environment_field_display_limit_state(),
+                "environment_list_pagination": self.environment_list_pagination_setting_state(),
+                "environment_list_sort": self.environment_list_sort_state(),
+                "data_sync": self.data_sync_one_way_state(),
+                "clear_local_cache": self.clear_local_cache_state(),
+                "extension_tamper_protection": self.extension_tamper_protection_state(),
+            }
 
     def restore_global_settings_snapshot(self, snapshot: dict[str, object]) -> None:
         """Restore a snapshot through the real global-settings UI and verify strong fields."""
         if not isinstance(snapshot, dict):
             raise TypeError(f"global settings snapshot must be a dict: {type(snapshot)!r}")
 
-        self.restore_extension_tamper_protection_state(snapshot.get("extension_tamper_protection", {}))
-        self._restore_simple_checkbox_snapshot(snapshot.get("simple_checkboxes", {}))
-        self.restore_website_restriction_state(snapshot.get("website_restriction", {}))
-        self.restore_packet_capture_blocking_state(snapshot.get("packet_capture_blocking", {}))
-        self.restore_bookmark_setting_state(snapshot.get("bookmark_setting", {}))
-        self.restore_environment_field_display_limit_state(snapshot.get("environment_field_display_limit", {}))
-        self.restore_environment_list_pagination_setting_state(snapshot.get("environment_list_pagination", {}))
-        self.restore_environment_list_sort_state(snapshot.get("environment_list_sort", {}))
-        self.restore_data_sync_one_way_state(snapshot.get("data_sync", {}))
-        self.restore_clear_local_cache_state(snapshot.get("clear_local_cache", {}))
+        with self.phase_timing("global_settings.restore_snapshot"):
+            current = self.capture_global_settings_snapshot()
+            if self._global_settings_snapshot_matches(snapshot, current):
+                self._log_noop_skip("global_settings.restore_snapshot")
+                return
 
-        self.open(force_reentry=True)
-        restored = self.capture_global_settings_snapshot()
-        self._assert_global_settings_snapshot_matches(snapshot, restored)
+            self.restore_extension_tamper_protection_state(snapshot.get("extension_tamper_protection", {}))
+            self._restore_simple_checkbox_snapshot(snapshot.get("simple_checkboxes", {}))
+            self.restore_website_restriction_state(snapshot.get("website_restriction", {}))
+            self.restore_packet_capture_blocking_state(snapshot.get("packet_capture_blocking", {}))
+            self.restore_bookmark_setting_state(snapshot.get("bookmark_setting", {}))
+            self.restore_environment_field_display_limit_state(snapshot.get("environment_field_display_limit", {}))
+            self.restore_environment_list_pagination_setting_state(snapshot.get("environment_list_pagination", {}))
+            self.restore_environment_list_sort_state(snapshot.get("environment_list_sort", {}))
+            self.restore_data_sync_one_way_state(snapshot.get("data_sync", {}))
+            self.restore_clear_local_cache_state(snapshot.get("clear_local_cache", {}))
+
+            self.open(force_reentry=True)
+            restored = self.capture_global_settings_snapshot()
+            self._assert_global_settings_snapshot_matches(snapshot, restored)
 
     def _simple_checkbox_snapshot(self) -> dict[str, bool]:
         states: dict[str, bool] = {}
@@ -149,13 +162,28 @@ class GlobalSettingsPage(BasePage):
         expected: dict[str, object],
         actual: dict[str, object],
     ) -> None:
+        if self._global_settings_snapshot_matches(expected, actual):
+            return
         expected_compare = self._strong_global_settings_snapshot(expected)
         actual_compare = self._strong_global_settings_snapshot(actual)
-        if expected_compare != actual_compare:
-            raise AssertionError(
-                "global settings snapshot restore mismatch: "
-                f"expected={expected_compare}, actual={actual_compare}"
-            )
+        raise AssertionError(
+            "global settings snapshot restore mismatch: "
+            f"expected={expected_compare}, actual={actual_compare}"
+        )
+
+    def _global_settings_snapshot_matches(
+        self,
+        expected: dict[str, object],
+        actual: dict[str, object],
+    ) -> bool:
+        expected_compare = self._strong_global_settings_snapshot(expected)
+        actual_compare = self._strong_global_settings_snapshot(actual)
+        return expected_compare == actual_compare
+
+    def _log_noop_skip(self, context: str) -> None:
+        logger = getattr(self.cdp, "logger", None)
+        if logger is not None:
+            logger.info("Skip no-op global settings save/restore: context=%s", context)
 
     def _strong_global_settings_snapshot(self, snapshot: dict[str, object]) -> dict[str, object]:
         strong = copy.deepcopy(snapshot)
@@ -262,10 +290,11 @@ class GlobalSettingsPage(BasePage):
         after_states = self.checkbox_states()
         self._assert_extension_tamper_protection_checkbox_changes(label_text, before_states, after_states, expected)
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
-        self.open(force_reentry=True)
-        self._wait_for_checkbox(label_text)
-        self._wait_checkbox_checked(label_text, expected)
+        save_success = self._wait_save_finished()
+        if not save_success:
+            self.open(force_reentry=True)
+            self._wait_for_checkbox(label_text)
+            self._wait_checkbox_checked(label_text, expected)
         return True
 
     def _assert_extension_tamper_protection_checkbox_changes(
@@ -314,12 +343,12 @@ class GlobalSettingsPage(BasePage):
         after_states = self.checkbox_states()
         self._assert_only_checkbox_changed("Cookie", before_states, after_states)
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
-
-        # Re-enter the page so the assertion reflects persisted server state, not only Vue local state.
-        self.open()
-        self._wait_for_cookie_data_sync()
-        self._wait_cookie_data_sync_enabled(True)
+        save_success = self._wait_save_finished()
+        if not save_success:
+            # Re-enter the page so the assertion reflects persisted server state, not only Vue local state.
+            self.open()
+            self._wait_for_cookie_data_sync()
+            self._wait_cookie_data_sync_enabled(True)
         return True
 
     def cookie_data_sync_enabled(self) -> bool:
@@ -340,11 +369,11 @@ class GlobalSettingsPage(BasePage):
         after_states = self.checkbox_states()
         self._assert_only_checkbox_changed("Cookie", before_states, after_states, expected_change=(True, False))
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
-
-        self.open()
-        self._wait_for_cookie_data_sync()
-        self._wait_cookie_data_sync_enabled(False)
+        save_success = self._wait_save_finished()
+        if not save_success:
+            self.open()
+            self._wait_for_cookie_data_sync()
+            self._wait_cookie_data_sync_enabled(False)
         return True
 
     def ensure_local_storage_data_sync_enabled(self) -> bool:
@@ -359,12 +388,12 @@ class GlobalSettingsPage(BasePage):
         after_states = self.checkbox_states()
         self._assert_only_checkbox_changed("Local Storage", before_states, after_states)
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
-
-        # Re-enter the page so the assertion reflects persisted server state, not only Vue local state.
-        self.open()
-        self._wait_for_local_storage_data_sync()
-        self._wait_local_storage_data_sync_enabled(True)
+        save_success = self._wait_save_finished()
+        if not save_success:
+            # Re-enter the page so the assertion reflects persisted server state, not only Vue local state.
+            self.open()
+            self._wait_for_local_storage_data_sync()
+            self._wait_local_storage_data_sync_enabled(True)
         return True
 
     def local_storage_data_sync_enabled(self) -> bool:
@@ -385,11 +414,11 @@ class GlobalSettingsPage(BasePage):
         after_states = self.checkbox_states()
         self._assert_only_checkbox_changed("Local Storage", before_states, after_states, expected_change=(True, False))
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
-
-        self.open()
-        self._wait_for_local_storage_data_sync()
-        self._wait_local_storage_data_sync_enabled(False)
+        save_success = self._wait_save_finished()
+        if not save_success:
+            self.open()
+            self._wait_for_local_storage_data_sync()
+            self._wait_local_storage_data_sync_enabled(False)
         return True
 
     def ensure_indexeddb_data_sync_enabled(self) -> bool:
@@ -404,12 +433,12 @@ class GlobalSettingsPage(BasePage):
         after_states = self.checkbox_states()
         self._assert_only_checkbox_changed("IndexedDB", before_states, after_states)
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
-
-        # Re-enter the page so the assertion reflects persisted server state, not only Vue local state.
-        self.open()
-        self._wait_for_indexeddb_data_sync()
-        self._wait_indexeddb_data_sync_enabled(True)
+        save_success = self._wait_save_finished()
+        if not save_success:
+            # Re-enter the page so the assertion reflects persisted server state, not only Vue local state.
+            self.open()
+            self._wait_for_indexeddb_data_sync()
+            self._wait_indexeddb_data_sync_enabled(True)
         return True
 
     def indexeddb_data_sync_enabled(self) -> bool:
@@ -430,11 +459,11 @@ class GlobalSettingsPage(BasePage):
         after_states = self.checkbox_states()
         self._assert_only_checkbox_changed("IndexedDB", before_states, after_states, expected_change=(True, False))
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
-
-        self.open()
-        self._wait_for_indexeddb_data_sync()
-        self._wait_indexeddb_data_sync_enabled(False)
+        save_success = self._wait_save_finished()
+        if not save_success:
+            self.open()
+            self._wait_for_indexeddb_data_sync()
+            self._wait_indexeddb_data_sync_enabled(False)
         return True
 
     def data_sync_one_way_state(self) -> dict[str, object]:
@@ -466,6 +495,18 @@ class GlobalSettingsPage(BasePage):
             raise ValueError("global data sync one-way whitelist groups must not be empty")
 
         self._wait_for_data_sync_settings()
+        current_state = self.data_sync_one_way_state()
+        expected_state = {
+            "cookie": self.DATA_SYNC_COOKIE_LABEL in expected_sync_items,
+            "local_storage": self.DATA_SYNC_LOCAL_STORAGE_LABEL in expected_sync_items,
+            "indexeddb": self.DATA_SYNC_INDEXEDDB_LABEL in expected_sync_items,
+            "one_way_enabled": True,
+            "whitelist_groups": expected_whitelist,
+        }
+        if self._data_sync_state_matches(expected_state, current_state):
+            self._log_noop_skip("global_settings.configure_data_sync_one_way")
+            return current_state
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         for item in expected_sync_items:
             self._set_data_sync_checked(item, True)
@@ -483,7 +524,9 @@ class GlobalSettingsPage(BasePage):
             },
         )
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
+        save_success = self._wait_save_finished()
+        if save_success:
+            return self.data_sync_one_way_state()
 
         self.open(force_reentry=True)
         final_state = self.data_sync_one_way_state()
@@ -506,7 +549,14 @@ class GlobalSettingsPage(BasePage):
 
     def restore_data_sync_one_way_state(self, state: dict[str, object]) -> None:
         """Restore global 数据同步 state captured by data_sync_one_way_state()."""
+        if not isinstance(state, dict):
+            return
         self._wait_for_data_sync_settings()
+        current_state = self.data_sync_one_way_state()
+        if self._data_sync_state_matches(state, current_state):
+            self._log_noop_skip("global_settings.restore_data_sync")
+            return
+
         for item in (
             self.DATA_SYNC_COOKIE_LABEL,
             self.DATA_SYNC_LOCAL_STORAGE_LABEL,
@@ -526,7 +576,9 @@ class GlobalSettingsPage(BasePage):
                 self._select_data_sync_one_way_whitelist(expected_whitelist)
 
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
+        save_success = self._wait_save_finished()
+        if save_success:
+            return
         self.open(force_reentry=True)
 
         final_state = self.data_sync_one_way_state()
@@ -557,9 +609,16 @@ class GlobalSettingsPage(BasePage):
     def disable_data_sync_one_way(self) -> dict[str, object]:
         """Disable global 数据同步 one-way sync, save, and verify the page finished loading."""
         self._wait_for_data_sync_settings()
+        current_state = self.data_sync_one_way_state()
+        if not bool(current_state.get("one_way_enabled")):
+            self._log_noop_skip("global_settings.disable_data_sync_one_way")
+            return current_state
+
         self._set_data_sync_one_way_enabled(False)
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
+        save_success = self._wait_save_finished()
+        if save_success:
+            return self.data_sync_one_way_state()
         self.open(force_reentry=True)
 
         final_state = self.data_sync_one_way_state()
@@ -576,6 +635,17 @@ class GlobalSettingsPage(BasePage):
             raise RuntimeError("数据同步单向同步 switch was not found")
         return bool(value)
 
+    def _data_sync_state_matches(self, expected: dict[str, object], actual: dict[str, object]) -> bool:
+        for key in ("cookie", "local_storage", "indexeddb", "one_way_enabled"):
+            if key in expected and bool(actual.get(key)) != bool(expected.get(key)):
+                return False
+        if bool(expected.get("one_way_enabled")):
+            expected_whitelist = set(self._unique_non_empty(expected.get("whitelist_groups", [])))
+            actual_whitelist = set(self._unique_non_empty(actual.get("whitelist_groups", [])))
+            if expected_whitelist != actual_whitelist:
+                return False
+        return True
+
     def configure_clear_all_local_cache_every_open_sync_cloud_data(self) -> None:
         """Set 全局设置 → 清除本地缓存 to clear all cache every open and sync cloud data."""
         self._configure_clear_all_local_cache_every_open(sync_cloud_data=True)
@@ -586,6 +656,16 @@ class GlobalSettingsPage(BasePage):
 
     def _configure_clear_all_local_cache_every_open(self, *, sync_cloud_data: bool) -> None:
         self._wait_for_clear_local_cache_settings()
+        expected_state = {
+            "clear_method": self.CLEAR_LOCAL_CACHE_ALL_TEXT,
+            "clear_frequency": self.CLEAR_LOCAL_CACHE_EVERY_OPEN_TEXT,
+            "sync_cloud_data": bool(sync_cloud_data),
+        }
+        current_state = self.clear_local_cache_state()
+        if self._clear_local_cache_state_matches(expected_state, current_state):
+            self._log_noop_skip("global_settings.configure_clear_all_local_cache_every_open")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         self._select_global_settings_form_select_option(
             self.CLEAR_LOCAL_CACHE_METHOD_LABEL,
@@ -604,21 +684,28 @@ class GlobalSettingsPage(BasePage):
             allowed_switch_names={self.CLEAR_LOCAL_CACHE_SYNC_CLOUD_TEXT},
         )
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
-        self.open(force_reentry=True)
-        self._wait_global_settings_form_select_value(
-            self.CLEAR_LOCAL_CACHE_METHOD_LABEL,
-            self.CLEAR_LOCAL_CACHE_ALL_TEXT,
-        )
-        self._wait_global_settings_form_select_value(
-            self.CLEAR_LOCAL_CACHE_FREQUENCY_LABEL,
-            self.CLEAR_LOCAL_CACHE_EVERY_OPEN_TEXT,
-        )
-        self._wait_clear_local_cache_sync_cloud_enabled(sync_cloud_data)
+        save_success = self._wait_save_finished()
+        if not save_success:
+            self.open(force_reentry=True)
+            self._wait_global_settings_form_select_value(
+                self.CLEAR_LOCAL_CACHE_METHOD_LABEL,
+                self.CLEAR_LOCAL_CACHE_ALL_TEXT,
+            )
+            self._wait_global_settings_form_select_value(
+                self.CLEAR_LOCAL_CACHE_FREQUENCY_LABEL,
+                self.CLEAR_LOCAL_CACHE_EVERY_OPEN_TEXT,
+            )
+            self._wait_clear_local_cache_sync_cloud_enabled(sync_cloud_data)
 
     def configure_clear_local_cache_no_clear(self) -> None:
         """Set 全局设置 → 清除本地缓存 → 清除方式 to 不清除 and persist it."""
         self._wait_for_clear_local_cache_settings()
+        expected_state = {"clear_method": self.CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT}
+        current_state = self.clear_local_cache_state()
+        if self._clear_local_cache_state_matches(expected_state, current_state):
+            self._log_noop_skip("global_settings.configure_clear_local_cache_no_clear")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         self._select_global_settings_form_select_option(
             self.CLEAR_LOCAL_CACHE_METHOD_LABEL,
@@ -632,12 +719,13 @@ class GlobalSettingsPage(BasePage):
             allowed_switch_names=set(),
         )
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
-        self.open(force_reentry=True)
-        self._wait_global_settings_form_select_value(
-            self.CLEAR_LOCAL_CACHE_METHOD_LABEL,
-            self.CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT,
-        )
+        save_success = self._wait_save_finished()
+        if not save_success:
+            self.open(force_reentry=True)
+            self._wait_global_settings_form_select_value(
+                self.CLEAR_LOCAL_CACHE_METHOD_LABEL,
+                self.CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT,
+            )
 
     def clear_local_cache_state(self) -> dict[str, object]:
         """Return persisted global 清除本地缓存 state from the rendered page."""
@@ -662,9 +750,19 @@ class GlobalSettingsPage(BasePage):
             clear_method = self.CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT
 
         self._wait_for_clear_local_cache_settings()
+        expected_state = {"clear_method": clear_method}
+        clear_frequency = str(state.get("clear_frequency") or "").strip()
+        if clear_frequency:
+            expected_state["clear_frequency"] = clear_frequency
+        if "sync_cloud_data" in state and self.cdp.evaluate(self._clear_local_cache_sync_cloud_enabled_script()) is not None:
+            expected_state["sync_cloud_data"] = bool(state.get("sync_cloud_data"))
+        current_state = self.clear_local_cache_state()
+        if self._clear_local_cache_state_matches(expected_state, current_state):
+            self._log_noop_skip("global_settings.restore_clear_local_cache")
+            return
+
         self._select_global_settings_form_select_option(self.CLEAR_LOCAL_CACHE_METHOD_LABEL, clear_method)
 
-        clear_frequency = str(state.get("clear_frequency") or "").strip()
         if clear_frequency and self.cdp.evaluate(
             self._global_settings_form_select_exists_script(self.CLEAR_LOCAL_CACHE_FREQUENCY_LABEL)
         ):
@@ -675,14 +773,11 @@ class GlobalSettingsPage(BasePage):
 
         self._close_select_dropdowns()
         self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-        self._wait_save_finished()
+        save_success = self._wait_save_finished()
+        if save_success:
+            return
         self.open(force_reentry=True)
         final_state = self.clear_local_cache_state()
-        expected_state = {"clear_method": clear_method}
-        if clear_frequency:
-            expected_state["clear_frequency"] = clear_frequency
-        if "sync_cloud_data" in state and final_state.get("sync_cloud_data") is not None:
-            expected_state["sync_cloud_data"] = bool(state.get("sync_cloud_data"))
         mismatches = {
             key: (expected, final_state.get(key))
             for key, expected in expected_state.items()
@@ -690,6 +785,14 @@ class GlobalSettingsPage(BasePage):
         }
         if mismatches:
             raise AssertionError(f"global clear local cache restore mismatch: {mismatches}")
+
+    def _clear_local_cache_state_matches(self, expected: dict[str, object], actual: dict[str, object]) -> bool:
+        for key, expected_value in expected.items():
+            if key not in actual:
+                return False
+            if str(actual.get(key) or "").strip() != str(expected_value or "").strip():
+                return False
+        return True
 
     def data_sync_one_way_whitelist_values(self) -> list[str]:
         value = self.cdp.evaluate(self._data_sync_one_way_whitelist_values_script())
@@ -704,6 +807,11 @@ class GlobalSettingsPage(BasePage):
             raise ValueError("packet capture process name must not be empty")
 
         self._wait_for_packet_capture_blocking()
+        current_state = self.packet_capture_blocking_state()
+        if bool(current_state.get("enabled")) and str(current_state.get("process_name") or "").strip() == clean_process_name:
+            self._log_noop_skip("global_settings.configure_packet_capture_blocking")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         if not self.packet_capture_blocking_enabled():
             self._set_packet_capture_blocking_enabled(True)
@@ -738,7 +846,9 @@ class GlobalSettingsPage(BasePage):
                 allowed_switch_names={"禁用抓包软件"},
             )
             self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-            self._wait_save_finished()
+            save_success = self._wait_save_finished()
+            if save_success:
+                return True
             self._wait_packet_capture_blocking_enabled(False)
             changed = True
 
@@ -774,6 +884,11 @@ class GlobalSettingsPage(BasePage):
 
         process_name = str(state.get("process_name") or "").strip()
         self._wait_for_packet_capture_blocking()
+        current_state = self.packet_capture_blocking_state()
+        if bool(current_state.get("enabled")) and str(current_state.get("process_name") or "").strip() == process_name:
+            self._log_noop_skip("global_settings.restore_packet_capture_blocking")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         self._set_packet_capture_blocking_enabled(True)
         self.cdp.fill_element_by_script(self._packet_capture_process_input_script(), process_name)
@@ -872,7 +987,9 @@ class GlobalSettingsPage(BasePage):
                 allowed_switch_names={"书签设置"},
             )
             self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-            self._wait_save_finished()
+            save_success = self._wait_save_finished()
+            if save_success:
+                return True
             self._wait_bookmark_setting_enabled(False)
             changed = True
 
@@ -913,6 +1030,11 @@ class GlobalSettingsPage(BasePage):
             return
 
         self._wait_for_bookmark_setting()
+        current_state = self.bookmark_setting_state()
+        if bool(current_state.get("enabled")):
+            self._log_noop_skip("global_settings.restore_bookmark_setting")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         self._set_bookmark_setting_enabled(True)
         self._assert_no_unexpected_existing_state_changes(
@@ -932,6 +1054,11 @@ class GlobalSettingsPage(BasePage):
             raise ValueError("environment field display limit requires at least one field")
 
         self._wait_for_environment_field_display_limit()
+        current_state = self.environment_field_display_limit_state()
+        if bool(current_state.get("enabled")) and set(current_state.get("fields", [])) == set(clean_fields):
+            self._log_noop_skip("global_settings.configure_environment_field_display_limit")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         if not self.environment_field_display_limit_enabled():
             self._set_environment_field_display_limit_enabled(True)
@@ -967,7 +1094,9 @@ class GlobalSettingsPage(BasePage):
                 allowed_switch_names=set(self.ENVIRONMENT_FIELD_DISPLAY_LIMIT_LABELS),
             )
             self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-            self._wait_save_finished()
+            save_success = self._wait_save_finished()
+            if save_success:
+                return True
             self._wait_environment_field_display_limit_enabled(False)
             changed = True
 
@@ -1000,11 +1129,15 @@ class GlobalSettingsPage(BasePage):
         if not expected_enabled:
             self.disable_environment_field_display_limit()
             return
+        self._wait_for_environment_field_display_limit()
+        current_state = self.environment_field_display_limit_state()
+        if bool(current_state.get("enabled")) and (not fields or set(current_state.get("fields", [])) == set(fields)):
+            self._log_noop_skip("global_settings.restore_environment_field_display_limit")
+            return
         if fields:
             self.configure_environment_field_display_limit(fields)
             return
 
-        self._wait_for_environment_field_display_limit()
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         self._set_environment_field_display_limit_enabled(True)
         self._assert_no_unexpected_existing_state_changes(
@@ -1024,6 +1157,11 @@ class GlobalSettingsPage(BasePage):
             raise ValueError("environment list pagination setting requires a page size")
 
         self._wait_for_environment_list_pagination_setting()
+        current_state = self.environment_list_pagination_setting_state()
+        if bool(current_state.get("enabled")) and str(current_state.get("page_size") or "").replace(" ", "").strip() == clean_page_size:
+            self._log_noop_skip("global_settings.configure_environment_list_pagination")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         if not self.environment_list_pagination_setting_enabled():
             self._set_environment_list_pagination_setting_enabled(True)
@@ -1058,7 +1196,9 @@ class GlobalSettingsPage(BasePage):
                 allowed_switch_names={"环境列表分页设置"},
             )
             self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-            self._wait_save_finished()
+            save_success = self._wait_save_finished()
+            if save_success:
+                return True
             self._wait_environment_list_pagination_setting_enabled(False)
             changed = True
 
@@ -1091,11 +1231,17 @@ class GlobalSettingsPage(BasePage):
         if not expected_enabled:
             self.disable_environment_list_pagination_setting()
             return
+        self._wait_for_environment_list_pagination_setting()
+        current_state = self.environment_list_pagination_setting_state()
+        current_page_size = str(current_state.get("page_size") or "").replace(" ", "").strip()
+        expected_page_size = page_size.replace(" ", "").strip()
+        if bool(current_state.get("enabled")) and (not expected_page_size or current_page_size == expected_page_size):
+            self._log_noop_skip("global_settings.restore_environment_list_pagination")
+            return
         if page_size:
             self.configure_environment_list_pagination_setting(page_size)
             return
 
-        self._wait_for_environment_list_pagination_setting()
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         self._set_environment_list_pagination_setting_enabled(True)
         self._assert_no_unexpected_existing_state_changes(
@@ -1118,6 +1264,15 @@ class GlobalSettingsPage(BasePage):
             raise ValueError(f"unsupported environment list sort direction: {clean_direction}")
 
         self._wait_for_environment_list_sort()
+        current_state = self.environment_list_sort_state()
+        if (
+            bool(current_state.get("enabled"))
+            and str(current_state.get("field") or "").strip() == clean_field
+            and str(current_state.get("direction") or "").strip() == clean_direction
+        ):
+            self._log_noop_skip("global_settings.configure_environment_list_sort")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         if not self.environment_list_sort_enabled():
             self._set_environment_list_sort_enabled(True)
@@ -1154,7 +1309,9 @@ class GlobalSettingsPage(BasePage):
                 allowed_switch_names={"环境列表排序"},
             )
             self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-            self._wait_save_finished()
+            save_success = self._wait_save_finished()
+            if save_success:
+                return True
             self._wait_environment_list_sort_enabled(False)
             changed = True
 
@@ -1189,11 +1346,19 @@ class GlobalSettingsPage(BasePage):
         if not expected_enabled:
             self.disable_environment_list_sort()
             return
+        self._wait_for_environment_list_sort()
+        current_state = self.environment_list_sort_state()
+        if (
+            bool(current_state.get("enabled"))
+            and (not field or str(current_state.get("field") or "").strip() == field)
+            and (not direction or str(current_state.get("direction") or "").strip() == direction)
+        ):
+            self._log_noop_skip("global_settings.restore_environment_list_sort")
+            return
         if field and direction:
             self.configure_environment_list_sort(field, direction)
             return
 
-        self._wait_for_environment_list_sort()
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         self._set_environment_list_sort_enabled(True)
         self._assert_no_unexpected_existing_state_changes(
@@ -1214,6 +1379,20 @@ class GlobalSettingsPage(BasePage):
         """Enable website restriction and save a blocklist with a shortcut option."""
         self._wait_for_website_restriction()
         shortcut_names = self._website_shortcut_candidates(shortcut_name)
+        expected_state = {
+            "enabled": True,
+            "mode": "禁止访问指定网址",
+            "urls": [str(item) for item in urls if str(item).strip()],
+        }
+        current_state = self.website_restriction_state()
+        shortcut_states = current_state.get("shortcut_states", {})
+        shortcut_matched = isinstance(shortcut_states, dict) and any(
+            bool(shortcut_states.get(candidate)) for candidate in shortcut_names
+        )
+        if self._website_restriction_state_matches(expected_state, current_state) and shortcut_matched:
+            self._log_noop_skip("global_settings.configure_website_restriction_blocklist")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         if not self.website_restriction_enabled():
             self._set_website_restriction_enabled(True)
@@ -1238,6 +1417,16 @@ class GlobalSettingsPage(BasePage):
     def configure_website_restriction_allowlist(self, urls: list[str]) -> None:
         """Enable website restriction and save an allowlist."""
         self._wait_for_website_restriction()
+        expected_state = {
+            "enabled": True,
+            "mode": "允许访问指定网址",
+            "urls": [str(item) for item in urls if str(item).strip()],
+        }
+        current_state = self.website_restriction_state()
+        if self._website_restriction_state_matches(expected_state, current_state):
+            self._log_noop_skip("global_settings.configure_website_restriction_allowlist")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         if not self.website_restriction_enabled():
             self._set_website_restriction_enabled(True)
@@ -1343,7 +1532,9 @@ class GlobalSettingsPage(BasePage):
                 allowed_switch_names={"访问网站限制"},
             )
             self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
-            self._wait_save_finished()
+            save_success = self._wait_save_finished()
+            if save_success:
+                return True
             self._wait_website_restriction_enabled(False)
             changed = True
 
@@ -1385,6 +1576,19 @@ class GlobalSettingsPage(BasePage):
             shortcut_states = {}
 
         self._wait_for_website_restriction()
+        current_state = self.website_restriction_state()
+        if self._website_restriction_state_matches(
+            {
+                "enabled": True,
+                "mode": mode,
+                "urls": urls,
+                "shortcut_states": shortcut_states,
+            },
+            current_state,
+        ):
+            self._log_noop_skip("global_settings.restore_website_restriction")
+            return
+
         before_checkboxes, before_switches = self._wait_global_setting_states_stable()
         self._set_website_restriction_enabled(True)
         if mode:
@@ -1407,6 +1611,28 @@ class GlobalSettingsPage(BasePage):
         if mode:
             self._wait_website_restriction_mode(mode)
         self._wait_website_restriction_urls(urls)
+
+    def _website_restriction_state_matches(self, expected: dict[str, object], actual: dict[str, object]) -> bool:
+        if bool(actual.get("enabled")) != bool(expected.get("enabled")):
+            return False
+        if not bool(expected.get("enabled")):
+            return True
+        expected_mode = str(expected.get("mode") or "").strip()
+        if expected_mode and str(actual.get("mode") or "").strip() != expected_mode:
+            return False
+        expected_urls = [str(item).strip() for item in expected.get("urls", []) if str(item).strip()]
+        actual_urls = [str(item).strip() for item in actual.get("urls", []) if str(item).strip()]
+        if expected_urls != actual_urls:
+            return False
+        expected_shortcuts = expected.get("shortcut_states")
+        actual_shortcuts = actual.get("shortcut_states")
+        if isinstance(expected_shortcuts, dict):
+            if not isinstance(actual_shortcuts, dict):
+                return False
+            for shortcut_name, checked in expected_shortcuts.items():
+                if bool(actual_shortcuts.get(str(shortcut_name))) != bool(checked):
+                    return False
+        return True
 
     @staticmethod
     def _label_candidates(label_text: str | tuple[str, ...]) -> tuple[str, ...]:
@@ -2762,14 +2988,26 @@ class GlobalSettingsPage(BasePage):
         if unexpected:
             raise AssertionError(f"unexpected global settings checkbox changes before save: {unexpected}")
 
-    def _wait_save_finished(self, timeout_seconds: int | None = None) -> None:
+    def _wait_save_finished(self, timeout_seconds: int | None = None) -> bool:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        with self.phase_timing("global_settings.wait_save_finished", timeout_seconds=timeout_seconds):
+            deadline = time.time() + timeout_seconds
+            while time.time() < deadline:
+                if not self._has_visible_loading():
+                    return self._wait_save_success_message(timeout_seconds=self.SAVE_SUCCESS_MESSAGE_SECONDS)
+                time.sleep(0.2)
+            raise TimeoutError("global settings save did not finish")
+
+    def _wait_save_success_message(self, timeout_seconds: int) -> bool:
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
-            if not self._has_visible_loading():
-                return
+            try:
+                if self.cdp.evaluate(self._save_success_message_visible_script()):
+                    return True
+            except Exception:
+                pass
             time.sleep(0.2)
-        raise TimeoutError("global settings save did not finish")
+        return False
 
     def _wait_until_not_loading(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -2869,6 +3107,38 @@ class GlobalSettingsPage(BasePage):
                 """.replace("__LOADING_SELECTOR__", repr(self.locator("loading_mask")))
             )
         )
+
+    def _save_success_message_visible_script(self) -> str:
+        return f"""
+        () => {{
+            const expectedText = {self.SAVE_SUCCESS_MESSAGE!r};
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && Number(style.opacity || "1") > 0.01
+                    && rect.width > 0
+                    && rect.height > 0
+                    && rect.right > 0
+                    && rect.bottom > 0
+                    && rect.left < window.innerWidth
+                    && rect.top < window.innerHeight;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const messageSelectors = [
+                ".el-message--success .el-message__content",
+                ".el-message--success",
+                ".el-message__content",
+                ".el-message",
+                "[role='alert']",
+            ];
+            return messageSelectors
+                .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+                .filter(visible)
+                .some((el) => clean(el.innerText || el.textContent).includes(expectedText));
+        }}
+        """
 
     def _dismiss_blocking_overlays(self) -> None:
         for _ in range(4):

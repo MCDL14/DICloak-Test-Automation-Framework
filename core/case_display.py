@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+import re
+
+
+METHOD_DISPLAY_NAMES: dict[str, str] = {
+    "test_create_and_delete_environment_group": "创建并删除环境分组",
+    "test_delete_group_with_contained_environment": "删除包含环境的分组",
+    "test_group_authorized_member": "环境分组授权成员",
+    "test_filter_group_name": "按分组名称筛选",
+    "test_edit_group_name_and_restore": "编辑分组名称并恢复",
+    "test_edit_group_remark_and_restore": "编辑分组备注并恢复",
+    "test_142_kernel_integrity": "内核完整性校验",
+    "test_create_open_close_delete_default_environment": "创建默认环境并打开关闭删除",
+    "test_batch_create_open_close_delete_environments": "批量创建环境并打开关闭删除",
+    "test_create_open_verify_close_delete_134_kernel_environment": "创建 134 内核环境并验证启动",
+    "test_batch_create_open_verify_close_delete_134_kernel_environments": "批量创建 134 内核环境并验证启动",
+    "test_batch_import_environments": "批量导入环境",
+    "test_edit_environment_name_and_restore": "编辑环境名称并恢复",
+    "test_edit_fixed_open_url_and_clear": "编辑固定打开网址并清空",
+    "test_filter_environment_group": "按环境分组筛选",
+    "test_filter_environment_remark": "按环境备注筛选",
+    "test_top_and_cancel_top_environment": "置顶环境并取消置顶",
+    "test_quick_edit_environment_name_and_restore": "快捷编辑环境名称并恢复",
+    "test_sort_environment_serial_ascending_and_descending": "环境序号升降序排序",
+    "test_move_remark_column_to_first_and_restore": "移动备注列到首列并恢复",
+    "test_export_selected_environments": "导出选中的环境",
+    "test_create_multi_group_environment": "创建多分组环境",
+    "test_batch_create_multi_group_environments": "批量创建多分组环境",
+    "test_edit_single_environment_multi_group_and_restore": "编辑单个环境多分组并恢复",
+    "test_batch_edit_environment_multi_group": "批量编辑环境多分组",
+    "test_create_and_delete_tag": "创建并删除标签",
+    "test_create_environment_with_tags": "创建带标签环境",
+    "test_batch_create_environments_with_tags": "批量创建带标签环境",
+    "test_batch_edit_environment_tags": "批量编辑环境标签",
+    "test_edit_environment_tags": "编辑环境标签",
+    "test_filter_environment_tag": "按环境标签筛选",
+    "test_cookie_data_survives_close_reopen_and_local_cache_deletion": "Cookie 数据关闭重开和删缓存后保持",
+    "test_local_storage_data_survives_close_reopen_and_local_cache_deletion": "Local Storage 数据关闭重开和删缓存后保持",
+    "test_indexeddb_data_survives_close_reopen_and_local_cache_deletion": "IndexedDB 数据关闭重开和删缓存后保持",
+    "test_new_environment_cookie_survives_close_reopen_and_local_cache_deletion": "新环境 Cookie 数据同步恢复",
+    "test_new_environment_local_storage_survives_close_reopen_and_local_cache_deletion": "新环境 Local Storage 数据同步恢复",
+    "test_new_environment_indexeddb_survives_close_reopen_and_local_cache_deletion": "新环境 IndexedDB 数据同步恢复",
+    "test_individual_environment_cookie_sync_survives_close_reopen_and_local_cache_deletion": "环境单独设置 Cookie 同步恢复",
+    "test_individual_environment_local_storage_sync_survives_close_reopen_and_local_cache_deletion": "环境单独设置 Local Storage 同步恢复",
+    "test_individual_environment_indexeddb_sync_survives_close_reopen_and_local_cache_deletion": "环境单独设置 IndexedDB 同步恢复",
+    "test_one_way_sync_forbids_current_account_data_upload": "单向同步禁止当前账号上传数据",
+    "test_one_way_sync_allows_current_account_data_upload": "单向同步允许当前账号上传数据",
+    "test_cookie_not_restored_after_cache_deletion_when_individual_cookie_sync_disabled": "环境单独关闭 Cookie 同步后删缓存不恢复",
+    "test_local_storage_not_restored_after_cache_deletion_when_individual_local_storage_sync_disabled": "环境单独关闭 Local Storage 同步后删缓存不恢复",
+    "test_indexeddb_not_restored_after_cache_deletion_when_individual_indexeddb_sync_disabled": "环境单独关闭 IndexedDB 同步后删缓存不恢复",
+    "test_clear_all_cache_every_open_then_sync_cloud_data_keeps_sites_logged_in": "每次打开清全部缓存并同步云端后保持登录",
+    "test_clear_all_cache_every_open_without_cloud_sync_clears_site_login_state": "每次打开清全部缓存且不同步云端后清除登录",
+    "test_create_custom_proxy_environment_open_close_delete": "创建自定义代理环境并打开关闭删除",
+    "test_create_environment_with_existing_proxy_open_close_delete": "创建使用已有代理的环境并打开关闭删除",
+    "test_create_local_extension_and_delete": "创建本地上传扩展并删除",
+    "test_add_market_extension_and_delete": "添加扩展市场扩展并删除",
+    "test_create_google_extension_enable_and_delete": "创建谷歌扩展并同时启用后删除",
+    "test_hide_extension_from_chrome_extensions_page": "隐藏扩展并验证扩展页不可见",
+    "test_disable_view_password_blocks_password_manager": "禁用查看网站密码",
+    "test_disable_browser_devtools": "禁用浏览器开发者工具",
+    "test_disable_extension_management_and_install": "禁用扩展管理和本地安装",
+    "test_disable_member_access_google_extension_pages": "禁止成员访问谷歌扩展页面",
+    "test_block_specific_websites_google_shortcut_and_baidu": "禁止访问指定网站",
+    "test_allow_specific_website_local_probe": "仅允许访问指定网站",
+    "test_disable_packet_capture_software": "禁用抓包软件",
+    "test_bookmark_setting_overwrite": "书签设置覆盖导入",
+    "test_bookmark_setting_append": "书签设置追加和清空",
+    "test_environment_field_display_limit": "环境列表字段权限",
+    "test_environment_list_pagination_setting": "环境列表分页设置",
+    "test_environment_list_sort_limit": "环境列表排序设置",
+    "test_global_settings_one_way_sync_disallows_current_account_data_upload": "全局单向同步禁止当前账号上传数据",
+    "test_global_settings_one_way_sync_allows_current_account_data_upload": "全局单向同步允许当前账号上传数据",
+    "test_cookie_not_restored_after_cache_deletion_when_global_cookie_sync_disabled": "全局关闭 Cookie 同步后删缓存不恢复",
+    "test_local_storage_not_restored_after_cache_deletion_when_global_local_storage_sync_disabled": "全局关闭 Local Storage 同步后删缓存不恢复",
+    "test_indexeddb_not_restored_after_cache_deletion_when_global_indexeddb_sync_disabled": "全局关闭 IndexedDB 同步后删缓存不恢复",
+    "test_enable_extension_encryption_and_tamper_protection": "开启扩展加密并防止篡改",
+    "test_create_member_group_and_delete": "创建成员分组并删除",
+    "test_create_external_member_and_delete": "创建外部成员并删除",
+    "test_edit_external_member_name_and_restore": "编辑外部成员名称并恢复",
+    "test_create_internal_member_and_delete": "创建内部成员并删除",
+    "test_edit_internal_member_name_and_restore": "编辑内部成员名称并恢复",
+    "test_filter_member_group": "按成员分组筛选",
+    "test_filter_member_name_and_id": "按成员名称和 ID 筛选",
+    "test_filter_member_remark": "按成员备注筛选",
+    "test_filter_member_login_account_and_email": "按登录账号和邮箱筛选成员",
+    "test_batch_edit_member_remark": "批量编辑成员备注",
+    "test_export_selected_members": "导出选中的成员",
+    "test_no_edit_permission_member_ui": "无编辑权限成员 UI 校验",
+    "test_api_disable_external_member_forces_logout": "接口停用外部成员后强制退出",
+    "test_api_disuse_external_member_forces_logout_after_app_refresh": "接口到期停用外部成员后刷新退登",
+    "test_api_disable_internal_member_blocks_login": "接口停用内部成员后禁止登录",
+    "test_api_disuse_internal_member_blocks_login_after_app_refresh": "接口到期停用内部成员后刷新禁止登录",
+    "test_create_custom_proxy_detect_and_delete": "创建自定义代理并检测后删除",
+    "test_batch_create_proxy_validate_detect_and_delete": "批量创建代理并校验检测后删除",
+    "test_create_nodemaven_proxy_detect_and_delete": "创建 NodeMaven 动态代理并检测后删除",
+    "test_batch_create_proxy_then_bulk_detect_and_delete": "批量创建代理后批量检测并删除",
+}
+
+TOKEN_DISPLAY_NAMES: dict[str, str] = {
+    "api": "接口",
+    "and": "并",
+    "batch": "批量",
+    "cache": "缓存",
+    "clear": "清除",
+    "close": "关闭",
+    "cookie": "Cookie",
+    "create": "创建",
+    "delete": "删除",
+    "detect": "检测",
+    "disable": "禁用",
+    "edit": "编辑",
+    "environment": "环境",
+    "extension": "扩展",
+    "filter": "筛选",
+    "global": "全局",
+    "group": "分组",
+    "indexeddb": "IndexedDB",
+    "local": "本地",
+    "member": "成员",
+    "open": "打开",
+    "proxy": "代理",
+    "restore": "恢复",
+    "settings": "设置",
+    "storage": "Local Storage",
+    "sync": "同步",
+    "tag": "标签",
+    "tags": "标签",
+}
+
+
+def case_display_name(test_id: str, class_name: str = "", method_name: str = "") -> str:
+    method = method_name or _method_from_test_id(test_id)
+    if method in METHOD_DISPLAY_NAMES:
+        return METHOD_DISPLAY_NAMES[method]
+    return _fallback_display_name(method or class_name or test_id)
+
+
+def _method_from_test_id(test_id: str) -> str:
+    parts = str(test_id or "").split(".")
+    return parts[-1] if parts else ""
+
+
+def _fallback_display_name(method_name: str) -> str:
+    name = re.sub(r"^test_\d*_*", "", str(method_name or ""))
+    tokens = [token for token in re.split(r"_+", name) if token]
+    if not tokens:
+        return str(method_name or "未命名用例")
+    return " ".join(TOKEN_DISPLAY_NAMES.get(token, token) for token in tokens)

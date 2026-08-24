@@ -47,8 +47,9 @@ class ExtensionPage(BasePage):
         self.cdp.click_element_by_script(self._dialog_radio_button_script("安装包"))
         self._wait_for_local_package_mode()
         try:
-            self._choose_package_file(package_path)
             self.cdp.fill_element_by_script(self._dialog_input_by_label_script("扩展名称"), extension_name)
+            self._wait_dialog_field_value("扩展名称", extension_name)
+            self._choose_package_file(package_path)
             self._wait_dialog_field_value("扩展名称", extension_name)
             self.ensure_extension_group(group_name)
             self._click_overlay_button_wait_loading_then_closed("确定")
@@ -367,10 +368,12 @@ class ExtensionPage(BasePage):
         with self.cdp._page().expect_file_chooser(timeout=config_timeout_seconds(self.config, "page_seconds", 10) * 1000) as chooser:
             upload_button.click()
         chooser.value.set_files(str(ascii_package))
-        if self._wait_package_dialog_path_shown(str(package_path), timeout_seconds=10):
+        expected_markers = [str(package_path), package_path.name, ascii_package.name]
+        if self._wait_package_dialog_upload_shown(expected_markers, timeout_seconds=10):
             return
         raise TimeoutError(
-            f"local extension package path was not shown after upload: {package_path}"
+            "local extension package was not shown after upload: "
+            f"expected_markers={expected_markers}"
         )
 
     def _cleanup_temporary_upload_files(self) -> None:
@@ -381,12 +384,13 @@ class ExtensionPage(BasePage):
                 pass
         self._temporary_upload_dirs.clear()
 
-    def _wait_package_dialog_path_shown(self, expected_path: str, timeout_seconds: int) -> bool:
+    def _wait_package_dialog_upload_shown(self, expected_markers: list[str], timeout_seconds: int) -> bool:
+        markers = [str(marker).strip() for marker in expected_markers if str(marker).strip()]
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             if self.cdp.evaluate_with_args(
                 """
-                (filePath) => {
+                (expectedMarkers) => {
                     const visible = (el) => {
                         const style = window.getComputedStyle(el);
                         const rect = el.getBoundingClientRect();
@@ -397,10 +401,10 @@ class ExtensionPage(BasePage):
                     };
                     const dialog = Array.from(document.querySelectorAll(".el-dialog")).filter(visible).slice(-1)[0];
                     const text = dialog ? (dialog.innerText || dialog.textContent || "") : "";
-                    return text.includes(filePath);
+                    return expectedMarkers.some((marker) => text.includes(marker));
                 }
                 """,
-                expected_path,
+                markers,
             ):
                 return True
             time.sleep(0.2)
@@ -754,9 +758,29 @@ class ExtensionPage(BasePage):
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
             const dialogs = Array.from(document.querySelectorAll({self.locator("dialog")!r})).filter(visible);
             for (const dialog of dialogs.reverse()) {{
-                const button = Array.from(dialog.querySelectorAll("button"))
+                const formItems = Array.from(dialog.querySelectorAll(".el-form-item")).filter(visible);
+                const packageItem = formItems.find((item) => {{
+                    const itemText = clean(item.innerText || item.textContent);
+                    const accepts = Array.from(item.querySelectorAll("input[type='file']"))
+                        .map((input) => String(input.getAttribute("accept") || "").toLowerCase());
+                    const hasZipInput = accepts.some((accept) => accept.includes("zip"));
+                    return itemText.includes("安装包") && (itemText.includes("ZIP") || itemText.includes("zip") || hasZipInput);
+                }});
+                if (packageItem) {{
+                    const uploadTarget = Array.from(packageItem.querySelectorAll(".el-upload, .el-upload-dragger, button, [role='button']"))
+                        .filter(visible)
+                        .find((item) => {{
+                            const itemText = clean(item.innerText || item.textContent);
+                            return itemText.includes("上传") || itemText.includes("ZIP") || item.classList.contains("el-upload");
+                        }});
+                    if (uploadTarget) return uploadTarget;
+                }}
+                const button = Array.from(dialog.querySelectorAll("button, .el-upload, .el-upload-dragger"))
                     .filter(visible)
-                    .find((item) => clean(item.innerText || item.textContent) === "上传");
+                    .find((item) => {{
+                        const itemText = clean(item.innerText || item.textContent);
+                        return itemText.includes("将 ZIP 文件") || itemText === "上传";
+                    }});
                 if (button) return button;
             }}
             return null;
@@ -1470,8 +1494,31 @@ class ExtensionPage(BasePage):
                     && rect.width > 0
                     && rect.height > 0;
             };
-            return Array.from(document.querySelectorAll(".el-dialog input[type=file][accept='application/zip']"))
-                .some((input) => input.closest(".el-dialog") && !visible(input));
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const dialogs = Array.from(document.querySelectorAll(".el-dialog")).filter(visible);
+            for (const dialog of dialogs.reverse()) {
+                const text = clean(dialog.innerText || dialog.textContent);
+                if (!text.includes("添加扩展") || !text.includes("安装包")) continue;
+                const localSelected = Array.from(dialog.querySelectorAll(".el-radio-button, label"))
+                    .filter(visible)
+                    .some((item) => {
+                        const itemText = clean(item.innerText || item.textContent);
+                        return itemText === "安装包"
+                            && (item.classList.contains("is-active") || Boolean(item.querySelector("input:checked")));
+                    });
+                const fileInputs = Array.from(dialog.querySelectorAll("input[type='file']"));
+                const hasZipInput = fileInputs.some((input) => {
+                    const accept = String(input.getAttribute("accept") || "").toLowerCase();
+                    return accept.includes("zip");
+                });
+                const hasZipUploadText = text.includes("将 ZIP 文件") || text.includes("仅支持 ZIP 格式");
+                const hasNameField = text.includes("扩展名称") || Boolean(
+                    Array.from(dialog.querySelectorAll("input"))
+                        .some((input) => String(input.getAttribute("placeholder") || "").includes("扩展名称"))
+                );
+                if (localSelected && hasZipInput && hasZipUploadText && hasNameField) return true;
+            }
+            return false;
         }
         """
 

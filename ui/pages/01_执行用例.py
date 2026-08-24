@@ -50,6 +50,7 @@ from core.ui_log_filter import (
     unsuccessful_log_text as _unsuccessful_log_text,
 )
 from core.ui_progress import case_progress_snapshot
+from ui.components.case_selector import render_case_selector
 from streamlit_runner import (
     check_remote_host,
     check_remote_code,
@@ -83,7 +84,6 @@ _REMOTE_EXIT_RE = re.compile(r"远程(?:执行完成|健康检查结束) → 节
 _REMOTE_HEALTH_DONE_RE = re.compile(r"远程健康检查完成 → 失败=(\d+)")
 _REMOTE_ARTIFACT_RE = re.compile(r"远程产物归档 → 文件数=(\d+) 本地目录=(.+)")
 
-_REMOTE_RUN_TYPE_OPTIONS = ("远程预检", "执行用例")
 _ACCOUNT_GROUPS_PATH = _PROJECT_ROOT / "config" / "account_groups.yaml"
 _CONFIG_PATH = _PROJECT_ROOT / "config" / "config.yaml"
 _MEMBER_API_CASE_MARKERS = (
@@ -123,7 +123,185 @@ def _stable_widget_key(prefix: str, identity: str) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 st.set_page_config(page_title="执行用例", page_icon="🧪", layout="wide")
-st.title("🧪 执行用例")
+st.markdown(
+    """
+    <style>
+    div[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        gap: 0.85rem;
+    }
+    div.stButton > button {
+        min-height: 2rem;
+        padding: 0.18rem 0.65rem;
+        border-radius: 6px;
+        font-size: 0.9rem;
+        font-weight: 400;
+        line-height: 1.25;
+    }
+    div.stButton > button[kind="tertiary"] {
+        color: inherit;
+        padding-left: 0;
+        padding-right: 0.25rem;
+    }
+    div.stButton > button[kind="tertiary"]:hover {
+        color: inherit;
+        background: transparent;
+    }
+    div[data-testid="stVerticalBlock"] {
+        gap: 0.55rem;
+    }
+    div[data-testid="stHorizontalBlock"] {
+        gap: 0.65rem;
+    }
+    div[data-testid="stProgress"] {
+        margin: 0.15rem 0 0.35rem 0;
+    }
+    div[data-testid="stProgress"] div[role="progressbar"] {
+        min-height: 0.42rem;
+        height: 0.42rem;
+    }
+    .dicloak-section-title {
+        font-size: 0.98rem;
+        font-weight: 600;
+        margin: 0.15rem 0 0.35rem 0;
+    }
+    .dicloak-page-title {
+        display: flex;
+        align-items: center;
+        gap: 0.7rem;
+        font-size: 1.75rem;
+        font-weight: 650;
+        line-height: 1.15;
+        margin: 0.25rem 0 1.05rem 0;
+    }
+    .dicloak-page-title span:first-child {
+        font-size: 1.55rem;
+    }
+    div[class*="st-key-dicloak_selection_toolbar"] {
+        border: 1px solid #d5dde8;
+        border-radius: 6px;
+        background: #f3f7fd;
+        padding: 0.62rem 0.72rem;
+        margin: 0.12rem 0 1rem 0;
+    }
+    div[class*="st-key-dicloak_selection_toolbar"] > div[data-testid="stVerticalBlock"] {
+        gap: 0;
+    }
+    div[class*="st-key-dicloak_selection_toolbar"] div[data-testid="stProgress"] {
+        margin: 0;
+    }
+    div[class*="st-key-dicloak_selection_toolbar"] div[data-testid="stProgressBarTrack"] > div {
+        background: #138f97;
+    }
+    .dicloak-selection-count {
+        font-size: 0.84rem;
+        color: #334155;
+        white-space: nowrap;
+    }
+    div[class*="st-key-dicloak_selection_toolbar"] div.stButton > button {
+        min-height: 2.15rem;
+        background: #ffffff;
+        border-color: #c9d3e1;
+    }
+    .dicloak-remote-section-title {
+        border-left: 3px solid #168c92;
+        color: #1e293b;
+        font-size: 1rem;
+        font-weight: 650;
+        line-height: 1.3;
+        margin: 1.2rem 0 0.58rem 0;
+        padding-left: 0.58rem;
+    }
+    .dicloak-remote-section-title.is-first {
+        margin-top: 0.8rem;
+    }
+    div[class*="st-key-dicloak_remote_node_card"],
+    div[class*="st-key-dicloak_remote_options"] {
+        border-color: #cbd5e1;
+        border-radius: 7px;
+        background: color-mix(in srgb, #f8fafc 88%, transparent);
+        padding: 0.82rem 0.95rem;
+    }
+    div[class*="st-key-dicloak_remote_connection_editor"] {
+        border-color: #c8d5e3;
+        border-radius: 7px;
+        background: color-mix(in srgb, #f2f7fb 82%, transparent);
+        padding: 0.8rem 0.9rem;
+    }
+    .dicloak-remote-node-name {
+        font-size: 0.96rem;
+        font-weight: 600;
+        line-height: 1.35;
+    }
+    .dicloak-remote-node-meta {
+        color: #64748b;
+        font-size: 0.82rem;
+        line-height: 1.4;
+        margin-top: 0.1rem;
+    }
+    .dicloak-remote-status {
+        color: #0f766e;
+        font-size: 0.8rem;
+        font-weight: 500;
+    }
+    div[class*="st-key-dicloak_remote_mode_"] {
+        border: 1px solid #cbd5e1;
+        border-radius: 7px;
+        padding: 0.72rem 0.8rem;
+        min-height: 5.55rem;
+        background: color-mix(in srgb, #ffffff 92%, transparent);
+        transition: border-color 120ms ease, background-color 120ms ease;
+    }
+    div[class*="st-key-dicloak_remote_mode_"]:has(button[kind="primary"]) {
+        border-color: #168c92;
+        background: color-mix(in srgb, #e8f8f7 82%, transparent);
+        box-shadow: inset 3px 0 0 #168c92;
+    }
+    div[class*="st-key-dicloak_remote_mode_"] div.stButton > button {
+        justify-content: flex-start;
+        min-height: 1.85rem;
+        padding-left: 0.55rem;
+    }
+    div[class*="st-key-dicloak_remote_mode_"] div.stButton > button[kind="primary"] {
+        color: #0f5f64;
+        background: #dff6f5;
+        border-color: #178b91;
+    }
+    div[class*="st-key-dicloak_remote_mode_"] [data-testid="stCaptionContainer"] {
+        margin-left: 0.1rem;
+    }
+    div[class*="st-key-dicloak_remote_options"] [data-testid="stCheckbox"] label {
+        min-height: 1.7rem;
+    }
+    div[class*="st-key-dicloak_remote_options"] div[data-testid="column"] {
+        padding: 0.08rem 0.7rem;
+    }
+    div[class*="st-key-dicloak_remote_options"] div[data-testid="column"] + div[data-testid="column"] {
+        border-left: 1px solid #d9e1ea;
+    }
+    div[class*="st-key-dicloak_remote_tools"] details,
+    div[class*="st-key-dicloak_remote_advanced"] details {
+        border-color: #d7dee8;
+        border-radius: 7px;
+    }
+    div[class*="st-key-dicloak_remote_tools"] {
+        margin-top: 1rem;
+    }
+    div[class*="st-key-dicloak_remote_advanced"] {
+        margin-top: 0.2rem;
+    }
+    .dicloak-runbar {
+        border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+        padding-top: 0.75rem;
+        margin-top: 0.25rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.markdown(
+    '<div class="dicloak-page-title"><span>🧪</span><span>执行用例</span></div>',
+    unsafe_allow_html=True,
+)
 
 # ═══════════════════════════════════════════════════════════════════
 # 加载用例（缓存 30 秒，避免每次交互都重新发现）
@@ -190,10 +368,6 @@ def _case_key(case_id: str) -> str:
     return _stable_widget_key("case_selected", case_id)
 
 
-def _module_action_key(action: str, module_name: str) -> str:
-    return _stable_widget_key(f"module_{action}", module_name)
-
-
 def _set_case_selected(case_list: list[dict], selected: bool) -> None:
     for case in case_list:
         st.session_state[_case_key(case["id"])] = selected
@@ -201,6 +375,128 @@ def _set_case_selected(case_list: list[dict], selected: bool) -> None:
 
 def _set_all_cases_selected(selected: bool) -> None:
     _set_case_selected(cases, selected)
+
+
+def _selected_count(case_list: list[dict]) -> int:
+    return sum(
+        1
+        for case in case_list
+        if bool(st.session_state.get(_case_key(case["id"]), True))
+    )
+
+
+def _module_summary(case_list: list[dict]) -> str:
+    if not case_list:
+        return ""
+    sample_names = [
+        str(case.get("display_name") or case.get("method_name") or "")
+        for case in case_list[:3]
+    ]
+    return " / ".join(name for name in sample_names if name)
+
+
+def _render_case_selection_panel(
+    visible_modules: list[str],
+    visible_cases_by_module: dict[str, list[dict]],
+) -> None:
+    visible_cases = [
+        case
+        for module_name in visible_modules
+        for case in visible_cases_by_module[module_name]
+    ]
+    selected_case_count = _selected_count(cases)
+
+    st.markdown('<div class="dicloak-section-title">用例选择</div>', unsafe_allow_html=True)
+    with st.container(key="dicloak_selection_toolbar"):
+        progress_col, count_col, select_col, clear_col = st.columns(
+            [4.6, 1.15, 1.25, 1.25],
+            vertical_alignment="center",
+        )
+        with progress_col:
+            st.progress(
+                selected_case_count / len(cases) if cases else 0.0,
+            )
+        with count_col:
+            st.markdown(
+                f'<div class="dicloak-selection-count">已选 {selected_case_count} / {len(cases)}</div>',
+                unsafe_allow_html=True,
+            )
+        with select_col:
+            st.button(
+                "选择可见",
+                key="select_visible_cases",
+                use_container_width=True,
+                on_click=_set_case_selected,
+                args=(visible_cases, True),
+                help="只选择当前筛选条件下显示出来的用例。",
+                icon=":material/check_box:",
+            )
+        with clear_col:
+            st.button(
+                "清空选择",
+                key="clear_all_cases",
+                use_container_width=True,
+                on_click=_set_all_cases_selected,
+                args=(False,),
+                icon=":material/check_box_outline_blank:",
+            )
+
+    st.markdown("**模块总览**")
+    module_payload: list[dict] = []
+    for module_name in visible_modules:
+        all_module_cases = by_module[module_name]
+        visible_module_cases = visible_cases_by_module[module_name]
+        module_payload.append(
+            {
+                "name": module_name,
+                "description": _module_summary(all_module_cases),
+                "total_count": len(all_module_cases),
+                "visible_count": len(visible_module_cases),
+                "case_ids": [case["id"] for case in all_module_cases],
+                "cases": [
+                    {
+                        "id": case["id"],
+                        "name": str(
+                            case.get("display_name")
+                            or f"{case['class_name']}.{case['method_name']}"
+                        ),
+                    }
+                    for case in visible_module_cases
+                ],
+            }
+        )
+
+    component_value = render_case_selector(
+        modules=module_payload,
+        selected_ids=[
+            case["id"]
+            for case in cases
+            if bool(st.session_state.get(_case_key(case["id"]), True))
+        ],
+        expanded_modules=st.session_state.get("execute_cases_component_expanded", []),
+        key="execute_case_selector_component",
+        default=None,
+    )
+    if isinstance(component_value, dict):
+        event_id = str(component_value.get("event_id", ""))
+        if event_id and event_id != st.session_state.get("execute_cases_component_event"):
+            selected_ids = {
+                str(case_id)
+                for case_id in component_value.get("selected_ids", [])
+            }
+            known_case_ids = {case["id"] for case in cases}
+            selected_ids.intersection_update(known_case_ids)
+            _set_case_selected(cases, False)
+            for case in cases:
+                if case["id"] in selected_ids:
+                    st.session_state[_case_key(case["id"])] = True
+            st.session_state["execute_cases_component_event"] = event_id
+            st.session_state["execute_cases_component_expanded"] = [
+                str(module_name)
+                for module_name in component_value.get("expanded_modules", [])
+                if str(module_name) in by_module
+            ]
+            st.rerun()
 
 
 def _case_matches_keyword(case: dict, keyword: str) -> bool:
@@ -582,46 +878,40 @@ code_status_clicked = False
 code_sync_clicked = False
 
 with st.sidebar:
-    st.header("显示设置")
-    show_modules = st.multiselect(
-        "显示模块（不影响执行）",
-        options=module_names,
-        default=module_names,
-        help="只控制页面上显示哪些模块；不会取消勾选，也不会改变本机执行范围。",
-    )
-    case_keyword = st.text_input(
-        "搜索显示",
-        placeholder="输入模块、中文名、类名、方法名或 test_id",
-        help="只缩小下方列表显示；不会清空已勾选状态，也不会改变本机执行范围。",
-    ).strip()
-    hidden_module_count = len(set(module_names) - set(show_modules))
-    if hidden_module_count:
-        st.caption(f"已隐藏 {hidden_module_count} 个模块；隐藏不等于取消执行。")
-
-    st.divider()
     st.header("执行状态")
     task_status_container = st.empty()
     task_status = _render_execution_status(task_status_container, allow_reset_button=True)
 
     st.divider()
-    st.header("用例选择")
-    st.caption(f"当前已勾选 {selected_count}/{len(cases)} 条")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.button(
-            "✅ 全选",
-            use_container_width=True,
-            on_click=_set_all_cases_selected,
-            args=(True,),
-        )
-    with col_b:
-        st.button(
-            "⬜ 取消全选",
-            use_container_width=True,
-            on_click=_set_all_cases_selected,
-            args=(False,),
-        )
+    st.header("筛选")
+    module_filter = st.selectbox(
+        "业务模块",
+        options=["全部模块", *module_names],
+        help="只控制页面上显示哪些模块；不会取消勾选，也不会改变执行范围。",
+    )
+    case_keyword = st.text_input(
+        "搜索用例",
+        placeholder="输入模块、中文名、类名、方法名或 test_id",
+        help="只缩小列表显示；不会清空已勾选状态，也不会改变执行范围。",
+    ).strip()
+    show_only_selected_modules = st.checkbox(
+        "只看已选模块",
+        value=False,
+        help="仅隐藏当前未选择任何用例的模块，不会改变已勾选状态。",
+    )
+    if module_filter == "全部模块":
+        show_modules = list(module_names)
+    else:
+        show_modules = [module_filter]
+    if show_only_selected_modules:
+        show_modules = [
+            module_name
+            for module_name in show_modules
+            if _selected_count(by_module[module_name]) > 0
+        ]
+    hidden_module_count = len(set(module_names) - set(show_modules))
+    if hidden_module_count:
+        st.caption(f"已隐藏 {hidden_module_count} 个模块；隐藏不等于取消执行。")
 
     st.divider()
     st.header("运行位置")
@@ -715,6 +1005,7 @@ remote_account_profile = runtime_account_profile(account_groups[remote_account_g
 
 if execution_mode in {"远程节点", "本机 + Mac 远程"}:
     st.subheader("远程节点执行")
+    st.caption("选择节点和运行方式，确认选项后即可执行。连接维护与排障操作按需展开。")
     try:
         remote_hosts = _load_remote_hosts()
     except Exception as exc:
@@ -734,16 +1025,25 @@ if execution_mode in {"远程节点", "本机 + Mac 远程"}:
     if not remote_hosts:
         st.warning("未发现启用的远程节点；请根据 `config/remote_hosts.example.yaml` 创建 `config/remote_hosts.yaml`。")
 
-    st.markdown("**选择节点**")
-    selected_host_label = st.selectbox(
-        "远程节点",
-        options=host_labels,
-        disabled=not host_labels,
-        help="节点来自 config/remote_hosts.yaml；通常只需要选择要执行的系统。",
+    st.markdown(
+        '<div class="dicloak-remote-section-title is-first">执行节点</div>',
+        unsafe_allow_html=True,
     )
-    if selected_host_label and host_labels:
-        selected_remote_host = remote_hosts[host_labels.index(selected_host_label)]
-        remote_host_name = selected_remote_host["name"]
+    with st.container(border=True, key="dicloak_remote_node_card"):
+        node_select_col, node_summary_col, node_action_col = st.columns(
+            [1.65, 2.4, 0.8],
+            vertical_alignment="center",
+        )
+        with node_select_col:
+            selected_host_label = st.selectbox(
+                "远程节点",
+                options=host_labels,
+                disabled=not host_labels,
+                help="节点来自 config/remote_hosts.yaml；通常只需要选择要执行的系统。",
+            )
+        if selected_host_label and host_labels:
+            selected_remote_host = remote_hosts[host_labels.index(selected_host_label)]
+            remote_host_name = selected_remote_host["name"]
 
     if selected_remote_host:
         try:
@@ -756,199 +1056,257 @@ if execution_mode in {"远程节点", "本机 + Mac 远程"}:
         default_ssh_host = cached_connection.get("host") or selected_remote_host.get("host", "")
         default_ssh_port = _safe_port(cached_connection.get("port") or selected_remote_host.get("port", 22))
         default_ssh_username = cached_connection.get("username") or selected_remote_host.get("username", "")
+        cached_ssh_password = cached_connection.get("password", "")
+        host_key = f"remote_connection_host_{remote_host_name}"
+        port_key = f"remote_connection_port_{remote_host_name}"
+        username_key = f"remote_connection_username_{remote_host_name}"
+        password_key = f"remote_connection_password_{remote_host_name}"
+        remember_key = f"remote_connection_remember_password_{remote_host_name}"
+        edit_key = f"remote_connection_editor_{remote_host_name}"
+        st.session_state.setdefault(host_key, default_ssh_host)
+        st.session_state.setdefault(port_key, default_ssh_port)
+        st.session_state.setdefault(username_key, default_ssh_username)
+        st.session_state.setdefault(password_key, cached_ssh_password)
+        st.session_state.setdefault(remember_key, True)
+        st.session_state.setdefault(edit_key, not bool(default_ssh_host and default_ssh_username))
 
-        remote_ssh_host = default_ssh_host
-        remote_ssh_port = default_ssh_port
-        remote_ssh_username = default_ssh_username
+        remote_ssh_host = str(st.session_state[host_key]).strip()
+        remote_ssh_port = _safe_port(st.session_state[port_key])
+        remote_ssh_username = str(st.session_state[username_key]).strip()
+        remote_ssh_password = str(st.session_state[password_key])
+        remote_cache_enabled = True
 
-        st.markdown("**连接信息**")
-        connection_caption = f"{remote_ssh_username or '-'}@{remote_ssh_host or '-'}:{remote_ssh_port}"
-        if cached_connection.get("updated_at"):
-            connection_caption += f" · 已加载本机缓存 {cached_connection['updated_at']}"
-        else:
-            connection_caption += " · 使用节点默认连接"
-        st.caption(connection_caption)
-
-        pass_col, edit_col = st.columns([2, 1])
-        with pass_col:
-            remote_ssh_password = st.text_input(
-                "SSH 密码（本次 UI 会话）",
-                value="",
-                type="password",
-                key=f"remote_ssh_password_{remote_host_name}",
-                help="密码只保存在当前 Streamlit 会话内存里，不写入 YAML、不写入连接缓存、不进入日志。",
+        with node_summary_col:
+            password_status = "密码已保存到本机" if cached_ssh_password else "密码未保存"
+            cache_status = cached_connection.get("updated_at") or "使用节点默认连接"
+            st.markdown(
+                f'<div class="dicloak-remote-node-name">{remote_host_name}</div>'
+                f'<div class="dicloak-remote-node-meta">{selected_remote_host.get("platform") or "unknown"}'
+                f' · {remote_ssh_username or "-"}@{remote_ssh_host or "-"}:{remote_ssh_port}</div>'
+                f'<div class="dicloak-remote-status">{password_status} · {cache_status}</div>',
+                unsafe_allow_html=True,
             )
-        with edit_col:
-            st.write("")
-            st.caption("IP、端口和用户名可在下方修改。")
+        with node_action_col:
+            if st.button(
+                "编辑连接" if not st.session_state[edit_key] else "收起",
+                icon=":material/edit:" if not st.session_state[edit_key] else ":material/expand_less:",
+                use_container_width=True,
+                key=f"toggle_{edit_key}",
+            ):
+                st.session_state[edit_key] = not st.session_state[edit_key]
+                st.rerun()
 
-        with st.expander("修改 SSH 连接", expanded=not bool(default_ssh_host and default_ssh_username)):
-            conn_host_col, conn_port_col, conn_user_col = st.columns([2, 1, 2])
-            with conn_host_col:
-                remote_ssh_host = st.text_input(
-                    "SSH IP / 主机",
-                    value=default_ssh_host,
-                    key=f"remote_ssh_host_{remote_host_name}",
-                    placeholder="例如 192.168.20.160",
-                    help="用于本次 UI 远程操作的 SSH 地址；可缓存到本机，但不会写入仓库。",
-                ).strip()
-            with conn_port_col:
-                remote_ssh_port = int(st.number_input(
-                    "端口",
-                    min_value=1,
-                    max_value=65535,
-                    value=default_ssh_port,
-                    step=1,
-                    key=f"remote_ssh_port_{remote_host_name}",
-                ))
-            with conn_user_col:
-                remote_ssh_username = st.text_input(
-                    "用户名",
-                    value=default_ssh_username,
-                    key=f"remote_ssh_username_{remote_host_name}",
-                    placeholder="例如 dic / tianji",
-                    help="用于本次 UI 远程操作的 SSH 用户名。",
-                ).strip()
+        if st.session_state[edit_key]:
+            with st.container(border=True, key="dicloak_remote_connection_editor"):
+                conn_host_col, conn_port_col, conn_user_col = st.columns([2, 0.8, 1.5])
+                with conn_host_col:
+                    remote_ssh_host = st.text_input(
+                        "SSH IP / 主机",
+                        value=remote_ssh_host,
+                        key=f"{host_key}_input",
+                        placeholder="例如 192.168.20.160",
+                    ).strip()
+                    st.session_state[host_key] = remote_ssh_host
+                with conn_port_col:
+                    remote_ssh_port = int(st.number_input(
+                        "端口",
+                        min_value=1,
+                        max_value=65535,
+                        value=remote_ssh_port,
+                        step=1,
+                        key=f"{port_key}_input",
+                    ))
+                    st.session_state[port_key] = remote_ssh_port
+                with conn_user_col:
+                    remote_ssh_username = st.text_input(
+                        "用户名",
+                        value=remote_ssh_username,
+                        key=f"{username_key}_input",
+                        placeholder="例如 dic / tianji",
+                    ).strip()
+                    st.session_state[username_key] = remote_ssh_username
 
-            cache_col, save_col = st.columns([2, 1])
-            with cache_col:
-                remote_cache_enabled = st.checkbox(
-                    "缓存 IP、端口和用户名到本机",
-                    value=True,
-                    key=f"remote_cache_enabled_{remote_host_name}",
-                    help="缓存文件为 config/remote_connection_cache.yaml，已加入 .gitignore；不会保存密码。",
-                )
-            remote_connection_ready = bool(remote_host_name and remote_ssh_host and remote_ssh_username)
-            with save_col:
-                if st.button(
-                    "保存缓存",
-                    use_container_width=True,
-                    disabled=not remote_connection_ready,
-                    help="只保存 IP、端口和用户名；密码不会保存。",
-                ):
+                password_col, remember_col, save_col = st.columns([2.8, 1.2, 0.9], vertical_alignment="bottom")
+                with password_col:
+                    remote_ssh_password = st.text_input(
+                        "SSH 密码",
+                        value=remote_ssh_password,
+                        type="password",
+                        key=f"{password_key}_input",
+                        help="清空后保存即可删除本机密码。密码不会进入 Git、远端同步或日志。",
+                    )
+                    st.session_state[password_key] = remote_ssh_password
+                with remember_col:
+                    remember_password = st.checkbox(
+                        "记住 SSH 密码",
+                        value=bool(st.session_state[remember_key]),
+                        key=f"{remember_key}_input",
+                        help="使用当前 Windows 用户的 DPAPI 加密并保存到本机。",
+                    )
+                    st.session_state[remember_key] = remember_password
+                remote_connection_ready = bool(remote_host_name and remote_ssh_host and remote_ssh_username)
+                with save_col:
+                    save_connection_clicked = st.button(
+                        "保存连接",
+                        icon=":material/save:",
+                        use_container_width=True,
+                        disabled=not remote_connection_ready,
+                        key=f"save_remote_connection_{remote_host_name}",
+                    )
+                if save_connection_clicked:
                     try:
                         save_remote_connection_cache(
                             remote_host_name,
                             ssh_host=remote_ssh_host,
                             ssh_port=remote_ssh_port,
                             ssh_username=remote_ssh_username,
+                            ssh_password=remote_ssh_password if remember_password else "",
                         )
-                        st.success("连接缓存已保存。")
+                        st.success("连接信息已保存到本机。" if remember_password else "连接信息已保存，本机密码已清除。")
                     except Exception as exc:
-                        st.error(f"连接缓存保存失败：{exc}")
+                        st.error(f"连接信息保存失败：{exc}")
+
+        remote_ssh_host = str(st.session_state[host_key]).strip()
+        remote_ssh_port = _safe_port(st.session_state[port_key])
+        remote_ssh_username = str(st.session_state[username_key]).strip()
+        remote_ssh_password = str(st.session_state[password_key])
+        remember_password = bool(st.session_state[remember_key])
         remote_connection_ready = bool(remote_host_name and remote_ssh_host and remote_ssh_username)
         if not remote_connection_ready:
-            st.warning("请填写 SSH IP / 主机和用户名。")
+            st.warning("请在“编辑连接”中填写 SSH IP / 主机和用户名。")
 
-        st.markdown("**运行类型**")
-        type_col, info_col = st.columns([1, 2])
+        st.markdown('<div class="dicloak-remote-section-title">运行模式</div>', unsafe_allow_html=True)
         if execution_mode == "本机 + Mac 远程":
             remote_run_type = "执行用例"
             remote_scope_label = "同步执行"
             remote_scope = "cases"
             remote_value = ""
-            with type_col:
-                st.text_input("运行类型", value="Windows + macOS 同步执行", disabled=True)
-            with info_col:
-                st.info(f"两个执行端将同时运行下方已勾选的 {len(selected_ids)} 条用例。")
+            with st.container(border=True, key="dicloak_remote_mode_sync"):
+                st.markdown("**Windows + macOS 同步执行**")
+                st.caption(f"两个执行端将同时运行下方已勾选的 {len(selected_ids)} 条用例。")
         else:
-            with type_col:
-                remote_run_type = st.selectbox(
-                    "运行类型",
-                    options=list(_REMOTE_RUN_TYPE_OPTIONS),
-                    help="远程预检只检查环境；执行用例才会运行测试。",
-                )
+            mode_key = "remote_run_type_choice"
+            st.session_state.setdefault(mode_key, "远程预检")
+            precheck_col, cases_col = st.columns(2)
+            with precheck_col:
+                with st.container(key="dicloak_remote_mode_precheck"):
+                    precheck_clicked = st.button(
+                        "远程预检",
+                        icon=":material/monitor_heart:",
+                        type="primary" if st.session_state[mode_key] == "远程预检" else "secondary",
+                        use_container_width=True,
+                    )
+                    st.caption("检查远端环境、依赖和项目配置，不运行用例。")
+            with cases_col:
+                with st.container(key="dicloak_remote_mode_cases"):
+                    cases_clicked = st.button(
+                        "执行用例",
+                        icon=":material/play_arrow:",
+                        type="primary" if st.session_state[mode_key] == "执行用例" else "secondary",
+                        use_container_width=True,
+                    )
+                    st.caption(f"运行下方已勾选的 {len(selected_ids)} 条用例，并生成执行结果。")
+            if precheck_clicked:
+                st.session_state[mode_key] = "远程预检"
+                st.rerun()
+            elif cases_clicked:
+                st.session_state[mode_key] = "执行用例"
+                st.rerun()
+            remote_run_type = st.session_state[mode_key]
             if remote_run_type == "执行用例":
                 remote_scope_label = "执行用例"
                 remote_scope = "cases"
                 remote_value = ""
-                with info_col:
-                    st.info(f"将远程执行下方已勾选的 {len(selected_ids)} 条用例。")
-                    if not _remote_selected_cases_supported():
-                        st.error("远程按勾选用例执行需要重启 Streamlit 后端，请重启 UI 后再运行。")
+                if not _remote_selected_cases_supported():
+                    st.error("远程按勾选用例执行需要重启 Streamlit 后端，请重启 UI 后再运行。")
             else:
                 remote_scope_label = "远程预检"
                 remote_scope = "precheck"
                 remote_value = ""
-                with info_col:
-                    st.info("当前只检查远端环境，不运行任何用例。")
 
-        st.markdown("**执行选项**")
-        option_attach_col, option_artifact_col, option_sync_col = st.columns(3)
-        with option_attach_col:
-            remote_attach_existing = st.checkbox(
-                "使用远端已打开 APP",
-                value=False,
-                disabled=remote_scope == "precheck",
-                help="勾选后给远端 run.py 追加 --attach-existing-app；预检不使用该选项。",
-            )
-        with option_artifact_col:
-            remote_collect_artifacts = st.checkbox(
-                "远程执行后拉取产物",
-                value=True,
-                help="执行结束后拉取远端本次新增或修改的 logs、screenshots、reports 到本机 remote_artifacts。",
-            )
-        with option_sync_col:
-            remote_sync_before_run = st.checkbox(
-                "执行前同步当前代码",
-                value=False,
-                help="执行用例前先发布本地当前工作区到远端快照；默认关闭，避免误同步。",
-            )
+        st.markdown('<div class="dicloak-remote-section-title">执行选项</div>', unsafe_allow_html=True)
+        with st.container(border=True, key="dicloak_remote_options"):
+            option_attach_col, option_artifact_col, option_sync_col = st.columns(3)
+            with option_attach_col:
+                remote_attach_existing = st.checkbox(
+                    "使用远端已打开 APP",
+                    value=False,
+                    disabled=remote_scope == "precheck",
+                    help="勾选后给远端 run.py 追加 --attach-existing-app；预检不使用该选项。",
+                )
+                st.caption("直接连接远端当前运行中的 APP。")
+            with option_artifact_col:
+                remote_collect_artifacts = st.checkbox(
+                    "执行后拉取产物",
+                    value=True,
+                    help="执行结束后拉取远端本次新增或修改的 logs、screenshots、reports 到本机 remote_artifacts。",
+                )
+                st.caption("收集日志、截图和测试报告。")
+            with option_sync_col:
+                remote_sync_before_run = st.checkbox(
+                    "执行前同步当前代码",
+                    value=False,
+                    help="执行用例前先发布本地当前工作区到远端快照；默认关闭，避免误同步。",
+                )
+                st.caption("发布当前工作区后再启动任务。")
 
-        with st.expander("检查和同步", expanded=False):
-            col_health, col_code_status, col_code_sync = st.columns(3)
-            with col_health:
-                health_clicked = st.button(
-                    "检查远程节点",
-                    use_container_width=True,
-                    disabled=not remote_connection_ready,
-                    help="只读检查远端项目目录、run.py、配置、venv、Python 依赖和 APP 路径，不启动 APP、不跑用例。",
-                )
-            with col_code_status:
-                code_status_clicked = st.button(
-                    "检查远端代码",
-                    use_container_width=True,
-                    disabled=not remote_connection_ready,
-                    help="比较远端当前快照和本地当前工作区，检查是否会跑旧代码。",
-                )
-            with col_code_sync:
-                code_sync_clicked = st.button(
-                    "同步当前代码",
-                    use_container_width=True,
-                    disabled=not remote_connection_ready,
-                    help="通过 SFTP 发布本地当前工作区到远端新快照，保留远端配置和旧快照。",
-                )
-            st.caption("日常执行一般只需要选择运行类型后点击底部运行按钮；这里用于排查环境或手动发布当前代码。")
-
-        with st.expander("高级信息", expanded=False):
-            if remote_scope == "cases" and not _remote_selected_cases_supported():
-                st.warning("当前 Streamlit 后端未加载支持按勾选用例执行的版本，重启 UI 后可查看远程命令预览。")
-            else:
-                try:
-                    command_preview = preview_remote_command(
-                        remote_host_name,
-                        remote_scope,
-                        remote_value,
-                        attach_existing_app=remote_attach_existing,
-                        case_ids=selected_ids if remote_scope == "cases" else None,
+        with st.container(key="dicloak_remote_tools"):
+            with st.expander("检查与同步", expanded=False, icon=":material/sync:"):
+                col_health, col_code_status, col_code_sync = st.columns(3)
+                with col_health:
+                    health_clicked = st.button(
+                        "检查节点",
+                        icon=":material/monitor_heart:",
+                        use_container_width=True,
+                        disabled=not remote_connection_ready,
+                        help="只读检查远端项目目录、run.py、配置、venv、Python 依赖和 APP 路径，不启动 APP、不跑用例。",
                     )
-                    st.markdown("**命令预览**")
-                    st.code(command_preview, language="bash")
-                except Exception as exc:
-                    st.warning(f"远程命令预览失败：{exc}")
-            st.markdown("**节点配置**")
-            st.table(_remote_host_details(
-                selected_remote_host,
-                current_host=remote_ssh_host,
-                current_port=remote_ssh_port,
-                current_username=remote_ssh_username,
-                password_provided=bool(remote_ssh_password),
-                cache_enabled=remote_cache_enabled,
-            ))
-            st.markdown("**平台能力**")
-            st.table(remote_capability_matrix())
+                with col_code_status:
+                    code_status_clicked = st.button(
+                        "检查代码",
+                        icon=":material/difference:",
+                        use_container_width=True,
+                        disabled=not remote_connection_ready,
+                        help="比较远端当前快照和本地当前工作区，检查是否会跑旧代码。",
+                    )
+                with col_code_sync:
+                    code_sync_clicked = st.button(
+                        "同步当前代码",
+                        icon=":material/cloud_upload:",
+                        use_container_width=True,
+                        disabled=not remote_connection_ready,
+                        help="通过 SFTP 发布本地当前工作区到远端新快照，保留远端配置和旧快照。",
+                    )
+                st.caption("用于执行前排查节点状态或手动发布代码。")
 
-    st.caption("远程模式选择“执行用例”时，会按下方已勾选用例执行。")
+        with st.container(key="dicloak_remote_advanced"):
+            with st.expander("高级信息", expanded=False, icon=":material/tune:"):
+                if remote_scope == "cases" and not _remote_selected_cases_supported():
+                    st.warning("当前 Streamlit 后端未加载支持按勾选用例执行的版本，重启 UI 后可查看远程命令预览。")
+                else:
+                    try:
+                        command_preview = preview_remote_command(
+                            remote_host_name,
+                            remote_scope,
+                            remote_value,
+                            attach_existing_app=remote_attach_existing,
+                            case_ids=selected_ids if remote_scope == "cases" else None,
+                        )
+                        st.markdown("**命令预览**")
+                        st.code(command_preview, language="bash")
+                    except Exception as exc:
+                        st.warning(f"远程命令预览失败：{exc}")
+                st.markdown("**节点配置**")
+                st.table(_remote_host_details(
+                    selected_remote_host,
+                    current_host=remote_ssh_host,
+                    current_port=remote_ssh_port,
+                    current_username=remote_ssh_username,
+                    password_provided=bool(remote_ssh_password),
+                    cache_enabled=remote_cache_enabled,
+                ))
+                st.markdown("**平台能力**")
+                st.table(remote_capability_matrix())
 
 if execution_mode in {"本机", "本机 + Mac 远程"} and local_account_missing:
     st.error(f"Windows 本机账号组缺少：{'、'.join(local_account_missing)}。请到“账号组”页面补齐。")
@@ -962,6 +1320,8 @@ if execution_mode in {"远程节点", "本机 + Mac 远程"} and remote_scope ==
 
 visible_case_count = 0
 show_case_list = not (execution_mode == "远程节点" and remote_scope == "precheck")
+visible_modules: list[str] = []
+visible_cases_by_module: dict[str, list[dict]] = {}
 
 if not show_case_list:
     st.info("远程预检只检查远端环境，不运行用例，当前不展示用例列表。")
@@ -978,58 +1338,20 @@ else:
         if not mod_cases:
             continue
         visible_case_count += len(mod_cases)
-        all_mod_cases = by_module[mod]
-        mod_selected_count = sum(
-            1 for c in all_mod_cases
-            if bool(st.session_state.get(_case_key(c["id"]), True))
-        )
-
-        col_name, col_count, col_select, col_clear = st.columns(
-            [4, 1.2, 1.2, 1.2],
-            vertical_alignment="center",
-        )
-        with col_name:
-            st.markdown(f"**{mod}**")
-        with col_count:
-            st.markdown(f"已选 {mod_selected_count}/{len(all_mod_cases)}")
-        with col_select:
-            st.button(
-                "选中模块",
-                key=_module_action_key("select", mod),
-                use_container_width=True,
-                on_click=_set_case_selected,
-                args=(all_mod_cases, True),
-            )
-        with col_clear:
-            st.button(
-                "取消模块",
-                key=_module_action_key("clear", mod),
-                use_container_width=True,
-                on_click=_set_case_selected,
-                args=(all_mod_cases, False),
-            )
-
-        with st.expander(
-            f"查看用例（{len(mod_cases)} 条）",
-            expanded=len(mod_cases) <= 3,
-        ):
-            for c in mod_cases:
-                key = _case_key(c["id"])
-                st.checkbox(
-                    str(c.get("display_name") or f"{c['class_name']}.{c['method_name']}"),
-                    key=key,
-                    help=f"原始用例：{c['id']}",
-                )
+        visible_modules.append(mod)
+        visible_cases_by_module[mod] = mod_cases
 
     if visible_case_count == 0:
         st.info("当前筛选条件下没有可显示的用例。")
+    else:
+        _render_case_selection_panel(visible_modules, visible_cases_by_module)
 
 # ═══════════════════════════════════════════════════════════════════
 # 运行按钮
 # ═══════════════════════════════════════════════════════════════════
 
-st.divider()
-col_btn, col_info = st.columns([1, 3])
+st.markdown('<div class="dicloak-runbar"></div>', unsafe_allow_html=True)
+col_info, col_btn = st.columns([3, 1], vertical_alignment="center")
 with col_btn:
     if execution_mode == "本机":
         run_label = f"▶ 运行选中（{len(selected_ids)} 条）"
@@ -1062,6 +1384,7 @@ with col_btn:
         disabled=run_disabled,
     )
 with col_info:
+    st.markdown(f"**准备执行：{len(selected_ids)} 条用例**")
     if execution_mode == "本机":
         st.caption("本机执行全部已勾选用例；显示模块和搜索显示只影响列表可见性。")
     elif execution_mode == "本机 + Mac 远程":
@@ -1089,13 +1412,14 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
     )
     show_case_progress = show_case_progress and bool(selected_cases) and bool(run_clicked)
 
-    if execution_mode == "远程节点" and remote_cache_enabled and remote_connection_ready:
+    if execution_mode in {"远程节点", "本机 + Mac 远程"} and remote_cache_enabled and remote_connection_ready:
         try:
             save_remote_connection_cache(
                 remote_host_name,
                 ssh_host=remote_ssh_host,
                 ssh_port=remote_ssh_port,
                 ssh_username=remote_ssh_username,
+                ssh_password=remote_ssh_password if remember_password else "",
             )
         except Exception as exc:
             st.warning(f"连接缓存保存失败：{exc}")

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import queue
@@ -58,6 +59,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = PROJECT_ROOT / "config" / "config.yaml"
 REMOTE_HOSTS_PATH = PROJECT_ROOT / "config" / "remote_hosts.yaml"
 REMOTE_CONNECTION_CACHE_PATH = PROJECT_ROOT / "config" / "remote_connection_cache.yaml"
+_REMOTE_SECRET_ENTROPY = b"dicloak-automation.remote-ssh-password.v1"
 _RUN_LOCK = threading.Lock()
 _RUN_STATE_LOCK = threading.Lock()
 _RUN_STATE: dict[str, Any] = {
@@ -275,8 +277,92 @@ def discover_remote_hosts() -> list[dict[str, str]]:
     ]
 
 
+def _protect_local_secret(value: str) -> str:
+    """使用当前 Windows 用户的 DPAPI 加密本机 UI 凭据."""
+    value = str(value or "")
+    if not value:
+        return ""
+    if sys.platform != "win32":
+        raise RuntimeError("当前系统不支持 Windows DPAPI，不能在本机保存 SSH 密码")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class DataBlob(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+    def to_blob(data: bytes) -> tuple[DataBlob, object]:
+        buffer = ctypes.create_string_buffer(data)
+        blob = DataBlob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte)))
+        return blob, buffer
+
+    raw_blob, raw_buffer = to_blob(value.encode("utf-8"))
+    entropy_blob, entropy_buffer = to_blob(_REMOTE_SECRET_ENTROPY)
+    encrypted_blob = DataBlob()
+    if not ctypes.windll.crypt32.CryptProtectData(
+        ctypes.byref(raw_blob),
+        None,
+        ctypes.byref(entropy_blob),
+        None,
+        None,
+        0,
+        ctypes.byref(encrypted_blob),
+    ):
+        raise ctypes.WinError()
+    try:
+        encrypted = ctypes.string_at(encrypted_blob.pbData, encrypted_blob.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(encrypted_blob.pbData)
+        del raw_buffer, entropy_buffer
+    return "dpapi:" + base64.b64encode(encrypted).decode("ascii")
+
+
+def _unprotect_local_secret(value: str) -> str:
+    """解密由当前 Windows 用户保存的 DPAPI 凭据."""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    if not value.startswith("dpapi:") or sys.platform != "win32":
+        return ""
+
+    import ctypes
+    from ctypes import wintypes
+
+    class DataBlob(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+    def to_blob(data: bytes) -> tuple[DataBlob, object]:
+        buffer = ctypes.create_string_buffer(data)
+        blob = DataBlob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte)))
+        return blob, buffer
+
+    try:
+        encrypted = base64.b64decode(value.removeprefix("dpapi:"), validate=True)
+    except (ValueError, TypeError):
+        return ""
+    encrypted_blob, encrypted_buffer = to_blob(encrypted)
+    entropy_blob, entropy_buffer = to_blob(_REMOTE_SECRET_ENTROPY)
+    decrypted_blob = DataBlob()
+    if not ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(encrypted_blob),
+        None,
+        ctypes.byref(entropy_blob),
+        None,
+        None,
+        0,
+        ctypes.byref(decrypted_blob),
+    ):
+        return ""
+    try:
+        decrypted = ctypes.string_at(decrypted_blob.pbData, decrypted_blob.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(decrypted_blob.pbData)
+        del encrypted_buffer, entropy_buffer
+    return decrypted.decode("utf-8")
+
+
 def load_remote_connection_cache() -> dict[str, dict[str, str]]:
-    """读取本机远程连接缓存；只包含 host/port/username，不保存密码."""
+    """读取本机远程连接缓存，并解密当前 Windows 用户保存的密码."""
     if not REMOTE_CONNECTION_CACHE_PATH.exists():
         return {}
     try:
@@ -300,6 +386,7 @@ def load_remote_connection_cache() -> dict[str, dict[str, str]]:
             "host": str(item.get("host", "")).strip(),
             "port": str(item.get("port", "")).strip(),
             "username": str(item.get("username", "")).strip(),
+            "password": _unprotect_local_secret(str(item.get("password_protected", ""))),
             "updated_at": str(item.get("updated_at", "")).strip(),
         }
     return result
@@ -311,8 +398,9 @@ def save_remote_connection_cache(
     ssh_host: str,
     ssh_port: int,
     ssh_username: str,
+    ssh_password: str | None = None,
 ) -> None:
-    """保存本机远程连接缓存；不会保存 SSH 密码."""
+    """保存本机连接缓存；密码使用当前 Windows 用户的 DPAPI 加密."""
     host_name = host_name.strip()
     ssh_host = ssh_host.strip()
     ssh_username = ssh_username.strip()
@@ -326,15 +414,35 @@ def save_remote_connection_cache(
         return
 
     cache = load_remote_connection_cache()
+    previous_password = str(cache.get(host_name, {}).get("password", ""))
+    password = previous_password if ssh_password is None else str(ssh_password)
     cache[host_name] = {
         "host": ssh_host,
         "port": str(normalized_port),
         "username": ssh_username,
+        "password": password,
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
+    persisted_hosts: dict[str, dict[str, str]] = {}
+    for name, item in cache.items():
+        persisted_item = {
+            "host": str(item.get("host", "")).strip(),
+            "port": str(item.get("port", "")).strip(),
+            "username": str(item.get("username", "")).strip(),
+            "updated_at": str(item.get("updated_at", "")).strip(),
+        }
+        saved_password = str(item.get("password", ""))
+        if saved_password:
+            persisted_item["password_protected"] = _protect_local_secret(saved_password)
+        persisted_hosts[str(name)] = persisted_item
     REMOTE_CONNECTION_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with REMOTE_CONNECTION_CACHE_PATH.open("w", encoding="utf-8") as file_obj:
-        yaml.safe_dump({"hosts": cache}, file_obj, allow_unicode=True, sort_keys=True)
+    temp_path = REMOTE_CONNECTION_CACHE_PATH.with_suffix(".yaml.tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8") as file_obj:
+            yaml.safe_dump({"hosts": persisted_hosts}, file_obj, allow_unicode=True, sort_keys=True)
+        os.replace(temp_path, REMOTE_CONNECTION_CACHE_PATH)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def preview_remote_command(

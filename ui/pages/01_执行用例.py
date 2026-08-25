@@ -50,6 +50,7 @@ from core.ui_log_filter import (
     unsuccessful_log_text as _unsuccessful_log_text,
 )
 from core.ui_progress import case_progress_snapshot
+from ui.components.case_progress import render_case_progress as render_case_progress_component
 from ui.components.case_selector import render_case_selector
 from streamlit_runner import (
     check_remote_host,
@@ -593,39 +594,26 @@ def _render_case_progress(
     log_lines: list[str],
     platforms: list[str],
     default_platform: str,
+    execution_started_at: float,
+    running: bool,
+    render_sequence: int,
 ) -> None:
     snapshot = case_progress_snapshot(
         selected_cases,
         log_lines,
         platforms=platforms,
         default_platform=default_platform,
+        observed_at=time.time(),
     )
     with container.container():
-        st.markdown("**执行进度**")
-        total = int(snapshot["total"])
-        finished = int(snapshot["finished"])
-        st.progress(
-            float(snapshot["progress"]),
-            text=f"已完成 {finished}/{total} 条",
+        render_case_progress_component(
+            snapshot=snapshot,
+            elapsed_seconds=max(0.0, time.time() - execution_started_at),
+            running=running,
+            state_key=f"{execution_started_at:.6f}",
+            key=f"execution_case_progress_component_{render_sequence}",
+            default=None,
         )
-        cols = st.columns(5)
-        cols[0].metric("总计", total)
-        cols[1].metric("已完成", finished)
-        cols[2].metric("运行中", int(snapshot["active"]))
-        cols[3].metric("待执行", int(snapshot["pending"]))
-        cols[4].metric("失败/错误", int(snapshot["problem"]))
-        rows = snapshot["rows"]
-        if rows:
-            display_rows = [
-                {key: row.get(key, "") for key in ("执行端", "序号", "状态", "模块", "用例")}
-                for row in rows
-            ]
-            st.dataframe(
-                display_rows,
-                hide_index=True,
-                use_container_width=True,
-                height=320,
-            )
 
 
 def _case_progress_log_relevant(line: str) -> bool:
@@ -1513,6 +1501,7 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
             },
             daemon=True,
         )
+    execution_started_at = time.time()
     thread.start()
     _refresh_execution_status(task_status_container, thread=thread)
 
@@ -1520,6 +1509,7 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
     log_lines: list[str] = []
     last_log_time = time.time()
     idle_warning_shown = False
+    progress_render_sequence = 0
     if show_case_progress:
         _render_case_progress(
             progress_placeholder,
@@ -1527,6 +1517,9 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
             log_lines=log_lines,
             platforms=progress_platforms,
             default_platform=progress_default_platform,
+            execution_started_at=execution_started_at,
+            running=thread.is_alive(),
+            render_sequence=progress_render_sequence,
         )
     if health_clicked:
         status_placeholder.info("⏳ 正在检查远程节点...")
@@ -1553,12 +1546,16 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
                 display = "\n".join(log_lines[-_LOG_DISPLAY_LINES:])
                 log_placeholder.code(display, language="text", height=_LOG_DISPLAY_HEIGHT)
                 if show_case_progress and _case_progress_log_relevant(msg):
+                    progress_render_sequence += 1
                     _render_case_progress(
                         progress_placeholder,
                         selected_cases=selected_cases,
                         log_lines=log_lines,
                         platforms=progress_platforms,
                         default_platform=progress_default_platform,
+                        execution_started_at=execution_started_at,
+                        running=thread.is_alive(),
+                        render_sequence=progress_render_sequence,
                     )
             except queue.Empty:
                 _refresh_execution_status(task_status_container, thread=thread)
@@ -1577,12 +1574,16 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
             request_ui_task_stop(stop_event)
     _refresh_execution_status(task_status_container)
     if show_case_progress:
+        progress_render_sequence += 1
         _render_case_progress(
             progress_placeholder,
             selected_cases=selected_cases,
             log_lines=log_lines,
             platforms=progress_platforms,
             default_platform=progress_default_platform,
+            execution_started_at=execution_started_at,
+            running=False,
+            render_sequence=progress_render_sequence,
         )
 
     # ═══════════════════════════════════════════════════════════════

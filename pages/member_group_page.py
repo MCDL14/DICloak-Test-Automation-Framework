@@ -24,10 +24,8 @@ class MemberGroupPage(BasePage):
         self.dismiss_blocking_overlays()
         self.cdp.click_element_by_script(self._visible_text_button_script("创建成员分组"))
         self._wait_for_create_member_group_dialog()
-        self.cdp.fill_element_by_script(self._dialog_input_by_label_script("成员分组名称"), name)
-        self.cdp.fill_element_by_script(self._dialog_textarea_by_label_script("备注"), remark)
-        self._wait_dialog_field_value("成员分组名称", name)
-        self._wait_dialog_field_value("备注", remark)
+        self._wait_for_create_member_group_dialog_ready()
+        self._fill_create_dialog_fields_stably(name=name, remark=remark)
         self._click_overlay_button_wait_loading_then_closed("确定")
         self._wait_for_member_group_table_not_loading()
         self.wait_member_group_visible(name)
@@ -155,24 +153,89 @@ class MemberGroupPage(BasePage):
             time.sleep(0.2)
         raise TimeoutError("create member group dialog did not appear")
 
-    def _wait_dialog_field_value(
+    def _wait_for_create_member_group_dialog_ready(
         self,
-        field_label: str,
-        expected_value: str,
         timeout_seconds: int | None = None,
+        stable_seconds: float = 0.6,
+        poll_seconds: float = 0.1,
     ) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
-        deadline = time.time() + timeout_seconds
-        last_value = ""
-        while time.time() < deadline:
-            last_value = str(self.cdp.evaluate(self._dialog_field_value_script(field_label)) or "").strip()
-            if last_value == expected_value:
-                return
-            time.sleep(0.2)
+        deadline = time.monotonic() + timeout_seconds
+        stable_since: float | None = None
+        stable_signature: tuple[int, bool] | None = None
+        last_state: dict[str, object] = {}
+        while time.monotonic() < deadline:
+            value = self.cdp.evaluate(self._create_member_group_dialog_state_script())
+            last_state = value if isinstance(value, dict) else {}
+            ready = bool(last_state.get("ready"))
+            signature = (
+                int(last_state.get("permission_count") or 0),
+                bool(last_state.get("loading")),
+            )
+            now = time.monotonic()
+            if ready:
+                if signature != stable_signature:
+                    stable_signature = signature
+                    stable_since = now
+                elif stable_since is not None and now - stable_since >= stable_seconds:
+                    return
+            else:
+                stable_signature = None
+                stable_since = None
+            time.sleep(poll_seconds)
+        raise TimeoutError(f"create member group dialog did not become ready: {last_state}")
+
+    def _fill_create_dialog_fields_stably(
+        self,
+        *,
+        name: str,
+        remark: str,
+        timeout_seconds: int | None = None,
+        stable_seconds: float = 0.6,
+        poll_seconds: float = 0.1,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        expected_values = {
+            "成员分组名称": name,
+            "备注": remark,
+        }
+        deadline = time.monotonic() + timeout_seconds
+        stable_since: float | None = None
+        last_values: dict[str, str] = {}
+        while time.monotonic() < deadline:
+            refilled = False
+            for field_label, expected_value in expected_values.items():
+                actual_value = self._dialog_field_value(field_label)
+                last_values[field_label] = actual_value
+                if actual_value == expected_value:
+                    continue
+                self._fill_dialog_field(field_label, expected_value)
+                refilled = True
+
+            if refilled:
+                stable_since = None
+            else:
+                now = time.monotonic()
+                if stable_since is None:
+                    stable_since = now
+                elif now - stable_since >= stable_seconds:
+                    return
+            time.sleep(poll_seconds)
         raise TimeoutError(
-            "member group dialog field value did not become expected: "
-            f"field={field_label}, expected={expected_value}, actual={last_value}"
+            "member group dialog fields did not remain stable: "
+            f"expected={expected_values}, actual={last_values}"
         )
+
+    def _dialog_field_value(self, field_label: str) -> str:
+        return str(self.cdp.evaluate(self._dialog_field_value_script(field_label)) or "").strip()
+
+    def _fill_dialog_field(self, field_label: str, value: str) -> None:
+        script = (
+            self._dialog_input_by_label_script(field_label)
+            if field_label == "成员分组名称"
+            else self._dialog_textarea_by_label_script(field_label)
+        )
+        self.cdp.fill_element_by_script(script, value)
 
     def _wait_delete_member_group_dialog_visible(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -450,6 +513,37 @@ class MemberGroupPage(BasePage):
             return Array.from(document.querySelectorAll(".el-dialog"))
                 .filter(visible)
                 .some((dialog) => text(dialog).includes("创建成员分组") && text(dialog).includes("成员分组名称"));
+        }
+        """
+
+    def _create_member_group_dialog_state_script(self) -> str:
+        return """
+        () => {
+            const visible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const text = (el) => el.innerText || el.textContent || "";
+            const dialog = Array.from(document.querySelectorAll(".el-dialog"))
+                .filter(visible)
+                .reverse()
+                .find((item) => text(item).includes("创建成员分组") && text(item).includes("功能权限"));
+            if (!dialog) {
+                return { ready: false, loading: false, permission_count: 0 };
+            }
+            const loading = Array.from(
+                dialog.querySelectorAll(".el-loading-mask, .el-skeleton, [aria-busy='true']")
+            ).some(visible);
+            const permissionCount = dialog.querySelectorAll(".el-checkbox, input[type='checkbox']").length;
+            return {
+                ready: !loading && permissionCount > 0,
+                loading,
+                permission_count: permissionCount,
+            };
         }
         """
 

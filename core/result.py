@@ -103,7 +103,12 @@ class AutomationTestResult(unittest.TextTestResult):
     def addSkip(self, test: unittest.case.TestCase, reason: str) -> None:
         super().addSkip(test, reason)
         self.run_result.skipped += 1
-        self._logger(test).info("CASE SKIP %s reason=%s", test.id(), reason)
+        self._logger(test).info(
+            "CASE SKIP %s elapsed=%.2fs reason=%s",
+            test.id(),
+            self._elapsed_seconds(test),
+            reason,
+        )
 
     def _record_case_failure(self, test: unittest.case.TestCase, status: str, err) -> None:
         screenshot_path = self._capture_screenshot(test)

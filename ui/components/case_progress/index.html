@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Source Sans 3", "Microsoft YaHei", sans-serif;
+      color: #172033;
+      --surface: #ffffff;
+      --surface-soft: #f7f9fc;
+      --border: #d7dee8;
+      --border-strong: #c7d0dc;
+      --muted: #68768a;
+      --track: #edf1f6;
+      --failure: #bd2437;
+      --failure-bg: #fff7f7;
+      --failure-border: #f0b8c0;
+      --error: #b95c08;
+      --error-bg: #fff9f2;
+      --error-border: #efc495;
+      --skipped: #67509f;
+      --skipped-bg: #faf8ff;
+      --skipped-border: #d7cbed;
+      --active: #1169bc;
+      --active-bg: #f4f9ff;
+      --active-border: #b7d8f6;
+      --retry: #a56806;
+      --pending: #647286;
+      --passed: #11734f;
+      --passed-bg: #f7fcf9;
+      --passed-border: #c5e8d8;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      color: #e8edf5;
+      --surface: #161c25;
+      --surface-soft: #1b222d;
+      --border: #303a48;
+      --border-strong: #4b5869;
+      --muted: #aeb9c8;
+      --track: #29313d;
+      --failure: #ff8792;
+      --failure-bg: #2b1d22;
+      --failure-border: #71333e;
+      --error: #f6ad63;
+      --error-bg: #2d241b;
+      --error-border: #704822;
+      --skipped: #bca8ea;
+      --skipped-bg: #252131;
+      --skipped-border: #554778;
+      --active: #7bbcf7;
+      --active-bg: #192735;
+      --active-border: #315d83;
+      --retry: #efb952;
+      --pending: #aeb9c8;
+      --passed: #6bd3a4;
+      --passed-bg: #192a24;
+      --passed-border: #2d624d;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: transparent; }
+    body { color: inherit; }
+    button, select { font: inherit; }
+    #root { min-width: 0; }
+    .surface {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface);
+    }
+    .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .live {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .live-dot {
+      width: 10px;
+      height: 10px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--active);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--active) 16%, transparent);
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+    .surface.finished .live-dot { background: var(--passed); animation: none; }
+    .head-progress {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .total-time { color: inherit; font-variant-numeric: tabular-nums; }
+    .head-progress strong { color: inherit; font-weight: 600; }
+    .track { display: flex; height: 9px; overflow: hidden; background: var(--track); }
+    .track span { display: block; height: 100%; }
+    .track-failure { background: var(--failure); }
+    .track-error { background: var(--error); }
+    .track-skipped { background: var(--skipped); }
+    .track-active { background: var(--active); }
+    .track-passed { background: var(--passed); }
+    .track-flaky { background: var(--retry); }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      border-bottom: 1px solid var(--border);
+    }
+    .stat {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+      padding: 12px 13px;
+    }
+    .stat + .stat { border-left: 1px solid var(--border); }
+    .stat-icon {
+      display: grid;
+      width: 27px;
+      height: 27px;
+      place-items: center;
+      border-radius: 6px;
+      font-size: 15px;
+      font-weight: 700;
+      background: var(--surface-soft);
+    }
+    .stat-failure .stat-icon { color: var(--failure); background: var(--failure-bg); }
+    .stat-error .stat-icon { color: var(--error); background: var(--error-bg); }
+    .stat-skipped .stat-icon { color: var(--skipped); background: var(--skipped-bg); }
+    .stat-active .stat-icon { color: var(--active); background: var(--active-bg); }
+    .stat-pending .stat-icon { color: var(--pending); }
+    .stat-passed .stat-icon { color: var(--passed); background: var(--passed-bg); }
+    .stat-value { font-size: 16px; font-weight: 600; }
+    .stat-label { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .tools {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-soft);
+    }
+    .filters { display: flex; flex: 1 1 380px; flex-wrap: wrap; gap: 6px; }
+    .filter {
+      min-height: 32px;
+      padding: 4px 10px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .filter:hover { color: inherit; background: color-mix(in srgb, var(--surface) 72%, transparent); }
+    .filter[aria-pressed="true"] { border-color: var(--border-strong); color: inherit; background: var(--surface); }
+    .tool-right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+    .module-filter {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding-left: 8px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      color: var(--muted);
+      background: var(--surface);
+      white-space: nowrap;
+    }
+    .module-filter-mark { font-size: 14px; }
+    .module-select {
+      min-height: 30px;
+      max-width: 168px;
+      padding: 4px 28px 4px 5px;
+      border: 0;
+      color: inherit;
+      background: transparent;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .showing { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .list { padding: 4px 0 8px; }
+    .group[hidden] { display: none; }
+    .group-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px 7px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .group-title { display: flex; align-items: center; gap: 8px; }
+    .group-marker { width: 4px; height: 18px; border-radius: 2px; }
+    .group-failure .group-marker { background: var(--failure); }
+    .group-error .group-marker { background: var(--error); }
+    .group-skipped .group-marker { background: var(--skipped); }
+    .group-active .group-marker { background: var(--active); }
+    .group-pending .group-marker { background: var(--pending); }
+    .group-passed .group-marker { background: var(--passed); }
+    .group-count { color: var(--muted); font-weight: 400; }
+    .row {
+      display: grid;
+      grid-template-columns: 112px 38px 72px minmax(95px, 0.7fr) minmax(180px, 1.6fr) 82px;
+      align-items: center;
+      min-height: 44px;
+      margin: 0 10px 5px;
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: inherit;
+      background: var(--surface);
+      font-size: 13px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .group-failure .row { border-color: var(--failure-border); background: var(--failure-bg); }
+    .group-error .row { border-color: var(--error-border); background: var(--error-bg); }
+    .group-skipped .row { border-color: var(--skipped-border); background: var(--skipped-bg); }
+    .group-active .row { border-color: var(--active-border); background: var(--active-bg); }
+    .group-pending .row { opacity: 0.72; }
+    .group-passed .row { border-color: var(--passed-border); background: var(--passed-bg); }
+    .row:hover { opacity: 1; }
+    .status { display: flex; align-items: center; gap: 7px; min-width: 0; font-weight: 600; }
+    .status-icon {
+      display: inline-grid;
+      width: 17px;
+      height: 17px;
+      flex: 0 0 auto;
+      place-items: center;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      font-size: 11px;
+    }
+    .status-failed { color: var(--failure); }
+    .status-error { color: var(--error); }
+    .status-skipped { color: var(--skipped); }
+    .status-running { color: var(--active); }
+    .status-retrying, .status-flaky_passed { color: var(--retry); }
+    .status-pending { color: var(--pending); }
+    .status-passed { color: var(--passed); }
+    .seq, .platform, .module, .time { color: var(--muted); }
+    .case-name { min-width: 0; overflow-wrap: anywhere; }
+    .time { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .status-running + .seq ~ .time { color: var(--active); }
+    .detail {
+      margin: -1px 18px 8px;
+      padding: 8px 10px;
+      border-left: 2px solid var(--border-strong);
+      color: var(--muted);
+      background: var(--surface-soft);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .more {
+      width: calc(100% - 20px);
+      margin: 1px 10px 6px;
+      padding: 8px 10px;
+      border: 0;
+      color: var(--muted);
+      background: transparent;
+      font-size: 13px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .more:hover { color: inherit; }
+    .empty { padding: 28px 16px; color: var(--muted); font-size: 13px; text-align: center; }
+    @keyframes pulse { 50% { opacity: 0.45; transform: scale(0.82); } }
+    @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+    @media (max-width: 760px) {
+      .summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .stat:nth-child(4) { border-left: 0; }
+      .stat:nth-child(n+4) { border-top: 1px solid var(--border); }
+      .row { grid-template-columns: 102px 34px 64px minmax(0, 1fr) 72px; }
+      .module { display: none; }
+    }
+    @media (max-width: 520px) {
+      .head { align-items: flex-start; }
+      .head-progress { align-items: flex-end; flex-direction: column; gap: 2px; }
+      .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .stat:nth-child(odd) { border-left: 0; }
+      .stat:nth-child(n+3) { border-top: 1px solid var(--border); }
+      .stat:nth-child(4) { border-left: 1px solid var(--border); }
+      .tools { align-items: flex-start; flex-direction: column; }
+      .filters { flex: none; width: 100%; }
+      .tool-right { justify-content: space-between; width: 100%; margin-left: 0; }
+      .row {
+        grid-template-columns: 102px 32px minmax(0, 1fr) 66px;
+        gap: 2px 6px;
+      }
+      .status { grid-column: 1; grid-row: 1 / 3; }
+      .seq { grid-column: 2; grid-row: 1 / 3; }
+      .case-name { grid-column: 3; grid-row: 1; }
+      .platform { grid-column: 3; grid-row: 2; }
+      .platform::after { content: " · " attr(data-module); }
+      .module { display: none; }
+      .time { grid-column: 4; grid-row: 1 / 3; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    const root = document.getElementById("root");
+    const GROUPS = [
+      { id: "failure", label: "断言失败", statuses: ["failed"] },
+      { id: "error", label: "执行错误", statuses: ["error"] },
+      { id: "active", label: "正在处理", statuses: ["running", "retrying"] },
+      { id: "skipped", label: "已跳过", statuses: ["skipped"] },
+      { id: "pending", label: "等待执行", statuses: ["pending"] },
+      { id: "passed", label: "已通过", statuses: ["passed", "flaky_passed"] },
+    ];
+    const STATUS_LABELS = {
+      all: "全部",
+      failure: "断言失败",
+      error: "执行错误",
+      skipped: "跳过",
+      active: "进行中",
+      pending: "待执行",
+      passed: "已通过",
+    };
+    const STATUS_ICONS = {
+      failed: "×",
+      error: "!",
+      skipped: "–",
+      running: "•",
+      retrying: "↻",
+      pending: "○",
+      passed: "✓",
+      flaky_passed: "✓",
+    };
+    const LIMITED_GROUPS = new Set(["pending", "passed"]);
+    const ROW_LIMIT = 8;
+    let args = { snapshot: { rows: [], counts: {}, total: 0, finished: 0 }, elapsed_seconds: 0, running: false };
+    let activeStatus = "all";
+    let activeModule = "all";
+    let expandedRow = "";
+    const expandedGroups = new Set();
+    let renderedAt = Date.now();
+    let restoredStateKey = "";
+
+    function storageKey() {
+      return `dicloak-case-progress:${String(args.state_key || "default")}`;
+    }
+
+    function restoreState() {
+      const nextStateKey = storageKey();
+      if (restoredStateKey === nextStateKey) return;
+      activeStatus = "all";
+      activeModule = "all";
+      expandedRow = "";
+      expandedGroups.clear();
+      try {
+        const saved = JSON.parse(window.sessionStorage.getItem(nextStateKey) || "null");
+        const validStatuses = new Set(["all", "failure", "error", "skipped", "active", "pending", "passed"]);
+        if (validStatuses.has(saved?.activeStatus)) activeStatus = saved.activeStatus;
+        if (typeof saved?.activeModule === "string") activeModule = saved.activeModule;
+        if (typeof saved?.expandedRow === "string") expandedRow = saved.expandedRow;
+        for (const groupId of saved?.expandedGroups || []) {
+          if (GROUPS.some((group) => group.id === groupId)) expandedGroups.add(groupId);
+        }
+      } catch (_error) {
+        // Storage can be unavailable in hardened browser sessions; defaults remain usable.
+      }
+      restoredStateKey = nextStateKey;
+    }
+
+    function persistState() {
+      try {
+        window.sessionStorage.setItem(storageKey(), JSON.stringify({
+          activeStatus,
+          activeModule,
+          expandedRow,
+          expandedGroups: [...expandedGroups],
+        }));
+      } catch (_error) {
+        // The component remains interactive even when browser storage is unavailable.
+      }
+    }
+
+    function post(type, payload = {}) {
+      window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
+    }
+
+    function resizeFrame() {
+      requestAnimationFrame(() => {
+        const height = Math.ceil(root.getBoundingClientRect().height);
+        post("streamlit:setFrameHeight", { height: Math.max(height, 1) });
+      });
+    }
+
+    function element(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function statusInGroup(row, groupId) {
+      const group = GROUPS.find((item) => item.id === groupId);
+      return group ? group.statuses.includes(row["状态码"]) : true;
+    }
+
+    function moduleMatches(row) {
+      return activeModule === "all" || row["模块"] === activeModule;
+    }
+
+    function groupCount(rows, groupId) {
+      const moduleRows = rows.filter(moduleMatches);
+      return groupId === "all" ? moduleRows.length : moduleRows.filter((row) => statusInGroup(row, groupId)).length;
+    }
+
+    function formatDuration(seconds) {
+      const safeSeconds = Math.max(0, Number(seconds) || 0);
+      if (safeSeconds < 60) return `${safeSeconds.toFixed(1)}s`;
+      const minutes = Math.floor(safeSeconds / 60);
+      const remaining = Math.floor(safeSeconds % 60);
+      return `${minutes}:${String(remaining).padStart(2, "0")}`;
+    }
+
+    function formatTotal(seconds) {
+      const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+      const hours = Math.floor(safeSeconds / 3600);
+      const minutes = Math.floor((safeSeconds % 3600) / 60);
+      const remaining = safeSeconds % 60;
+      return hours > 0
+        ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`
+        : `${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`;
+    }
+
+    function makeStat(id, icon, value, label) {
+      const stat = element("div", `stat stat-${id}`);
+      stat.append(element("span", "stat-icon", icon));
+      const copy = element("span");
+      copy.append(element("span", "stat-value", String(value)), document.createElement("br"), element("span", "stat-label", label));
+      stat.append(copy);
+      return stat;
+    }
+
+    function rowIdentity(row) {
+      return `${row["执行端"]}:${row["原始用例"]}`;
+    }
+
+    function makeRow(row) {
+      const wrapper = element("div");
+      const identity = rowIdentity(row);
+      const button = element("button", "row");
+      button.type = "button";
+      button.setAttribute("aria-expanded", String(expandedRow === identity));
+
+      const status = element("span", `status status-${row["状态码"]}`);
+      status.append(element("span", "status-icon", STATUS_ICONS[row["状态码"]] || "•"), element("span", "", row["状态"] || ""));
+      const platform = element("span", "platform", row["执行端"] || "");
+      platform.dataset.module = row["模块"] || "";
+      const time = element("span", "time", row["状态码"] === "pending" ? "--" : formatDuration(row["用时秒"]));
+      if (row["是否计时"]) time.dataset.liveBase = String(row["用时秒"] || 0);
+      button.append(
+        status,
+        element("span", "seq", `#${row["序号"] || ""}`),
+        platform,
+        element("span", "module", row["模块"] || ""),
+        element("span", "case-name", row["用例"] || row["原始用例"] || ""),
+        time,
+      );
+      button.addEventListener("click", () => {
+        expandedRow = expandedRow === identity ? "" : identity;
+        persistState();
+        render();
+      });
+      wrapper.append(button);
+      if (expandedRow === identity) wrapper.append(element("div", "detail", row["详情"] || "详情请查看执行日志。"));
+      return wrapper;
+    }
+
+    function render() {
+      renderedAt = Date.now();
+      const snapshot = args.snapshot || {};
+      const rows = snapshot.rows || [];
+      const counts = snapshot.counts || {};
+      const modules = [...new Set(rows.map((row) => row["模块"]).filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
+      if (activeModule !== "all" && !modules.includes(activeModule)) activeModule = "all";
+      root.replaceChildren();
+
+      const surface = element("section", `surface${args.running ? "" : " finished"}`);
+      const head = element("header", "head");
+      const live = element("div", "live");
+      live.append(element("span", "live-dot"), element("span", "", args.running ? "正在执行" : "执行完成"));
+      const headProgress = element("div", "head-progress");
+      const totalTime = element("span", "total-time");
+      totalTime.append("总耗时 ", element("strong", "", formatTotal(args.elapsed_seconds)));
+      totalTime.querySelector("strong").dataset.totalTime = "true";
+      const completion = element("span");
+      const completionStrong = element("strong", "", `已完成 ${snapshot.finished || 0} / ${snapshot.total || 0}`);
+      completion.append(completionStrong, ` · ${Math.round((snapshot.progress || 0) * 100)}%`);
+      headProgress.append(totalTime, completion);
+      head.append(live, headProgress);
+      surface.append(head);
+
+      const total = Number(snapshot.total) || 0;
+      const track = element("div", "track");
+      const trackParts = [
+        ["failure", counts.failed || 0],
+        ["error", counts.error || 0],
+        ["skipped", counts.skipped || 0],
+        ["active", (counts.running || 0) + (counts.retrying || 0)],
+        ["passed", counts.passed || 0],
+        ["flaky", counts.flaky_passed || 0],
+      ];
+      for (const [id, value] of trackParts) {
+        const part = element("span", `track-${id}`);
+        part.style.width = `${total ? value / total * 100 : 0}%`;
+        track.append(part);
+      }
+      surface.append(track);
+
+      const summary = element("div", "summary");
+      summary.append(
+        makeStat("failure", "×", counts.failed || 0, "断言失败"),
+        makeStat("error", "!", counts.error || 0, "执行错误"),
+        makeStat("skipped", "–", counts.skipped || 0, "跳过"),
+        makeStat("active", "•", (counts.running || 0) + (counts.retrying || 0), "运行 / 重试中"),
+        makeStat("pending", "○", counts.pending || 0, "待执行"),
+        makeStat("passed", "✓", (counts.passed || 0) + (counts.flaky_passed || 0), "已通过"),
+      );
+      surface.append(summary);
+
+      const tools = element("div", "tools");
+      const filters = element("div", "filters");
+      filters.setAttribute("role", "group");
+      filters.setAttribute("aria-label", "状态筛选");
+      for (const id of ["all", "failure", "error", "skipped", "active", "pending", "passed"]) {
+        const button = element("button", "filter", `${STATUS_LABELS[id]} ${groupCount(rows, id)}`);
+        button.type = "button";
+        button.dataset.filter = id;
+        button.setAttribute("aria-pressed", String(activeStatus === id));
+        button.addEventListener("click", () => {
+          activeStatus = id;
+          expandedRow = "";
+          persistState();
+          render();
+        });
+        filters.append(button);
+      }
+
+      const right = element("div", "tool-right");
+      const moduleLabel = element("label", "module-filter");
+      moduleLabel.append(element("span", "module-filter-mark", "≡"));
+      const select = element("select", "module-select");
+      select.setAttribute("aria-label", "按模块筛选");
+      const allOption = element("option", "", "全部模块");
+      allOption.value = "all";
+      select.append(allOption);
+      for (const module of modules) {
+        const option = element("option", "", module);
+        option.value = module;
+        select.append(option);
+      }
+      select.value = activeModule;
+      select.addEventListener("change", () => {
+        activeModule = select.value;
+        expandedRow = "";
+        persistState();
+        render();
+      });
+      moduleLabel.append(select);
+      const showingCount = groupCount(rows, activeStatus);
+      right.append(moduleLabel, element("span", "showing", `显示 ${showingCount} 条`));
+      tools.append(filters, right);
+      surface.append(tools);
+
+      const list = element("div", "list");
+      let visibleGroupCount = 0;
+      for (const group of GROUPS) {
+        if (activeStatus !== "all" && activeStatus !== group.id) continue;
+        const groupRows = rows
+          .filter((row) => moduleMatches(row) && group.statuses.includes(row["状态码"]))
+          .sort((left, right) => Number(left["序号"] || 0) - Number(right["序号"] || 0));
+        if (!groupRows.length) continue;
+        visibleGroupCount += 1;
+        const groupNode = element("section", `group group-${group.id}`);
+        const groupHead = element("div", "group-head");
+        const title = element("span", "group-title");
+        title.append(element("span", "group-marker"), element("span", "", group.label));
+        groupHead.append(title, element("span", "group-count", `${groupRows.length} 条`));
+        groupNode.append(groupHead);
+
+        const limited = LIMITED_GROUPS.has(group.id) && !expandedGroups.has(group.id) && groupRows.length > ROW_LIMIT;
+        const displayedRows = limited ? groupRows.slice(0, ROW_LIMIT) : groupRows;
+        displayedRows.forEach((row) => groupNode.append(makeRow(row)));
+        if (LIMITED_GROUPS.has(group.id) && groupRows.length > ROW_LIMIT) {
+          const expanded = expandedGroups.has(group.id);
+          const remaining = groupRows.length - ROW_LIMIT;
+          const more = element("button", "more", expanded ? `收起${group.label}用例` : `展开其余 ${remaining} 条${group.label}用例`);
+          more.type = "button";
+          more.setAttribute("aria-expanded", String(expanded));
+          more.addEventListener("click", () => {
+            if (expanded) expandedGroups.delete(group.id);
+            else expandedGroups.add(group.id);
+            persistState();
+            render();
+          });
+          groupNode.append(more);
+        }
+        list.append(groupNode);
+      }
+      if (!visibleGroupCount) list.append(element("div", "empty", "当前筛选条件下没有用例。"));
+      surface.append(list);
+      root.append(surface);
+      resizeFrame();
+    }
+
+    function tick() {
+      const delta = args.running ? (Date.now() - renderedAt) / 1000 : 0;
+      const totalTime = root.querySelector("[data-total-time]");
+      if (totalTime) totalTime.textContent = formatTotal((args.elapsed_seconds || 0) + delta);
+      root.querySelectorAll("[data-live-base]").forEach((node) => {
+        node.textContent = formatDuration(Number(node.dataset.liveBase || 0) + delta);
+      });
+    }
+
+    window.addEventListener("message", (event) => {
+      if (event.data?.type !== "streamlit:render") return;
+      args = event.data.args || args;
+      restoreState();
+      document.documentElement.dataset.theme = event.data.theme?.base === "dark" ? "dark" : "light";
+      render();
+    });
+    window.setInterval(tick, 250);
+    post("streamlit:componentReady", { apiVersion: 1 });
+  </script>
+</body>
+</html>

@@ -47,6 +47,28 @@ class CaseDisplayNameTests(unittest.TestCase):
 
         self.assertEqual(display_name, "创建 代理 并 删除")
 
+    def test_global_setting_open_block_cases_have_chinese_names(self) -> None:
+        expected_names = {
+            "test_proxy_check_failure_not_open_environment": "代理检测失败时阻止打开环境",
+            "test_country_mismatch_not_open_browser": "国家或地区不一致时阻止打开浏览器",
+        }
+
+        for method_name, expected_name in expected_names.items():
+            with self.subTest(method_name=method_name):
+                self.assertEqual(case_display_name(method_name), expected_name)
+
+    def test_custom_proxy_case_name_mentions_connectivity(self) -> None:
+        self.assertEqual(
+            case_display_name("test_create_custom_proxy_environment_open_close_delete"),
+            "创建自定义代理环境并验证 Chrome 商店连通性",
+        )
+
+    def test_existing_proxy_case_name_mentions_connectivity(self) -> None:
+        self.assertEqual(
+            case_display_name("test_create_environment_with_existing_proxy_open_close_delete"),
+            "创建已有代理环境并验证 Chrome 商店连通性",
+        )
+
     def test_discover_cases_includes_display_name_without_changing_id(self) -> None:
         with mock.patch("streamlit_runner._build_config", return_value={}), mock.patch(
             "streamlit_runner.AutomationRunner",

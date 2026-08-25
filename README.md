@@ -183,7 +183,7 @@ Mac 当前已验证：
 - `python run.py --config config/config.macos.yaml --level P0` 通过，结果 `total=59 passed=58 failed=0 errors=0 skipped=1 flaky=1`。
 - UI 远程节点模式已完成“同步当前代码”后执行 `P0 全量` 验证，结果 `total=59 passed=57 failed=0 errors=1 skipped=1 flaky=0`；唯一错误为代理创建弹窗确认后未关闭，保留为 Mac 远端代理业务/环境问题继续排查。
 
-以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 93 条，最新状态见“最近验证记录”。
+以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 95 条，最新状态见“最近验证记录”。
 
 Mac 当前跳过项：
 
@@ -426,7 +426,7 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 93 条 P0 用例：环境管理 43 条、全局设置 20 条、扩展管理 4 条、环境分组管理 6 条、成员分组管理 1 条、成员管理 15 条、代理管理 4 条。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 95 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 4 条、环境分组管理 6 条、成员分组管理 1 条、成员管理 15 条、代理管理 4 条。
 
 当前环境管理模块已接入 43 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
@@ -472,9 +472,9 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 - `test_39_individual_environment_disable_indexeddb_sync.py`：创建环境 `自动化-环境单独设置-不勾选IndexedDB同步` 时展开“高级设置”，将“数据同步”切换为“自定义”，只确保 `IndexedDB` 未勾选，不强行改动其它同步项。首次打开环境访问 `http://indexeddb.dicloak.localhost:18080`，使用 `local_auth_lab_login.indexeddb` 中的 `MCDL006 / M12345678` 登录并等待 2 秒，关闭环境且确认按钮恢复为“打开”后断言 `已登录`；未删除本地缓存时再次打开并断言仍为 `MCDL006 / 已登录`；随后进入个人设置基础设置读取 APP 缓存目录，只删除名称为 19 位纯数字的直接子目录并确认无残留；第三次打开后断言 IndexedDB 模拟站为 `未登录`。用例最后删除新建环境，异常流程也会尝试关闭和清理同名环境。
 - `test_40_individual_environment_clear_all_cache_every_open_sync_cloud.py`：创建默认配置环境 `自动化-环境单独设置-清除本地全部缓存-每次都清除-同步云端数据` 后首次打开，依次访问 Cookie、Local Storage、IndexedDB 三个本地模拟站，分别使用 `local_auth_lab_login.cookie/localstorage/indexeddb` 中的 `MCDL004`、`MCDL005`、`MCDL006` 登录并等待 2 秒，关闭环境且确认操作按钮恢复为“打开”后逐项断言已登录。随后编辑该环境，展开“高级设置”，将“清除本地缓存”切换为“自定义”，设置“清除方式”为“清除本地全部缓存”、“清除频率”为“每次打开环境时都清除”，并打开“清除后，再同步云端数据”开关；再次打开环境后只逐站读取登录态，不执行登录操作，最终断言三站均为对应账号的 `已登录`。用例最后删除新建环境，异常流程也会尝试关闭和清理同名环境。2026-08-19 Windows 联合真实回归通过：`total=2 passed=2 failed=0 errors=0 skipped=0 flaky=0`。
 - `test_41_individual_environment_clear_all_cache_every_open_no_cloud_sync.py`：创建默认配置环境 `自动化-环境单独设置-清除本地全部缓存-每次都清除-不同步云端数据` 后首次打开，依次访问 Cookie、Local Storage、IndexedDB 三个本地模拟站，分别使用共享账号 `MCDL004`、`MCDL005`、`MCDL006` 登录并等待 2 秒，关闭环境且确认操作按钮恢复为“打开”后逐项断言已登录。随后编辑该环境，将“清除本地缓存”切换为“自定义”，设置“清除方式”为“清除本地全部缓存”、“清除频率”为“每次打开环境时都清除”，并确保“清除后，再同步云端数据”开关关闭；再次打开环境后只逐站读取登录态，不执行登录操作，最终断言三站均为 `未登录`。用例最后删除新建环境，异常流程也会尝试关闭和清理同名环境。2026-08-19 Windows 联合真实回归通过：`total=2 passed=2 failed=0 errors=0 skipped=0 flaky=0`。
-- `test_42_create_custom_proxy_environment.py`：创建环境 `测试自定义代理`，在创建抽屉中切换“代理设置”为“自定义代理”，通过快捷输入解析 `http://192.168.20.33:7897`，断言解析出的 IP 为 `192.168.20.33`、端口为 `7897`；保存后搜索并确认环境出现在列表中，打开环境前记录浏览器主进程集合，点击“打开”后最多等待 100 秒检测本次新增的 `GinsBrowser` 主进程，随后关闭并删除该环境。用例只验证新环境成功启动到进程层，不验证代理连通性、出口 IP 或页面内容；开始和 finally 均会按精确名称清理同名环境。
-- `test_43_create_environment_with_existing_proxy.py`：创建环境 `测试已有代理`，在创建抽屉中切换“代理设置”为“已有代理”，确认占位文案为 `请选择已有代理` 的下拉选择框可见，搜索 `7897` 并选择当前匹配结果第一项，保存后确认环境出现在列表中；打开环境前记录浏览器主进程集合，点击“打开”后最多等待 60 秒检测本次新增的 `GinsBrowser` 主进程，随后关闭并删除该环境。用例依赖账号中已有可搜索到 `7897` 的代理，只清理自身创建的环境，不创建、修改、检测或删除代理。
-当前全局设置模块已接入 20 条 P0 用例，文件位于 `tests/p0/global_settings/`：
+- `test_42_create_custom_proxy_environment.py`：创建环境 `自动化-使用-自定义代理-的环境`，在创建抽屉中切换“代理设置”为“自定义代理”，通过快捷输入解析 `http://192.168.20.33:7897`，断言解析出的 IP 为 `192.168.20.33`、端口为 `7897`；保存后搜索并确认环境出现在列表中，打开环境前记录浏览器主进程集合，点击“打开”后最多等待 100 秒检测本次新增的 `GinsBrowser` 主进程。随后根据新主进程解析内核 CDP 端口，固定访问 `https://chromewebstore.google.com/`；目标主机正确、页面无导航错误/`ERR_` 且存在有效正文时判定代理连通。连通性断言失败会先记录，仍继续关闭并删除环境，清理完成后再令用例失败。该用例不验证出口 IP 或代理地区；开始和 `finally` 均会按精确名称清理同名环境。
+- `test_43_create_environment_with_existing_proxy.py`：创建环境 `自动化-使用-已有代理-的环境`，在创建抽屉中切换“代理设置”为“已有代理”，搜索 `7897` 并选择当前匹配结果第一项，保存后打开环境。创建按钮、抽屉、名称填写、代理下拉、搜索结果、选中值、提交和列表行均只作为元素/流程等待，超时抛操作异常，不作为业务断言。用例只保留三类业务断言：60 秒内出现本次新增的 `GinsBrowser` 主进程；打开后按钮由“打开”扭转为“关闭”且关闭后恢复为“打开”；通过新进程的内核 CDP 固定访问 `https://chromewebstore.google.com/` 并验证可达。连通性失败会先记录，仍继续关闭、验证按钮恢复并删除环境，清理完成后再令用例失败。用例依赖账号中已有可搜索到 `7897` 的代理，不创建、修改、检测或删除代理，也不验证代理地址、类型、出口 IP 或地区。
+当前全局设置模块已接入 22 条 P0 用例，文件位于 `tests/p0/global_settings/`：
 
 所有全局设置用例统一通过 `GlobalSettingsPage.open()` 进入，且不监听任何配置接口。当前路由不在 `#/setting` 时才点击“全局设置”；当前已经位于全局设置页时不重复点击。入口会等待页面标识、loading 状态、`#AsyncData` 和复选框状态稳定，并要求至少 3 个复选框已勾选；首次检查不满足时，按“环境管理 → 全局设置”完整重新进入，最多重试 2 次。第三次检查仍不满足时抛出 `AssertionError`，当前用例直接失败，不再触发 Runner 的瞬时错误重试。
 
@@ -501,10 +501,13 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 - `test_17_disable_indexeddb_data_sync.py`：先记录全局设置快照，再在“数据设置 → 数据同步”读取 `IndexedDB` 勾选状态；若已勾选则取消勾选并保存，若未捕获 `保存成功` 提示，则重新进入全局设置确认 IndexedDB 仍为未勾选。随后返回环境管理，创建默认配置环境 `自动化-全局设置-不勾选IndexedDB同步`，首次打开后访问 `http://indexeddb.dicloak.localhost:18080`，使用 `local_auth_lab_login.indexeddb` 中的 `MCDL006` 账号登录并等待 2 秒，关闭环境且确认按钮恢复为“打开”后断言登录状态为 `已登录`；未删除本地缓存时再次打开并断言仍为 `MCDL006 / 已登录`；随后进入个人设置基础设置读取 APP 缓存目录，只删除 19 位纯数字直接子目录并确认无残留；第三次打开后断言 IndexedDB 模拟站为 `未登录`。用例最后删除新建环境，并在 `finally` 中恢复除 IndexedDB 必须重新勾选外的运行前全局设置快照。
 - `test_18_clear_all_cache_every_open_sync_cloud.py`：前往环境管理创建默认配置环境 `自动化-全局设置-清除本地全部缓存-每次都清除-同步云端数据`，首次打开后依次访问 Cookie、Local Storage、IndexedDB 三个本地模拟站，分别使用 `MCDL004`、`MCDL005`、`MCDL006` 登录并等待 2 秒，关闭环境且确认按钮恢复为“打开”后逐项断言已登录。随后记录全局设置快照，在“清除本地缓存”中设置“清除方式=清除本地全部缓存”、“清除频率=每次打开环境时都清除”，并打开“清除后，再同步云端数据”开关；再次打开环境后只访问三站并读取登录态，不执行登录操作，断言三站仍为对应账号的 `已登录`。用例最后删除新建环境，并通过快照恢复其它全局项，同时按用例要求把全局“清除方式”恢复为“不清除”。2026-08-19 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，日志 `logs/run_20260819_203142_904779.log`。
 - `test_19_clear_all_cache_every_open_no_cloud_sync.py`：前往环境管理创建默认配置环境 `自动化-全局设置-清除本地全部缓存-每次都清除-不同步云端数据`，首次打开后依次访问 Cookie、Local Storage、IndexedDB 三个本地模拟站，分别使用 `MCDL004`、`MCDL005`、`MCDL006` 登录并等待 2 秒，关闭环境且确认按钮恢复为“打开”后逐项断言已登录。随后记录全局设置快照，在“清除本地缓存”中设置“清除方式=清除本地全部缓存”、“清除频率=每次打开环境时都清除”，并确保“清除后，再同步云端数据”开关关闭；再次打开环境后只访问三站并读取登录态，不执行登录操作，断言三站均为 `未登录`。用例最后删除新建环境，并通过快照恢复其它全局项，同时按用例要求把全局“清除方式”恢复为“不清除”。2026-08-19 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，日志 `logs/run_20260819_203907_406640.log`。
+- `test_20_extension_tamper_protection.py`：开启全局扩展加密与防篡改，修改预置扩展文件后验证环境被阻止打开，并在收尾阶段恢复扩展文件、环境状态和运行前全局设置快照。
+- `test_21_proxy_check_failure_not_open_environment.py`：开启“代理检测失败时，不打开环境”，使用预置代理失败环境验证业务失败弹窗、浏览器主进程未启动且环境按钮仍保持“打开”，最后关闭该全局设置。
+- `test_22_country_mismatch_not_open_browser.py`：开启“国家/地区与上一次打开时不一致，不打开浏览器”，使用预置国家不一致环境验证业务阻止弹窗、浏览器主进程未启动且环境保持关闭，最后恢复全局设置。
 
 全局设置模块 2026-05-15 回归曾出现前 4 条用例异常，已定位并修复：复选框脚本中 `checkboxStateSelector` 和 `checkboxInputSelector` 变量未在点击脚本内定义，导致 `ReferenceError`；同时 Chrome Web Store 页面当前会先出现“切换到 Chrome 即可安装扩展程序和主题背景”的前置阻止提示，第三条用例已兼容该稳定阻止证据。最新整模块验证通过：
 
-- `python run.py --config config/config.yaml --module global_settings --attach-existing-app`：基础 12 条历史回归通过，`total=12 passed=12 failed=0 errors=0 skipped=0 flaky=0`；2026-08-18 将两条“全局设置-单向同步”用例从环境管理模块迁移到全局设置模块后，全局设置模块增至 14 条；2026-08-19 新增“不勾选 Cookie 同步”、“不勾选 Local Storage 同步”、“不勾选 IndexedDB 同步”、“清除本地全部缓存-每次都清除-同步云端数据”和“清除本地全部缓存-每次都清除-不同步云端数据”用例后，当前只读发现全局设置模块为 19 条。
+- `python run.py --config config/config.yaml --module global_settings --attach-existing-app`：基础 12 条历史回归通过，`total=12 passed=12 failed=0 errors=0 skipped=0 flaky=0`；2026-08-18 将两条“全局设置-单向同步”用例从环境管理迁入后增至 14 条；2026-08-19 新增 5 条数据同步与清缓存用例后增至 19 条；当前再纳入扩展防篡改、代理检测失败阻止打开和国家/地区不一致阻止打开 3 条，全局设置模块只读发现为 22 条。
 
 全局设置模块已兼容新版文案和元素入口：`禁止打开浏览器开发者工具` 支持新旧长短文案，网站限制快捷项支持 `Chrome 应用商店` / `谷歌应用商店`，环境列表字段权限支持 `环境列表字段权限` / `环境字段显示限制` 和 `列表字段` / `列表字段设置` 弹窗标题，并兼容新版环境列表强制展示的 `环境状态` 列。`test_07_disable_packet_capture_software.py` 仍依赖 Windows 抓包工具能以当前权限启动；若工具本身需要管理员权限，需以管理员身份运行自动化进程或调整该用例的环境前置策略。
 
@@ -565,6 +568,8 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 最近验证记录：
 
+- `python run.py --config config/config.yaml --module test_43_create_environment_with_existing_proxy.py --attach-existing-app`：2026-08-25 已有代理环境断言边界与 Chrome Web Store 连通性变更后最终代码真实运行通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例耗时 `53.26s`（unittest 总耗时 `62.721s`）。实际页面证据为 `target_url=https://chromewebstore.google.com/`、标题 `Chrome Web Store`、`error=''`、正文长度 `3144088`；按钮完成“打开→关闭→打开”，环境 `自动化-使用-已有代理-的环境` 已关闭并删除。首次运行曾因已有代理下拉 input 的 `aria-controls` 异步挂载而在操作等待阶段报错；页面对象改为轮询等待该稳定标识、超时抛 `TimeoutError` 后重跑通过。
+- `python run.py --config config/config.yaml --module test_42_create_custom_proxy_environment.py --attach-existing-app`：2026-08-25 自定义代理环境连通性变更后真实单跑通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例耗时 `54.07s`（unittest 总耗时 `63.412s`）。内核页面证据为 `target_url=https://chromewebstore.google.com/`、标题 `Chrome Web Store`、`error=''`、正文长度 `4863115`；环境 `自动化-使用-自定义代理-的环境` 已正常关闭并删除。
 - `python run.py --config config/config.yaml --case tests.p0.global_settings.test_15_disable_cookie_data_sync.TestDisableCookieDataSync.test_cookie_not_restored_after_cache_deletion_when_global_cookie_sync_disabled --attach-existing-app`：2026-08-21 全局设置保存成功提示优先判定落地后真实单跑通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例耗时 `134.93s`。临时脚本先确认“保存成功”提示为 Element Plus 顶部 message，内容节点 `p.el-message__content`，父级 `div.el-message.el-message--success...`，位置约 `x=944, y=17, width=56, height=14`；正式实现会在每次点击“确定”并等待 loading 后检测 10 秒，捕获成功提示时跳过保存后的重入配置回显校验，未捕获时继续走原校验和原重试次数。
 - `python run.py --config config/config.yaml --case tests.p0.extension_management.test_01_create_local_extension.TestCreateLocalExtension.test_create_local_extension_and_delete --attach-existing-app`：2026-08-21 本地扩展上传 UI 改版后重新临时脚本探测并修复，确认新版 ZIP 输入为 `accept=".zip,application/zip"`，上传入口为“将 ZIP 文件拖到此处，或点击上传”的 `.el-upload` 区域；修复后真实单跑通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例耗时 `14.71s`。
 - `python run.py --config config/config.yaml --case tests.p0.extension_management.test_01_create_local_extension.TestCreateLocalExtension.test_create_local_extension_and_delete --case tests.p0.proxy_management.test_04_batch_create_and_bulk_detect_proxy.TestBatchCreateAndBulkDetectProxy.test_batch_create_proxy_then_bulk_detect_and_delete --attach-existing-app`：2026-08-21 修复 macOS 远端全量暴露的本地扩展上传等待和批量代理数据撞库后，受影响用例联合真实回归通过，`total=2 passed=2 failed=0 errors=0 skipped=0 flaky=0`。本地扩展流程已调整为先填写扩展名称再上传 zip，上传完成等待兼容完整路径、原始 zip 文件名和临时 ASCII zip 文件名；批量代理第一条数据已从 `HTTP://192.168.20.33:7897{批量检测代理}` 调整为 `SOCKS5://192.168.20.33:7897{批量检测代理}`，本次运行新建代理序号 `803/804/805` 已批量删除。

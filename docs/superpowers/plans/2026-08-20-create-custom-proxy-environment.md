@@ -1,8 +1,10 @@
 # Create Custom Proxy Environment Implementation Plan
 
+> **2026-08-25 requirement update:** The implemented case now creates `自动化-使用-自定义代理-的环境` and, after detecting the newly launched `GinsBrowser`, opens `https://chromewebstore.google.com/` through kernel CDP. A connectivity assertion is delayed until the environment has still been closed and deleted. Earlier names, probe examples, and the original process-only acceptance criteria below are retained as historical implementation-plan context and are superseded by this update.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a P0 Environment Management case that creates `测试自定义代理` with `http://192.168.20.33:7897`, opens it, fails if a new `GinsBrowser` main process is not detected within 100 seconds, and then confirms close and deletes the environment.
+**Goal:** Maintain a P0 Environment Management case that creates `自动化-使用-自定义代理-的环境` with `http://192.168.20.33:7897`, detects its new `GinsBrowser` main process within 100 seconds, validates Chrome Web Store connectivity, and then closes and deletes the environment even when that connectivity assertion fails.
 
 **Architecture:** First probe the live DICloak DOM and complete workflow with a disposable script under `/tmp`; no formal repository code is written until that probe succeeds. Then add narrow custom-proxy drawer operations to `EnvironmentPage`, cover their orchestration with a P1 contract test, and add one P0 business case whose assertions match only the supplied expected results.
 

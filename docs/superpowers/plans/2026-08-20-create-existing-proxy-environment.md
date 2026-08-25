@@ -1,8 +1,10 @@
 # Create Existing Proxy Environment Implementation Plan
 
+> **2026-08-25 requirement update:** The implemented case now creates `自动化-使用-已有代理-的环境`, keeps business assertions only for the new `GinsBrowser` process, open/close action-button transitions, and Chrome Web Store connectivity, and treats the remaining creation steps as timeout-based operations. Chrome Web Store assertion failure is delayed until the environment is still closed and deleted. Earlier names and assertion criteria below are retained as historical plan context and are superseded by this update.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a P0 Environment Management case that creates `测试已有代理`, searches the existing-proxy selector with `7897`, chooses its first result, opens the environment within 60 seconds, then closes and deletes only the environment.
+**Goal:** Maintain a P0 Environment Management case that creates `自动化-使用-已有代理-的环境`, chooses the first existing proxy matched by `7897`, validates process startup, button-state transitions, and Chrome Web Store connectivity, then closes and deletes only the environment.
 
 **Architecture:** First prove the current DICloak DOM and full lifecycle with a disposable `/tmp` CDP probe. After the probe succeeds, add a narrow existing-proxy selector API to `EnvironmentPage`, define it test-first with a P1 recorder double, and add a P0 business case by reusing the lifecycle and cleanup structure of the custom-proxy case.
 

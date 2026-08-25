@@ -61,7 +61,26 @@ class _ExistingProxyDrawerProbe(EnvironmentPage):
         return "SOCKS5://127.0.0.1:7897 (序号:604 | 已绑0个)"
 
 
+class _ExistingProxyControlIdProbe(EnvironmentPage):
+    def __init__(self, values: list[str]) -> None:
+        self.cdp = self
+        self.config = {"timeouts": {"page_seconds": 1}}
+        self.values = list(values)
+
+    def evaluate(self, script: str) -> str:
+        if len(self.values) > 1:
+            return self.values.pop(0)
+        return self.values[0]
+
+
 class EnvironmentExistingProxyDrawerTests(unittest.TestCase):
+    def test_existing_proxy_control_id_waits_for_async_attribute(self) -> None:
+        page = _ExistingProxyControlIdProbe(["", "existing-proxy-listbox"])
+
+        control_id = page._select_search_input_control_id("() => null")
+
+        self.assertEqual(control_id, "existing-proxy-listbox")
+
     def test_existing_proxy_select_visibility_uses_displayed_placeholder_text(self) -> None:
         page = _ExistingProxyDrawerProbe()
 

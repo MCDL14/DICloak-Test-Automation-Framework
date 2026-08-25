@@ -22,15 +22,15 @@ except ImportError:
     psutil = None
 
 
-CASE_MODULE = "环境管理"
-ENVIRONMENT_NAME = "国家不一致，不打开环境"
-EXPECTED_FAILURE_TEXT = "不一致"
+CASE_MODULE = "全局设置"
+ENVIRONMENT_NAME = "代理检测失败时，不打开环境"
+EXPECTED_FAILURE_TEXT = "环境代理连接失败"
 FAILURE_DIALOG_TIMEOUT_SECONDS = 30
 MAX_OPEN_ATTEMPTS = 3
 PROCESS_STOP_TIMEOUT_SECONDS = 15
 
 
-class TestCountryMismatchNotOpenBrowser(unittest.TestCase):
+class TestProxyCheckFailureNotOpenEnvironment(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.config = load_config(Path("config/config.yaml"))
@@ -43,7 +43,7 @@ class TestCountryMismatchNotOpenBrowser(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.cdp.close()
 
-    def test_country_mismatch_not_open_browser(self) -> None:
+    def test_proxy_check_failure_not_open_environment(self) -> None:
         browser_process_name = resolve_app_config(self.config).browser_process_name.strip()
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
@@ -52,9 +52,9 @@ class TestCountryMismatchNotOpenBrowser(unittest.TestCase):
 
         try:
             global_settings_page.open(force_reentry=True)
-            global_settings_page.ensure_country_mismatch_block_open_enabled()
-            if not global_settings_page.country_mismatch_block_open_enabled():
-                raise RuntimeError("国家/地区与上一次打开时不一致，不打开浏览器 未保持勾选状态")
+            global_settings_page.ensure_proxy_check_failure_block_open_enabled()
+            if not global_settings_page.proxy_check_failure_block_open_enabled():
+                raise RuntimeError("代理检测失败时，不打开环境 未保持勾选状态")
 
             environment_page.open_list()
             environment_page.search_environment_without_assert(ENVIRONMENT_NAME)
@@ -71,7 +71,7 @@ class TestCountryMismatchNotOpenBrowser(unittest.TestCase):
             )
             if EXPECTED_FAILURE_TEXT not in failure_text:
                 delayed_assertion = AssertionError(
-                    "业务弹窗未包含预期文案: "
+                    "打开环境失败弹窗未包含预期文案: "
                     f"expected={EXPECTED_FAILURE_TEXT}, actual={failure_text}"
                 )
         finally:
@@ -80,7 +80,7 @@ class TestCountryMismatchNotOpenBrowser(unittest.TestCase):
                     environment_page.close_open_environment_failure_dialog()
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
-                self.logger.warning("close business dialog failed: %s", exc)
+                self.logger.warning("close open environment failure dialog failed: %s", exc)
             try:
                 environment_page.open_list()
                 if environment_page.environment_visible_in_current_list(ENVIRONMENT_NAME):
@@ -95,10 +95,10 @@ class TestCountryMismatchNotOpenBrowser(unittest.TestCase):
                 self.logger.warning("clear environment search failed: %s", exc)
             try:
                 global_settings_page.open(force_reentry=True)
-                global_settings_page.ensure_country_mismatch_block_open_disabled()
+                global_settings_page.ensure_proxy_check_failure_block_open_disabled()
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
-                self.logger.warning("disable country mismatch blocking setting failed: %s", exc)
+                self.logger.warning("disable proxy failure blocking setting failed: %s", exc)
 
         if delayed_assertion is not None:
             if cleanup_error is not None:
@@ -123,23 +123,23 @@ class TestCountryMismatchNotOpenBrowser(unittest.TestCase):
             if browser_pids:
                 self._terminate_browser_processes(browser_process_name, browser_pids)
                 raise AssertionError(
-                    "国家/地区不一致时不应启动浏览器进程: "
+                    "代理检测失败时不应启动浏览器进程: "
                     f"process={browser_process_name}, pids={sorted(browser_pids)}"
                 )
 
             action_text = environment_page.environment_action_text(ENVIRONMENT_NAME)
             if action_text == "关闭":
                 raise AssertionError(
-                    f"未出现业务弹窗时环境按钮变为关闭: {ENVIRONMENT_NAME}"
+                    f"未出现打开环境失败弹窗时环境按钮变为关闭: {ENVIRONMENT_NAME}"
                 )
             if action_text != "打开":
                 raise RuntimeError(
-                    "业务弹窗未出现，且环境按钮状态异常: "
+                    "打开失败弹窗未出现，且环境按钮状态异常: "
                     f"attempt={attempt}, action={action_text!r}"
                 )
 
         raise RuntimeError(
-            "Blocked/Error: 连续点击 3 次仍未出现业务弹窗，"
+            "Blocked/Error: 连续点击 3 次仍未出现打开环境失败弹窗，"
             "未检测到浏览器进程，且环境按钮仍为打开"
         )
 

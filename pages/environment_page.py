@@ -3818,19 +3818,22 @@ class EnvironmentPage(BasePage):
         """
 
     def _select_search_input_control_id(self, input_script: str) -> str:
-        value = self.cdp.evaluate(
-            f"""
-            () => {{
-                const findInput = {input_script};
-                const input = findInput();
-                return input ? String(input.getAttribute("aria-controls") || "") : "";
-            }}
-            """
-        )
-        control_id = str(value or "").strip()
-        if not control_id:
-            raise RuntimeError("existing proxy select input has no aria-controls id")
-        return control_id
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.time() < deadline:
+            value = self.cdp.evaluate(
+                f"""
+                () => {{
+                    const findInput = {input_script};
+                    const input = findInput();
+                    return input ? String(input.getAttribute("aria-controls") || "") : "";
+                }}
+                """
+            )
+            control_id = str(value or "").strip()
+            if control_id:
+                return control_id
+            time.sleep(0.2)
+        raise TimeoutError("existing proxy select input did not expose an aria-controls id")
 
     def _wait_first_visible_enabled_select_dropdown_item(self) -> None:
         finder = self._first_visible_enabled_select_dropdown_item_script()

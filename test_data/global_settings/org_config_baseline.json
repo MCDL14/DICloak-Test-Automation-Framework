@@ -1,0 +1,128 @@
+{
+  "data_sync_config": {
+    "type": 57
+  },
+  "browser_config": {
+    "type": 32769,
+    "expand_security_skip_super_admin": 0
+  },
+  "bookmark_config": {
+    "status": false,
+    "type": 1,
+    "file_name": "",
+    "cover_rule": 2,
+    "env_group_ids": [
+      "all"
+    ],
+    "bookmark": ""
+  },
+  "env_config": {
+    "env_mutil_open_type": true,
+    "remote_inspector_type": true
+  },
+  "access_limit": {
+    "status": false,
+    "type": 2,
+    "url_list": "http://127.0.0.1:57632/",
+    "member_mroup_list": [
+      "all"
+    ],
+    "quick_selection_type": 1,
+    "quick_selection_option": [
+      1
+    ]
+  },
+  "proxy_detect_config": {
+    "status": false,
+    "name_list": "geek64.exe",
+    "member_group_list": [
+      "all"
+    ]
+  },
+  "app_version_limit_config": {
+    "status": false,
+    "app_version": "2.9.13",
+    "role_ids": [
+      "all"
+    ],
+    "liunx_app_version": "2.8.14",
+    "liunx_role_ids": [
+      "all"
+    ]
+  },
+  "local_data_config": {
+    "type": 0,
+    "browser_type": "global",
+    "data_type": 0,
+    "synchronize": false,
+    "frequency": 1,
+    "interval": 1
+  },
+  "env_title_config": {
+    "status": false,
+    "env_title": "[{\"id\":0,\"key\":\"selection\",\"checked\":true,\"label\":\"\",\"disabled\":true,\"freeze\":true},{\"id\":1,\"key\":\"serialNum\",\"checked\":true,\"label\":\"序号\",\"disabled\":true,\"freeze\":false},{\"id\":2,\"key\":\"name\",\"checked\":true,\"label\":\"名称\",\"disabled\":false,\"freeze\":false},{\"id\":3,\"key\":\"remark\",\"checked\":false,\"label\":\"备注\",\"disabled\":false,\"freeze\":false},{\"id\":4,\"key\":\"groupName\",\"checked\":false,\"label\":\"分组\",\"disabled\":false,\"freeze\":false},{\"id\":5,\"key\":\"accountList\",\"checked\":false,\"label\":\"绑定账号\",\"disabled\":false,\"freeze\":false},{\"id\":8,\"key\":\"sort\",\"checked\":false,\"label\":\"自定义编号\",\"disabled\":false,\"freeze\":false},{\"id\":9,\"key\":\"lastOpenTime\",\"checked\":false,\"label\":\"最近打开时间\",\"disabled\":false,\"freeze\":false},{\"id\":8,\"key\":\"envTagList\",\"checked\":false,\"label\":\"标签\",\"disabled\":false,\"freeze\":false},{\"id\":10,\"key\":\"createTime\",\"checked\":false,\"label\":\"创建时间\",\"disabled\":false,\"freeze\":false},{\"id\":12,\"key\":\"proxyWay\",\"label\":\"\",\"checked\":false,\"disabled\":false,\"freeze\":false},{\"id\":13,\"key\":\"proxyHost\",\"label\":\"\",\"checked\":false,\"disabled\":false,\"freeze\":false},{\"id\":14,\"key\":\"exitIp\",\"label\":\"\",\"checked\":false,\"disabled\":false,\"freeze\":false},{\"id\":6,\"key\":\"environmentStatus\",\"checked\":false,\"label\":\"环境状态\",\"disabled\":false,\"freeze\":false},{\"id\":11,\"key\":\"operation\",\"checked\":true,\"label\":\"操作\",\"disabled\":true,\"freeze\":true}]",
+    "member_group_list": [
+      "all"
+    ]
+  },
+  "browser_show_rule_config": {
+    "status": false,
+    "env_label": 1
+  },
+  "update_frequency_config": {
+    "status": true,
+    "update_frequency": "WEEK",
+    "auto_update": false,
+    "auto_update_rule": "UPDATE_VERSION"
+  },
+  "env_data_sync": {
+    "status": false,
+    "role_ids": [
+      "1849736955075411970"
+    ]
+  },
+  "env_sort_config": {
+    "status": false,
+    "order_by": "ENV_SERIAL_NUM",
+    "sort": "DESC"
+  },
+  "env_page_config": {
+    "status": false,
+    "page_size": 20
+  },
+  "member_ip_limit_config": {
+    "status": false,
+    "type": "BAN",
+    "ip": "",
+    "vpn": false
+  },
+  "device_name_limit_config": {
+    "status": false,
+    "type": "BAN",
+    "device_name": ""
+  },
+  "proxy_limit_config": {
+    "status": false
+  },
+  "my_org_config": {
+    "member_login_config": {
+      "status": false,
+      "ip_limit_num": 1
+    }
+  },
+  "cookie_encrypt_config": {
+    "status": true,
+    "new_add": true
+  },
+  "local_network_config": {
+    "status": false,
+    "urls": ""
+  },
+  "env_open_limit_config": {
+    "status": false,
+    "member_group_list": [
+      "all"
+    ],
+    "open_limit": 5
+  }
+}

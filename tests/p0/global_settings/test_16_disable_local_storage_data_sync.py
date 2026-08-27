@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import time
 import unittest
 from pathlib import Path
@@ -61,12 +60,14 @@ class TestDisableLocalStorageDataSync(unittest.TestCase):
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
+        global_settings_page.prepare_api_recovery(
+            affected_blocks={"data_sync_config"},
+            bitmask_blocks={"data_sync_config"},
+        )
         personal_settings_page = PersonalSettingsPage(cdp_driver=self.cdp, config=self.config)
-        global_settings_snapshot: dict[str, object] | None = None
         cleanup_error: Exception | None = None
         try:
             global_settings_page.open(force_reentry=True)
-            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             local_storage_sync_changed = global_settings_page.ensure_local_storage_data_sync_disabled()
             assert_true(
                 not global_settings_page.local_storage_data_sync_enabled(),
@@ -214,11 +215,7 @@ class TestDisableLocalStorageDataSync(unittest.TestCase):
             except Exception:
                 pass
             try:
-                if global_settings_snapshot is not None:
-                    global_settings_page.open(force_reentry=True)
-                    global_settings_page.restore_global_settings_snapshot(
-                        self._snapshot_with_local_storage_enabled(global_settings_snapshot)
-                    )
+                global_settings_page.restore_api_recovery_if_needed()
             except Exception as exc:
                 cleanup_error = exc
             if cleanup_error:
@@ -230,15 +227,6 @@ class TestDisableLocalStorageDataSync(unittest.TestCase):
     def _ensure_local_storage_lab_user(self, username: str, password: str) -> None:
         settings = LocalAuthLabSettings.from_config(self.config).ensure_persistent_credentials()
         LocalAuthLabClient(settings).ensure_user("localstorage", username, password)
-
-    def _snapshot_with_local_storage_enabled(self, snapshot: dict[str, object]) -> dict[str, object]:
-        target = copy.deepcopy(snapshot)
-        data_sync = target.get("data_sync")
-        if isinstance(data_sync, dict):
-            data_sync["local_storage"] = True
-        else:
-            target["data_sync"] = {"local_storage": True}
-        return target
 
     def _open_read_local_storage_status_and_close(
         self,

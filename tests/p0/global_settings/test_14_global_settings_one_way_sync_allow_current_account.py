@@ -74,11 +74,13 @@ class TestGlobalSettingsOneWaySyncAllowCurrentAccount(unittest.TestCase):
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
+        global_settings_page.prepare_api_recovery(
+            affected_blocks={"data_sync_config", "env_data_sync"},
+            bitmask_blocks={"data_sync_config"},
+        )
         personal_settings_page = PersonalSettingsPage(cdp_driver=self.cdp, config=self.config)
-        global_settings_snapshot: dict[str, object] | None = None
         try:
             global_settings_page.open(force_reentry=True)
-            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             configured_state = global_settings_page.configure_data_sync_one_way(
                 EXPECTED_SYNC_ITEMS,
                 EXPECTED_WHITELIST_GROUPS,
@@ -187,9 +189,7 @@ class TestGlobalSettingsOneWaySyncAllowCurrentAccount(unittest.TestCase):
                 environment_page.clear_search()
             except Exception:
                 pass
-            if global_settings_snapshot is not None:
-                global_settings_page.open(force_reentry=True)
-                global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
+            global_settings_page.restore_api_recovery_if_needed()
 
     def _credentials_by_site(self) -> dict[str, tuple[str, str]]:
         return local_auth_lab_login_credentials_by_site(

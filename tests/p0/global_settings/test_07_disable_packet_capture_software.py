@@ -61,17 +61,16 @@ class TestDisablePacketCaptureSoftware(unittest.TestCase):
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
+        global_settings_page.prepare_api_recovery(affected_blocks={"proxy_detect_config"})
         environment_name = ""
         kernel_pid = 0
         environment_opened = False
         packet_process_started = False
         packet_process_ids: set[int] = set()
         cleanup_error: Exception | None = None
-        global_settings_snapshot: dict[str, object] | None = None
 
         try:
             global_settings_page.open()
-            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             global_settings_page.configure_packet_capture_blocking(packet_process_name)
 
             packet_process_ids_before = set(main_process_ids(packet_process_name))
@@ -165,9 +164,7 @@ class TestDisablePacketCaptureSoftware(unittest.TestCase):
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
             try:
-                if global_settings_snapshot is not None:
-                    global_settings_page.open(force_reentry=True)
-                    global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
+                global_settings_page.restore_api_recovery_if_needed()
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
             try:

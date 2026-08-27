@@ -65,7 +65,12 @@ test_data:
 10. 代理管理创建自定义代理用例使用的代理主机、端口、账号和密码；配置集中在 `test_data.proxy_custom`。Windows 系统代理主机和端口属于运行环境配置，统一维护在 `config.yaml` 顶层 `windows_system_proxy.host/port`，默认 `127.0.0.1:7897`。
 11. 除 Cookie、Local Storage、IndexedDB 三条预置数据校验用例外，所有会登录本地模拟站的用例共用 `test_data.local_auth_lab_login`：`cookie` 使用 `MCDL004 / M12345678`，`localstorage` 使用 `MCDL005 / M12345678`，`indexeddb` 使用 `MCDL006 / M12345678`。该段缺失或账号密码不匹配时，用例会在数据校验阶段失败，不会进入后续页面操作。
 
-全局设置相关用例如果会保存团队级配置，必须在运行前记录全局设置快照并在 `finally` 中恢复。后续新增全局设置用例并引入新的测试数据键时，应同时检查是否需要扩展 `GlobalSettingsPage.capture_global_settings_snapshot()` 和对应恢复方法。
+全局设置恢复使用两类版本化基准：
+
+1. `org_config_baseline.json` 是组织配置接口的固定恢复基准，必须保留接口要求的完整 21 个可写顶层配置块；GET 只对已确认的 10 个白名单块做语义比较。该文件不得包含 token、团队 ID、完整请求头或 GET 只读字段。
+2. `core/global_settings_baseline.py` 中的 `GLOBAL_SETTINGS_UI_SNAPSHOT_BASELINE` 是当前 APP 页面可稳定观察状态的 UI 诊断基准，只用于显式 UI 校验、快照能力测试和人工诊断，不是自动恢复目标。`test_data/global_settings/` 当前不另建 UI 基准 JSON。
+
+涉及全局设置的用例必须通过 `GlobalSettingsPage.prepare_api_recovery()` 声明受影响配置块和位掩码范围。用例开始前执行 GET 基准检查；只有实际尝试写入配置时，`finally` 才检查和恢复本用例影响范围。自动恢复发送的 POST 始终是完整请求体，不允许把局部配置块直接作为请求体。现有 `capture_global_settings_snapshot()` 和显式 UI 恢复能力继续保留，但普通 P0 不再逐条采集和恢复整页 UI 快照。新增全局设置数据或配置项时，应同步评估完整 POST 基准、GET 白名单语义、位掩码映射、UI 局部断言、影响范围声明和 P1 覆盖。
 
 成员 open API 的真实 token 属于敏感信息，优先通过运行进程环境变量 `DICLOAK_API_MEMBER_EDIT_TOKEN` 注入；如必须写入本地配置，只能写入被 `.gitignore` 排除的 `config/test_data.yaml`，不要写入 `config/test_data.example.yaml`、测试代码或文档。目标外部成员 ID 可通过 `DICLOAK_API_MEMBER_EDIT_MEMBER_ID` 临时覆盖。
 

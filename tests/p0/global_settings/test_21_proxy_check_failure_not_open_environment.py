@@ -47,6 +47,10 @@ class TestProxyCheckFailureNotOpenEnvironment(unittest.TestCase):
         browser_process_name = resolve_app_config(self.config).browser_process_name.strip()
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
+        global_settings_page.prepare_api_recovery(
+            affected_blocks={"browser_config"},
+            bitmask_blocks={"browser_config"},
+        )
         delayed_assertion: AssertionError | None = None
         cleanup_error: Exception | None = None
 
@@ -99,6 +103,11 @@ class TestProxyCheckFailureNotOpenEnvironment(unittest.TestCase):
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
                 self.logger.warning("disable proxy failure blocking setting failed: %s", exc)
+            try:
+                global_settings_page.restore_api_recovery_if_needed()
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
+                self.logger.warning("restore proxy failure setting through API failed: %s", exc)
 
         if delayed_assertion is not None:
             if cleanup_error is not None:

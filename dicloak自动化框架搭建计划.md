@@ -9,14 +9,14 @@
 当前实现状态：
 
 1. 框架骨架、配置、预检、日志、APP 生命周期、CDP 连接、UIAutomation、飞书通知、用例运行编排已完成。
-2. 当前 `tests/p0` 可发现 75 条 P0 用例：环境管理 36 条、全局设置 14 条、环境分组管理 6 条、成员管理 15 条、代理管理 4 条。
+2. 当前 `tests/p0` 可发现 95 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 4 条、环境分组管理 6 条、成员分组管理 1 条、成员管理 15 条、代理管理 4 条。
 3. P0 用例已按业务模块移动到 `tests/p0/` 下的对应模块目录，并支持按级别、文件/目录模块、业务模块、单条用例运行。
 4. 已接入用例前后恢复机制：全局 APP 稳定态恢复不做业务导航，模块级恢复由各模块自行进入模块首页并清理模块状态，当前已实现环境管理和环境分组管理模块恢复入口。
 5. 已接入 Streamlit 本地 UI，用于用例发现、模块筛选、批量选择、实时日志、运行结果统计和历史日志查看，UI 执行复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路。
 6. 成员管理已覆盖创建/编辑/筛选/导出/权限/API 停用与到期停用等 P0 场景；四条成员 open API 用例已具备接口非 200 重试和异常兜底恢复能力。
-7. 代理管理已覆盖创建自定义代理、批量创建、创建 NodeMaven 动态代理、批量创建后批量检测 4 条 P0 用例；扩展管理等模块目录已预留，后续按业务优先级继续补充。
-8. 环境管理已接入 Cookie、Local Storage、IndexedDB 三条预置环境数据恢复校验、三条新环境持续保持用例、三条环境单独设置数据同步用例和两条环境单独设置单向同步用例；涉及全局数据同步配置的用例已接入运行前全局设置快照与 finally 恢复。
-9. 全局设置模块已接入 14 条 P0 用例；会保存全局设置配置的用例统一通过 `GlobalSettingsPage.capture_global_settings_snapshot()` 和 `restore_global_settings_snapshot()` 恢复运行前配置。新增会保存全局设置的新配置项时，必须先补充快照采集、恢复和文档说明。
+7. 代理管理已覆盖创建自定义代理、批量创建、创建 NodeMaven 动态代理、批量创建后批量检测 4 条 P0 用例；扩展管理已覆盖本地扩展、市场扩展、谷歌扩展启用和隐藏扩展 4 条；成员分组管理已覆盖创建、列表校验和删除 1 条。
+8. 环境管理已接入 Cookie、Local Storage、IndexedDB 三条预置环境数据恢复校验、三条新环境持续保持、环境单独设置数据同步/关闭同步/单向同步/清缓存，以及自定义代理和已有代理环境流程；当前共 43 条。
+9. 全局设置模块已接入 22 条 P0 用例。涉及团队配置的用例通过 `GlobalSettingsPage.prepare_api_recovery()` 声明影响块或位：开始前 GET 固定基准，必要时发送完整 POST 基准并 GET 复查；结束阶段只在实际写入后恢复当前用例影响范围。整页 UI 快照采集和显式恢复能力继续保留，但普通 P0 不再逐条自动调用。新增配置项时必须同步更新接口基准/语义、影响范围、UI 局部断言、P1 和文档。
 
 第一阶段需要达成以下结果：
 
@@ -797,7 +797,7 @@ DICloak自动化框架/
 
 ## 八、P0 用例设计
 
-当前第一阶段已完成环境管理模块 36 条 P0 用例，并已完成全局设置 14 条、环境分组管理 6 条、成员管理 15 条和代理管理 4 条 P0 用例。
+当前第一阶段已完成环境管理模块 43 条 P0 用例，并已完成全局设置 22 条、扩展管理 4 条、环境分组管理 6 条、成员分组管理 1 条、成员管理 15 条和代理管理 4 条 P0 用例，共 95 条。最近一次完整 Windows P0 全量结果仍是 2026-07-01 的 62 条历史快照；当前 95 条不据此宣称全量通过，但 2026-08-25 全局设置 22 条及关联环境管理 6 条均已真实回归通过。
 
 已实现用例：
 
@@ -829,14 +829,21 @@ DICloak自动化框架/
 26. `test_26_cookie_data_validation.py`：预置环境 Cookie 云端数据恢复校验。
 27. `test_27_local_storage_data_validation.py`：预置环境 Local Storage 云端数据恢复校验。
 28. `test_28_indexeddb_data_validation.py`：预置环境 IndexedDB 云端数据恢复校验。
-29. `test_29_new_environment_cookie_persistence.py`：新环境 Cookie 持续保持，沿用默认创建流程；2026-08-18 涉及快照恢复的 6 条环境管理用例联合真实回归中通过。
-30. `test_30_new_environment_local_storage_persistence.py`：新环境 Local Storage 持续保持，沿用默认创建流程；2026-08-18 涉及快照恢复的 6 条环境管理用例联合真实回归中通过。
-31. `test_31_new_environment_indexeddb_persistence.py`：新环境 IndexedDB 持续保持，沿用默认创建流程；2026-08-18 涉及快照恢复的 6 条环境管理用例联合真实回归中通过。
+29. `test_29_new_environment_cookie_persistence.py`：新环境 Cookie 持续保持，沿用默认创建流程并接入全局设置接口基准恢复。
+30. `test_30_new_environment_local_storage_persistence.py`：新环境 Local Storage 持续保持，沿用默认创建流程并接入全局设置接口基准恢复。
+31. `test_31_new_environment_indexeddb_persistence.py`：新环境 IndexedDB 持续保持，沿用默认创建流程并接入全局设置接口基准恢复。
 32. `test_32_individual_environment_cookie_sync.py`：环境单独设置 Cookie 同步。
 33. `test_33_individual_environment_local_storage_sync.py`：环境单独设置 Local Storage 同步。
 34. `test_34_individual_environment_indexeddb_sync.py`：环境单独设置 IndexedDB 同步。
 35. `test_35_individual_environment_one_way_sync_forbid_current_account.py`：环境单独设置单向同步-禁止当前账号同步。
 36. `test_36_individual_environment_one_way_sync_allow_current_account.py`：环境单独设置单向同步-允许当前账号同步。
+37. `test_37_individual_environment_disable_cookie_sync.py`：环境单独设置不勾选 Cookie 同步。
+38. `test_38_individual_environment_disable_local_storage_sync.py`：环境单独设置不勾选 Local Storage 同步。
+39. `test_39_individual_environment_disable_indexeddb_sync.py`：环境单独设置不勾选 IndexedDB 同步。
+40. `test_40_individual_environment_clear_all_cache_every_open_sync_cloud.py`：环境单独设置每次打开清除全部缓存并同步云端数据。
+41. `test_41_individual_environment_clear_all_cache_every_open_no_cloud_sync.py`：环境单独设置每次打开清除全部缓存且不同步云端数据。
+42. `test_42_create_custom_proxy_environment.py`：创建使用自定义代理的环境并验证 Chrome Web Store 连通性。
+43. `test_43_create_environment_with_existing_proxy.py`：创建使用已有代理的环境并验证 Chrome Web Store 连通性。
 
 全局设置模块：
 
@@ -854,6 +861,25 @@ DICloak自动化框架/
 12. `test_12_environment_list_sort_limit.py`：环境列表排序设置。
 13. `test_13_global_settings_one_way_sync_disallow_current_account.py`：全局设置单向同步-不允许当前账号同步。
 14. `test_14_global_settings_one_way_sync_allow_current_account.py`：全局设置单向同步-允许当前账号同步。
+15. `test_15_disable_cookie_data_sync.py`：全局设置不勾选 Cookie 同步并验证删除缓存后不恢复。
+16. `test_16_disable_local_storage_data_sync.py`：全局设置不勾选 Local Storage 同步并验证删除缓存后不恢复。
+17. `test_17_disable_indexeddb_data_sync.py`：全局设置不勾选 IndexedDB 同步并验证删除缓存后不恢复。
+18. `test_18_clear_all_cache_every_open_sync_cloud.py`：全局设置每次打开清除全部缓存并同步云端数据。
+19. `test_19_clear_all_cache_every_open_no_cloud_sync.py`：全局设置每次打开清除全部缓存且不同步云端数据。
+20. `test_20_extension_tamper_protection.py`：开启扩展加密与防篡改并恢复对应浏览器设置位。
+21. `test_21_proxy_check_failure_not_open_environment.py`：代理检测失败时不打开环境。
+22. `test_22_country_mismatch_not_open_browser.py`：代理国家/地区不一致时不打开浏览器。
+
+扩展管理模块：
+
+1. `test_01_create_local_extension.py`：创建本地扩展并删除。
+2. `test_02_add_market_extension.py`：从扩展市场添加扩展并删除。
+3. `test_03_create_google_extension_and_enable.py`：创建谷歌扩展、启用并删除。
+4. `test_04_hide_extension.py`：隐藏扩展并验证内核扩展页状态。
+
+成员分组管理模块：
+
+1. `test_01_create_member_group.py`：创建成员分组，校验列表字段后删除。
 
 环境分组管理模块：
 

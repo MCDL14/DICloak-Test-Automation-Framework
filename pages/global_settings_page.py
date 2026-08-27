@@ -4,17 +4,28 @@ import copy
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from core.config import timeout_seconds as config_timeout_seconds
+from core.global_settings_baseline import current_global_settings_ui_baseline
+from core.global_settings_recovery import GlobalSettingsRecoverySession
+from core.org_config_api import (
+    OrgConfigApiClient,
+    OrgConfigRequestError,
+    parse_org_config_post_data,
+    validate_org_config_response,
+)
+from core.org_config_semantics import format_org_config_diffs, semantic_org_config_diff
 from pages.base_page import BasePage
 
 
 class GlobalSettingsPage(BasePage):
     locator_file = "global_settings_locators.yaml"
+    SNAPSHOT_SCHEMA_VERSION = 2
     MINIMUM_CHECKED_CHECKBOXES = 3
     GLOBAL_SETTINGS_REENTRY_RETRIES = 2
-    SAVE_SUCCESS_MESSAGE = "保存成功"
-    SAVE_SUCCESS_MESSAGE_SECONDS = 10
+    SAVE_RESPONSE_TIMEOUT_SECONDS = 20
+    SAVE_ATTEMPTS = 3
     DATA_SYNC_COOKIE_LABEL = "Cookie"
     DATA_SYNC_LOCAL_STORAGE_LABEL = "Local Storage"
     DATA_SYNC_INDEXEDDB_LABEL = "IndexedDB"
@@ -55,6 +66,34 @@ class GlobalSettingsPage(BasePage):
         "降序": ("降序",),
     }
 
+    def __init__(self, cdp_driver, ui_driver=None, config: dict[str, object] | None = None):
+        super().__init__(cdp_driver=cdp_driver, ui_driver=ui_driver, config=config)
+        self._org_config_client: OrgConfigApiClient | None = None
+        self._recovery_session: GlobalSettingsRecoverySession | None = None
+
+    def prepare_api_recovery(
+        self,
+        *,
+        affected_blocks: set[str],
+        bitmask_blocks: set[str] | None = None,
+    ) -> None:
+        self._recovery_session = GlobalSettingsRecoverySession(
+            self.cdp,
+            affected_blocks=affected_blocks,
+            bitmask_blocks=bitmask_blocks or set(),
+            api_client=self._api_client(),
+        )
+        self._recovery_session.ensure_baseline_before_case()
+
+    def restore_api_recovery_if_needed(self) -> None:
+        if self._recovery_session is not None:
+            self._recovery_session.restore_if_needed()
+
+    def _api_client(self) -> OrgConfigApiClient:
+        if self._org_config_client is None:
+            self._org_config_client = OrgConfigApiClient(self.cdp)
+        return self._org_config_client
+
     def open(self, *, force_reentry: bool = False) -> None:
         """Open a fully loaded global-settings page, retrying through Environment Management."""
         with self.phase_timing("global_settings.open", force_reentry=force_reentry):
@@ -90,6 +129,7 @@ class GlobalSettingsPage(BasePage):
                 }
             )
             if len(checked_names) >= self.MINIMUM_CHECKED_CHECKBOXES:
+                self._install_org_config_response_capture()
                 return
 
         raise AssertionError(
@@ -104,7 +144,7 @@ class GlobalSettingsPage(BasePage):
         with self.phase_timing("global_settings.capture_snapshot"):
             self._wait_global_setting_states_stable()
             return {
-                "schema_version": 1,
+                "schema_version": self.SNAPSHOT_SCHEMA_VERSION,
                 "simple_checkboxes": self._simple_checkbox_snapshot(),
                 "website_restriction": self.website_restriction_state(),
                 "packet_capture_blocking": self.packet_capture_blocking_state(),
@@ -115,10 +155,33 @@ class GlobalSettingsPage(BasePage):
                 "data_sync": self.data_sync_one_way_state(),
                 "clear_local_cache": self.clear_local_cache_state(),
                 "extension_tamper_protection": self.extension_tamper_protection_state(),
+                "proxy_check_failure_block_open": {
+                    "enabled": self.proxy_check_failure_block_open_enabled(),
+                },
+                "country_mismatch_block_open": {
+                    "enabled": self.country_mismatch_block_open_enabled(),
+                },
             }
+
+    def assert_current_global_settings_ui_baseline(self) -> dict[str, object]:
+        """Read the rendered page and assert the checked-in UI baseline without restoring it."""
+        actual = self.capture_global_settings_snapshot()
+        expected = current_global_settings_ui_baseline()
+        if self._global_settings_snapshot_matches(expected, actual):
+            return actual
+
+        expected_compare = self._strong_global_settings_snapshot(expected)
+        actual_compare = self._strong_global_settings_snapshot(actual)
+        raise AssertionError(
+            "current global settings UI baseline mismatch: "
+            f"expected={expected_compare}, actual={actual_compare}"
+        )
 
     def restore_global_settings_snapshot(self, snapshot: dict[str, object]) -> None:
         """Restore a snapshot through the real global-settings UI and verify strong fields."""
+        if self._recovery_session is not None:
+            self._recovery_session.restore_if_needed()
+            return
         if not isinstance(snapshot, dict):
             raise TypeError(f"global settings snapshot must be a dict: {type(snapshot)!r}")
 
@@ -138,6 +201,12 @@ class GlobalSettingsPage(BasePage):
             self.restore_environment_list_sort_state(snapshot.get("environment_list_sort", {}))
             self.restore_data_sync_one_way_state(snapshot.get("data_sync", {}))
             self.restore_clear_local_cache_state(snapshot.get("clear_local_cache", {}))
+            self.restore_proxy_check_failure_block_open_state(
+                snapshot.get("proxy_check_failure_block_open", {})
+            )
+            self.restore_country_mismatch_block_open_state(
+                snapshot.get("country_mismatch_block_open", {})
+            )
 
             self.open(force_reentry=True)
             restored = self.capture_global_settings_snapshot()
@@ -189,6 +258,7 @@ class GlobalSettingsPage(BasePage):
 
     def _strong_global_settings_snapshot(self, snapshot: dict[str, object]) -> dict[str, object]:
         strong = copy.deepcopy(snapshot)
+        strong.pop("schema_version", None)
 
         website_restriction = strong.get("website_restriction")
         if isinstance(website_restriction, dict) and not bool(website_restriction.get("enabled")):
@@ -267,6 +337,11 @@ class GlobalSettingsPage(BasePage):
         label_text = self._resolve_visible_checkbox_label(self.PROXY_CHECK_FAILURE_BLOCK_OPEN_LABEL)
         return self.checkbox_checked(label_text)
 
+    def restore_proxy_check_failure_block_open_state(self, state: object) -> None:
+        if not isinstance(state, dict) or "enabled" not in state:
+            return
+        self._set_proxy_check_failure_block_open_enabled(bool(state.get("enabled")))
+
     def _set_proxy_check_failure_block_open_enabled(self, expected: bool) -> bool:
         label_text = self._resolve_visible_checkbox_label(self.PROXY_CHECK_FAILURE_BLOCK_OPEN_LABEL)
         self._wait_for_checkbox(label_text)
@@ -295,6 +370,11 @@ class GlobalSettingsPage(BasePage):
     def country_mismatch_block_open_enabled(self) -> bool:
         label_text = self._resolve_visible_checkbox_label(self.COUNTRY_MISMATCH_BLOCK_OPEN_LABEL)
         return self.checkbox_checked(label_text)
+
+    def restore_country_mismatch_block_open_state(self, state: object) -> None:
+        if not isinstance(state, dict) or "enabled" not in state:
+            return
+        self._set_country_mismatch_block_open_enabled(bool(state.get("enabled")))
 
     def _set_country_mismatch_block_open_enabled(self, expected: bool) -> bool:
         label_text = self._resolve_visible_checkbox_label(self.COUNTRY_MISMATCH_BLOCK_OPEN_LABEL)
@@ -3049,25 +3129,161 @@ class GlobalSettingsPage(BasePage):
             raise AssertionError(f"unexpected global settings checkbox changes before save: {unexpected}")
 
     def _wait_save_finished(self, timeout_seconds: int | None = None) -> bool:
-        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        timeout_seconds = timeout_seconds or self.SAVE_RESPONSE_TIMEOUT_SECONDS
         with self.phase_timing("global_settings.wait_save_finished", timeout_seconds=timeout_seconds):
-            deadline = time.time() + timeout_seconds
-            while time.time() < deadline:
-                if not self._has_visible_loading():
-                    return self._wait_save_success_message(timeout_seconds=self.SAVE_SUCCESS_MESSAGE_SECONDS)
-                time.sleep(0.2)
-            raise TimeoutError("global settings save did not finish")
+            if self._recovery_session is not None:
+                self._recovery_session.mark_write_attempted()
+            last_error: Exception | None = None
+            for attempt in range(1, self.SAVE_ATTEMPTS + 1):
+                if attempt > 1:
+                    self.cdp.click_element_by_script(self._visible_button_by_text_script("确定"))
+                try:
+                    response = self._wait_org_config_save_response(timeout_seconds)
+                    self._wait_until_not_loading(timeout_seconds=timeout_seconds)
+                    identity = self._api_client().identity()
+                    if urlsplit(str(response.get("url", ""))).path != identity.path:
+                        raise OrgConfigRequestError(
+                            "global settings save response organization path mismatch"
+                        )
+                    validate_org_config_response(
+                        status=response.get("status"),
+                        response_body=response.get("response_body"),
+                    )
+                    request_payload = parse_org_config_post_data(response.get("post_data"))
+                    if self._recovery_session is not None:
+                        self._recovery_session.record_successful_post(request_payload)
+                    self._assert_org_config_post_persisted(request_payload)
+                    return True
+                except AssertionError:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+                    try:
+                        self._wait_until_not_loading(timeout_seconds=timeout_seconds)
+                    except Exception:
+                        pass
+                    if attempt < self.SAVE_ATTEMPTS:
+                        time.sleep(attempt)
+            raise OrgConfigRequestError(
+                "global settings UI save failed after "
+                f"{self.SAVE_ATTEMPTS} attempts: {last_error}"
+            ) from last_error
 
-    def _wait_save_success_message(self, timeout_seconds: int) -> bool:
+    def _assert_org_config_post_persisted(self, expected: dict[str, object]) -> None:
+        last_diffs = []
+        for attempt in range(1, self.SAVE_ATTEMPTS + 1):
+            actual = self._api_client().get_org_config()
+            last_diffs = semantic_org_config_diff(expected, actual)
+            if not last_diffs:
+                return
+            if attempt < self.SAVE_ATTEMPTS:
+                time.sleep(0.5)
+        raise AssertionError(
+            "global settings UI save GET verification mismatch: "
+            f"{format_org_config_diffs(last_diffs)}"
+        )
+
+    def _wait_org_config_save_response(self, timeout_seconds: int) -> dict[str, object]:
+        identity = self._api_client().identity()
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
-            try:
-                if self.cdp.evaluate(self._save_success_message_visible_script()):
-                    return True
-            except Exception:
-                pass
-            time.sleep(0.2)
-        return False
+            response = self.cdp.evaluate(
+                """
+                () => {
+                    const queue = Array.isArray(window.__dicloakOrgConfigResponses)
+                        ? window.__dicloakOrgConfigResponses
+                        : [];
+                    return queue.length ? queue.shift() : null;
+                }
+                """
+            )
+            if not isinstance(response, dict):
+                time.sleep(0.1)
+                continue
+            if str(response.get("method", "")).upper() != "POST":
+                continue
+            if urlsplit(str(response.get("url", ""))).path != identity.path:
+                continue
+            return response
+        raise TimeoutError(
+            "global settings org_config POST response was not captured within "
+            f"{timeout_seconds}s"
+        )
+
+    def _install_org_config_response_capture(self) -> None:
+        self.cdp.evaluate(
+            """
+            () => {
+                window.__dicloakOrgConfigResponses = [];
+                if (window.__dicloakOrgConfigResponseCaptureInstalled) return;
+                window.__dicloakOrgConfigResponseCaptureInstalled = true;
+
+                const shouldCapture = (url, method) =>
+                    String(method || "GET").toUpperCase() === "POST"
+                    && String(url || "").includes("/gin/v1/organization/")
+                    && String(url || "").includes("/org_config");
+                const bodyText = (body) => {
+                    if (typeof body === "string") return body;
+                    if (body == null) return "";
+                    try {
+                        if (body instanceof URLSearchParams) return body.toString();
+                    } catch (_) {}
+                    return "";
+                };
+                const record = (url, method, postData, status, responseBody) => {
+                    if (!shouldCapture(url, method)) return;
+                    const queue = window.__dicloakOrgConfigResponses;
+                    queue.push({
+                        url: String(url || ""),
+                        method: String(method || ""),
+                        post_data: bodyText(postData),
+                        status: Number(status || 0),
+                        response_body: String(responseBody || ""),
+                    });
+                    if (queue.length > 20) queue.splice(0, queue.length - 20);
+                };
+
+                const originalFetch = window.fetch;
+                if (typeof originalFetch === "function") {
+                    window.fetch = function(input, init) {
+                        const url = typeof input === "string" ? input : input && input.url;
+                        const method = (init && init.method) || (input && input.method) || "GET";
+                        const postData = init && Object.prototype.hasOwnProperty.call(init, "body")
+                            ? init.body
+                            : "";
+                        const promise = originalFetch.apply(this, arguments);
+                        if (!shouldCapture(url, method)) return promise;
+                        return promise.then((response) => {
+                            response.clone().text()
+                                .then((text) => record(url, method, postData, response.status, text))
+                                .catch(() => record(url, method, postData, response.status, ""));
+                            return response;
+                        });
+                    };
+                }
+
+                const originalOpen = XMLHttpRequest.prototype.open;
+                const originalSend = XMLHttpRequest.prototype.send;
+                XMLHttpRequest.prototype.open = function(method, url) {
+                    this.__dicloakOrgConfigMethod = method;
+                    this.__dicloakOrgConfigUrl = url;
+                    return originalOpen.apply(this, arguments);
+                };
+                XMLHttpRequest.prototype.send = function(body) {
+                    const url = this.__dicloakOrgConfigUrl;
+                    const method = this.__dicloakOrgConfigMethod;
+                    if (shouldCapture(url, method)) {
+                        this.addEventListener("loadend", () => {
+                            let text = "";
+                            try { text = String(this.responseText || ""); } catch (_) {}
+                            record(url, method, body, this.status, text);
+                        }, { once: true });
+                    }
+                    return originalSend.apply(this, arguments);
+                };
+            }
+            """
+        )
 
     def _wait_until_not_loading(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -3167,38 +3383,6 @@ class GlobalSettingsPage(BasePage):
                 """.replace("__LOADING_SELECTOR__", repr(self.locator("loading_mask")))
             )
         )
-
-    def _save_success_message_visible_script(self) -> str:
-        return f"""
-        () => {{
-            const expectedText = {self.SAVE_SUCCESS_MESSAGE!r};
-            const visible = (el) => {{
-                const style = window.getComputedStyle(el);
-                const rect = el.getBoundingClientRect();
-                return style.display !== "none"
-                    && style.visibility !== "hidden"
-                    && Number(style.opacity || "1") > 0.01
-                    && rect.width > 0
-                    && rect.height > 0
-                    && rect.right > 0
-                    && rect.bottom > 0
-                    && rect.left < window.innerWidth
-                    && rect.top < window.innerHeight;
-            }};
-            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-            const messageSelectors = [
-                ".el-message--success .el-message__content",
-                ".el-message--success",
-                ".el-message__content",
-                ".el-message",
-                "[role='alert']",
-            ];
-            return messageSelectors
-                .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
-                .filter(visible)
-                .some((el) => clean(el.innerText || el.textContent).includes(expectedText));
-        }}
-        """
 
     def _dismiss_blocking_overlays(self) -> None:
         for _ in range(4):

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import time
 import unittest
 from pathlib import Path
@@ -72,7 +71,7 @@ class TestGlobalSettingsClearAllCacheEveryOpenNoCloudSync(unittest.TestCase):
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
-        global_settings_snapshot: dict[str, object] | None = None
+        global_settings_page.prepare_api_recovery(affected_blocks={"local_data_config"})
         global_clear_cache_reset = False
         try:
             environment_page.open_list()
@@ -110,7 +109,6 @@ class TestGlobalSettingsClearAllCacheEveryOpenNoCloudSync(unittest.TestCase):
             self._assert_sites_logged_in(first_statuses, stage="首次打开登录后")
 
             global_settings_page.open(force_reentry=True)
-            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             global_settings_page.configure_clear_all_local_cache_every_open_no_cloud_sync_data()
 
             environment_page.open_list()
@@ -148,10 +146,7 @@ class TestGlobalSettingsClearAllCacheEveryOpenNoCloudSync(unittest.TestCase):
                 f"新建环境删除后仍然存在: {ENVIRONMENT_NAME}",
             )
 
-            global_settings_page.open(force_reentry=True)
-            global_settings_page.restore_global_settings_snapshot(
-                self._snapshot_with_clear_local_cache_no_clear(global_settings_snapshot)
-            )
+            global_settings_page.restore_api_recovery_if_needed()
             global_clear_cache_reset = True
         finally:
             try:
@@ -173,13 +168,7 @@ class TestGlobalSettingsClearAllCacheEveryOpenNoCloudSync(unittest.TestCase):
                 pass
             if not global_clear_cache_reset:
                 try:
-                    global_settings_page.open(force_reentry=True)
-                    if global_settings_snapshot is not None:
-                        global_settings_page.restore_global_settings_snapshot(
-                            self._snapshot_with_clear_local_cache_no_clear(global_settings_snapshot)
-                        )
-                    else:
-                        global_settings_page.configure_clear_local_cache_no_clear()
+                    global_settings_page.restore_api_recovery_if_needed()
                 except Exception:
                     self.logger.exception("failed to restore global clear-local-cache setting to no-clear")
 
@@ -196,13 +185,6 @@ class TestGlobalSettingsClearAllCacheEveryOpenNoCloudSync(unittest.TestCase):
             site_id = str(site["site_id"])
             username, password = credentials_by_site[site_id]
             client.ensure_user(site_id, username, password)
-
-    def _snapshot_with_clear_local_cache_no_clear(self, snapshot: dict[str, object]) -> dict[str, object]:
-        target = copy.deepcopy(snapshot)
-        target["clear_local_cache"] = {
-            "clear_method": GlobalSettingsPage.CLEAR_LOCAL_CACHE_NO_CLEAR_TEXT,
-        }
-        return target
 
     def _assert_sites_logged_in(self, statuses: dict[str, tuple[str, str]], *, stage: str) -> None:
         for site in SITE_DEFINITIONS:

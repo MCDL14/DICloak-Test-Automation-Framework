@@ -49,16 +49,15 @@ class TestBlockSpecificWebsitesGoogleAndBaidu(unittest.TestCase):
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
+        global_settings_page.prepare_api_recovery(affected_blocks={"access_limit"})
         environment_name = ""
         kernel_pid = 0
         environment_opened = False
         cleanup_error: Exception | None = None
-        global_settings_snapshot: dict[str, object] | None = None
 
         try:
             with LocalHttpProbe() as allowed_probe:
                 global_settings_page.open()
-                global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
                 global_settings_page.validate_website_restriction_controls_without_saving(
                     test_url="https://baidu.com",
                     shortcut_name="Chrome 应用商店",
@@ -156,9 +155,7 @@ class TestBlockSpecificWebsitesGoogleAndBaidu(unittest.TestCase):
             except Exception:
                 pass
             try:
-                if global_settings_snapshot is not None:
-                    global_settings_page.open(force_reentry=True)
-                    global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
+                global_settings_page.restore_api_recovery_if_needed()
             except Exception as exc:
                 cleanup_error = exc
             try:

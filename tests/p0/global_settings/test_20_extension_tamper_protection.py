@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import os
 import shutil
@@ -49,10 +48,13 @@ class TestGlobalSettingsExtensionTamperProtection(unittest.TestCase):
         browser_process_name = resolve_app_config(self.config).browser_process_name
 
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
+        global_settings_page.prepare_api_recovery(
+            affected_blocks={"browser_config"},
+            bitmask_blocks={"browser_config"},
+        )
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         personal_settings_page = PersonalSettingsPage(cdp_driver=self.cdp, config=self.config)
 
-        global_settings_snapshot: dict[str, object] | None = None
         global_extension_tamper_reset = False
         environment_name = ""
         opened_kernel_pid = 0
@@ -61,7 +63,6 @@ class TestGlobalSettingsExtensionTamperProtection(unittest.TestCase):
 
         try:
             global_settings_page.open(force_reentry=True)
-            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             global_settings_page.ensure_extension_tamper_protection_enabled()
 
             environment_page.open_list()
@@ -152,10 +153,7 @@ class TestGlobalSettingsExtensionTamperProtection(unittest.TestCase):
             )
 
             environment_page.clear_search()
-            global_settings_page.open(force_reentry=True)
-            global_settings_page.restore_global_settings_snapshot(
-                self._snapshot_with_extension_tamper_disabled(global_settings_snapshot)
-            )
+            global_settings_page.restore_api_recovery_if_needed()
             global_extension_tamper_reset = True
         finally:
             try:
@@ -187,13 +185,7 @@ class TestGlobalSettingsExtensionTamperProtection(unittest.TestCase):
                 pass
             if not global_extension_tamper_reset:
                 try:
-                    global_settings_page.open(force_reentry=True)
-                    if global_settings_snapshot is not None:
-                        global_settings_page.restore_global_settings_snapshot(
-                            self._snapshot_with_extension_tamper_disabled(global_settings_snapshot)
-                        )
-                    else:
-                        global_settings_page.ensure_extension_tamper_protection_disabled()
+                    global_settings_page.restore_api_recovery_if_needed()
                 except Exception:
                     self.logger.exception("failed to disable global extension tamper protection")
 
@@ -204,11 +196,6 @@ class TestGlobalSettingsExtensionTamperProtection(unittest.TestCase):
             if isinstance(extension_data, dict) and str(extension_data.get("environment_search_keyword", "")).strip():
                 return str(extension_data["environment_search_keyword"]).strip()
         return ENVIRONMENT_SEARCH_KEYWORD
-
-    def _snapshot_with_extension_tamper_disabled(self, snapshot: dict[str, object]) -> dict[str, object]:
-        target = copy.deepcopy(snapshot)
-        target["extension_tamper_protection"] = {"enabled": False}
-        return target
 
     def _tamper_manifest_update_url(self, manifest_path: Path) -> bytes:
         assert_true(manifest_path.exists(), f"扩展 manifest 文件不存在: {manifest_path}")

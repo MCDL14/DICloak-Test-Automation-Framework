@@ -49,15 +49,17 @@ class TestDisableExtensionManagement(unittest.TestCase):
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         global_settings_page = GlobalSettingsPage(cdp_driver=self.cdp, config=self.config)
+        global_settings_page.prepare_api_recovery(
+            affected_blocks={"browser_config"},
+            bitmask_blocks={"browser_config"},
+        )
         environment_name = ""
         kernel_pid = 0
         environment_opened = False
-        global_settings_snapshot: dict[str, object] | None = None
         cleanup_error: Exception | None = None
 
         try:
             global_settings_page.open()
-            global_settings_snapshot = global_settings_page.capture_global_settings_snapshot()
             global_settings_page.ensure_disable_extension_management_enabled()
 
             environment_page.open_list()
@@ -152,9 +154,7 @@ class TestDisableExtensionManagement(unittest.TestCase):
             except Exception:
                 pass
             try:
-                if global_settings_snapshot is not None:
-                    global_settings_page.open(force_reentry=True)
-                    global_settings_page.restore_global_settings_snapshot(global_settings_snapshot)
+                global_settings_page.restore_api_recovery_if_needed()
             except Exception as exc:
                 cleanup_error = exc
             try:

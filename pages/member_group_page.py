@@ -74,6 +74,131 @@ class MemberGroupPage(BasePage):
             return {}
         return {str(key): str(item or "").strip() for key, item in value.items()}
 
+    def first_member_group(self) -> dict[str, object]:
+        rows = self._member_group_rows()
+        if not rows:
+            raise RuntimeError("member group list has no visible rows")
+        first_row = rows[0]
+        if not first_row["editable"]:
+            raise RuntimeError(f"first member group is not editable: {first_row}")
+        if not first_row["name"] or not first_row["created_at"]:
+            raise RuntimeError(f"first member group identity is incomplete: {first_row}")
+        return first_row
+
+    def member_group_by_identity(self, remark: str, created_at: str) -> dict[str, object]:
+        clean_remark = str(remark).strip()
+        clean_created_at = str(created_at).strip()
+        matches = [
+            row
+            for row in self._member_group_rows()
+            if row["remark"] == clean_remark and row["created_at"] == clean_created_at
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                "member group identity must match exactly one row: "
+                f"remark={clean_remark!r}, created_at={clean_created_at!r}, matches={len(matches)}"
+            )
+        return matches[0]
+
+    def edit_member_group_name_by_identity(
+        self,
+        *,
+        remark: str,
+        created_at: str,
+        new_name: str,
+        expected_current_name: str = "",
+    ) -> None:
+        clean_name = str(new_name).strip()
+        if not clean_name:
+            raise ValueError("member group name is empty")
+        current = self.member_group_by_identity(remark, created_at)
+        current_name = str(current["name"])
+        if expected_current_name and current_name != str(expected_current_name).strip():
+            raise AssertionError(
+                "member group current name does not match before edit: "
+                f"expected={expected_current_name!r}, actual={current_name!r}"
+            )
+
+        self.dismiss_blocking_overlays()
+        self.cdp.click_element_by_script(
+            self._member_group_row_edit_button_by_identity_script(remark, created_at)
+        )
+        self._wait_for_edit_member_group_dialog(current_name)
+        self.cdp.fill_element_by_script(
+            self._dialog_input_by_label_script("成员分组名称"),
+            clean_name,
+        )
+        self._wait_for_dialog_field_value("成员分组名称", clean_name)
+        self._click_overlay_button_wait_loading_then_closed("确定")
+        self._wait_for_member_group_table_not_loading()
+        self.wait_member_group_name_by_identity(remark, created_at, clean_name)
+
+    def restore_member_group_name_if_needed(
+        self,
+        *,
+        remark: str,
+        created_at: str,
+        original_name: str,
+    ) -> None:
+        current = self.member_group_by_identity(remark, created_at)
+        if current["name"] == str(original_name).strip():
+            return
+        self.edit_member_group_name_by_identity(
+            remark=remark,
+            created_at=created_at,
+            new_name=original_name,
+            expected_current_name=str(current["name"]),
+        )
+
+    def wait_member_group_name_by_identity(
+        self,
+        remark: str,
+        created_at: str,
+        expected_name: str,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "search_result_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        last_matches: list[dict[str, object]] = []
+        while time.time() < deadline:
+            last_matches = [
+                row
+                for row in self._member_group_rows()
+                if row["remark"] == str(remark).strip()
+                and row["created_at"] == str(created_at).strip()
+            ]
+            if len(last_matches) > 1:
+                raise RuntimeError(
+                    "member group identity became ambiguous while waiting for name: "
+                    f"remark={remark!r}, created_at={created_at!r}, matches={len(last_matches)}"
+                )
+            if len(last_matches) == 1 and last_matches[0]["name"] == str(expected_name).strip():
+                return
+            time.sleep(0.3)
+        raise TimeoutError(
+            "member group name did not reach expected value by identity: "
+            f"remark={remark!r}, created_at={created_at!r}, expected={expected_name!r}, "
+            f"matches={last_matches}"
+        )
+
+    def _member_group_rows(self) -> list[dict[str, object]]:
+        value = self.cdp.evaluate(self._member_group_rows_script())
+        if not isinstance(value, list):
+            return []
+        rows: list[dict[str, object]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "name": str(item.get("name", "") or "").strip(),
+                    "remark": str(item.get("remark", "") or "").strip(),
+                    "created_at": str(item.get("created_at", "") or "").strip(),
+                    "editable": bool(item.get("editable")),
+                }
+            )
+        return rows
+
     def dismiss_blocking_overlays(self) -> None:
         for _ in range(4):
             has_overlay = bool(
@@ -185,6 +310,39 @@ class MemberGroupPage(BasePage):
             time.sleep(poll_seconds)
         raise TimeoutError(f"create member group dialog did not become ready: {last_state}")
 
+    def _wait_for_edit_member_group_dialog(
+        self,
+        expected_name: str,
+        timeout_seconds: int | None = None,
+        stable_seconds: float = 0.4,
+        poll_seconds: float = 0.1,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        deadline = time.monotonic() + timeout_seconds
+        stable_since: float | None = None
+        last_state: dict[str, object] = {}
+        while time.monotonic() < deadline:
+            value = self.cdp.evaluate(self._edit_member_group_dialog_state_script())
+            last_state = value if isinstance(value, dict) else {}
+            ready = (
+                last_state.get("title") == "编辑成员分组"
+                and last_state.get("name") == str(expected_name).strip()
+                and not bool(last_state.get("loading"))
+            )
+            now = time.monotonic()
+            if ready:
+                if stable_since is None:
+                    stable_since = now
+                elif now - stable_since >= stable_seconds:
+                    return
+            else:
+                stable_since = None
+            time.sleep(poll_seconds)
+        raise TimeoutError(
+            "edit member group dialog did not become stable with original name: "
+            f"expected_name={expected_name!r}, state={last_state}"
+        )
+
     def _fill_create_dialog_fields_stably(
         self,
         *,
@@ -236,6 +394,23 @@ class MemberGroupPage(BasePage):
             else self._dialog_textarea_by_label_script(field_label)
         )
         self.cdp.fill_element_by_script(script, value)
+
+    def _wait_for_dialog_field_value(
+        self,
+        field_label: str,
+        expected_value: str,
+        timeout_seconds: int | None = None,
+    ) -> None:
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "element_seconds", 10)
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self._dialog_field_value(field_label) == expected_value:
+                return
+            time.sleep(0.1)
+        raise TimeoutError(
+            f"member group dialog field did not reach expected value: "
+            f"field={field_label}, expected={expected_value!r}"
+        )
 
     def _wait_delete_member_group_dialog_visible(self, timeout_seconds: int | None = None) -> None:
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
@@ -567,6 +742,112 @@ class MemberGroupPage(BasePage):
                         && text.includes("确定并删除");
                 });
         }
+        """
+
+    def _edit_member_group_dialog_state_script(self) -> str:
+        return f"""
+        () => {{
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const dialogs = Array.from(document.querySelectorAll({self.locator("dialog")!r})).filter(visible);
+            const dialog = dialogs.reverse().find((item) =>
+                clean(item.querySelector({self.locator("dialog_title")!r})?.textContent) === "编辑成员分组"
+            );
+            if (!dialog) return {{ title: "", name: "", remark: "", loading: false }};
+            const loading = Array.from(
+                dialog.querySelectorAll(".el-loading-mask, .el-skeleton, [aria-busy='true']")
+            ).some(visible);
+            const name = dialog.querySelector("input[placeholder='成员分组名称']");
+            const remark = dialog.querySelector("textarea[placeholder='备注']");
+            return {{
+                title: clean(dialog.querySelector({self.locator("dialog_title")!r})?.textContent),
+                name: String(name?.value || "").trim(),
+                remark: String(remark?.value || "").trim(),
+                loading,
+            }};
+        }}
+        """
+
+    def _member_group_rows_script(self) -> str:
+        return f"""
+        () => {{
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const compact = (value) => clean(value).replace(/\\s+/g, "");
+            const headers = Array.from(document.querySelectorAll({self.locator("table_header")!r}))
+                .filter(visible)
+                .map((header) => compact(header.innerText || header.textContent));
+            const nameIndex = headers.findIndex((header) => header.includes("成员分组名称"));
+            const remarkIndex = headers.findIndex((header) => header === "备注");
+            const createdAtIndex = headers.findIndex((header) => header.includes("创建时间"));
+            const operationIndex = headers.findIndex((header) => header === "操作");
+            if (nameIndex < 0 || remarkIndex < 0 || createdAtIndex < 0) return [];
+            return Array.from(document.querySelectorAll({self.locator("table_row")!r}))
+                .filter(visible)
+                .map((row) => {{
+                    const cells = Array.from(row.querySelectorAll({self.locator("table_cell")!r})).filter(visible);
+                    const operationCell = cells[operationIndex] || cells.at(-1) || row;
+                    return {{
+                        name: clean(cells[nameIndex]?.innerText || cells[nameIndex]?.textContent),
+                        remark: clean(cells[remarkIndex]?.innerText || cells[remarkIndex]?.textContent),
+                        created_at: clean(cells[createdAtIndex]?.innerText || cells[createdAtIndex]?.textContent),
+                        editable: Boolean(operationCell.querySelector({self.locator("edit_icon")!r})),
+                    }};
+                }});
+        }}
+        """
+
+    def _member_group_row_edit_button_by_identity_script(self, remark: str, created_at: str) -> str:
+        return f"""
+        () => {{
+            const expectedRemark = {str(remark).strip()!r};
+            const expectedCreatedAt = {str(created_at).strip()!r};
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const compact = (value) => clean(value).replace(/\\s+/g, "");
+            const headers = Array.from(document.querySelectorAll({self.locator("table_header")!r}))
+                .filter(visible)
+                .map((header) => compact(header.innerText || header.textContent));
+            const remarkIndex = headers.findIndex((header) => header === "备注");
+            const createdAtIndex = headers.findIndex((header) => header.includes("创建时间"));
+            const operationIndex = headers.findIndex((header) => header === "操作");
+            if (remarkIndex < 0 || createdAtIndex < 0) return null;
+            const matches = Array.from(document.querySelectorAll({self.locator("table_row")!r}))
+                .filter(visible)
+                .filter((row) => {{
+                    const cells = Array.from(row.querySelectorAll({self.locator("table_cell")!r})).filter(visible);
+                    return clean(cells[remarkIndex]?.innerText || cells[remarkIndex]?.textContent) === expectedRemark
+                        && clean(cells[createdAtIndex]?.innerText || cells[createdAtIndex]?.textContent) === expectedCreatedAt;
+                }});
+            if (matches.length !== 1) return null;
+            const cells = Array.from(matches[0].querySelectorAll({self.locator("table_cell")!r})).filter(visible);
+            const operationCell = cells[operationIndex] || cells.at(-1) || matches[0];
+            const editIcon = Array.from(operationCell.querySelectorAll({self.locator("edit_icon")!r}))
+                .filter(visible)
+                .sort((left, right) => left.getBoundingClientRect().x - right.getBoundingClientRect().x)[0];
+            return editIcon ? editIcon.closest("button, [role='button']") || editIcon : null;
+        }}
         """
 
     def _member_group_exists_script(self, name: str) -> str:

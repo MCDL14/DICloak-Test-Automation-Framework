@@ -39,6 +39,28 @@ class CaseDisplayNameTests(unittest.TestCase):
 
         self.assertEqual(display_name, "隐藏扩展并验证扩展页不可见")
 
+        display_name = case_display_name(
+            "tests.p0.extension_management.test_05_edit_extension_groups."
+            "TestEditExtensionAssignedGroups.test_edit_extension_assigned_groups_and_restore"
+        )
+        self.assertEqual(display_name, "编辑扩展的所属分组并恢复")
+        self.assertEqual(
+            case_display_name("test_edit_local_extension_name_and_restore"),
+            "编辑本地扩展名称并恢复",
+        )
+        self.assertEqual(
+            case_display_name("test_create_extension_group_and_delete"),
+            "创建扩展分组并删除",
+        )
+        self.assertEqual(
+            case_display_name("test_edit_extension_group_name_and_restore"),
+            "编辑扩展分组名称并恢复",
+        )
+        self.assertEqual(
+            case_display_name("test_edit_first_member_group_name_and_restore"),
+            "编辑成员分组名称并恢复",
+        )
+
     def test_unknown_method_has_readable_fallback(self) -> None:
         display_name = case_display_name(
             "tests.p0.proxy_management.test_99_probe."

@@ -183,7 +183,7 @@ Mac 当前已验证：
 - `python run.py --config config/config.macos.yaml --level P0` 通过，结果 `total=59 passed=58 failed=0 errors=0 skipped=1 flaky=1`。
 - UI 远程节点模式已完成“同步当前代码”后执行 `P0 全量` 验证，结果 `total=59 passed=57 failed=0 errors=1 skipped=1 flaky=0`；唯一错误为代理创建弹窗确认后未关闭，保留为 Mac 远端代理业务/环境问题继续排查。
 
-以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 95 条，最新状态见“最近验证记录”。
+以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 100 条，最新状态见“最近验证记录”。
 
 Mac 当前跳过项：
 
@@ -428,7 +428,12 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 95 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 4 条、环境分组管理 6 条、成员分组管理 1 条、成员管理 15 条、代理管理 4 条。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；P1 完整组件回归为 `Ran 206 tests ... OK`。
+
+当前成员分组管理模块已接入 2 条 P0 用例，文件位于 `tests/p0/member_group_management/`：
+
+- `test_01_create_member_group.py`：创建成员分组，校验名称和备注后删除。
+- `test_02_edit_member_group_name.py`：读取列表首行名称、备注和创建时间，等待编辑弹窗异步数据及权限树 loading 稳定后修改名称为 `自动化-编辑成员分组名称`；保存后按“备注 + 创建时间”唯一回找并断言名称、备注和创建时间，再按同一稳定身份还原原名称。主流程异常时也会在 `finally` 中幂等尝试还原，避免污染共享团队数据。
 
 当前环境管理模块已接入 43 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
@@ -561,15 +566,24 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 代理管理新版列表不直接展示代理 ID，`ProxyPage` 已改为读取表格“序号”作为行 key，用于创建后等待、行内检测、勾选、批量删除和删除后消失校验。代理检测类用例仍依赖配置中的本机系统代理 `windows_system_proxy.host/port` 可用；若 `127.0.0.1:7897` 未监听，检测失败或列表加载失败属于环境前置问题，不归类为元素定位失败。
 
-当前已新增扩展管理模块 4 条 P0 用例，文件位于 `tests/p0/extension_management/`：
+当前已新增扩展管理模块 8 条 P0 用例，文件位于 `tests/p0/extension_management/`：
 
 - `test_01_create_local_extension.py`：创建本地上传扩展，进入扩展管理页点击“添加扩展”，添加方式切换为“安装包”，先填写 `test_data.local_extension.extension_name` 指定的扩展名称，再上传 `test_data.local_extension.package_path/package_name` 指向的 zip 安装包，扩展分组确保为“未分组”；保存后校验扩展卡片存在、名称正确、提供方为“本地扩展”，随后通过卡片右上角更多菜单删除并校验删除成功。由于 Electron 真实文件选择器返回的 `File.path` 是上传校验关键字段，自动化会在临时 ASCII zip 副本上通过浏览器 file chooser 注入文件，并在页面上下文补齐原始项目 zip 路径；安装包模式识别兼容新版 `accept=".zip,application/zip"` 输入和“将 ZIP 文件拖到此处，或点击上传”的上传区域，上传完成等待兼容弹窗展示完整路径、原始 zip 文件名或临时 ASCII zip 文件名，保存后清理临时文件。
 - `test_02_add_market_extension.py`：添加扩展市场里的扩展，进入扩展管理后切换“扩展市场”，按 `test_data.extension_market.extension_name` 搜索，按 `test_data.extension_market.extension_description` 精确匹配搜索结果卡片并点击“添加”；添加弹窗会等待扩展名称和默认分组“未分组”异步回填完成后再确认，随后切回“添加扩展”列表，断言同一扩展卡片同时包含目标名称和描述，最后通过卡片右上角更多菜单删除并校验删除成功。用例开始和 finally 清理均会显式切回“添加扩展”TAB，避免误操作扩展市场搜索结果卡片。
 - `test_03_create_google_extension_and_enable.py`：创建 Chrome 应用商店扩展并同时启用，读取 `test_data.google_extension.extension_url/name/description/environment_name`，在“添加扩展”弹窗中保持“Chrome 应用商店”方式，填写扩展 URL，等待扩展分组回填或选择“未分组”，勾选“同时启用该扩展，在自动同步到对应环境”后保存；扩展列表按名称和描述断言，提供方期望为“谷歌商店”，提供方断言失败会记录为延迟断言并继续执行；随后进入环境管理搜索并打开“自动化扩展启用验证”，通过内核 CDP 访问 `chrome://extensions/`，递归读取 Chrome 扩展页 Shadow DOM 文本，断言目标扩展名称和描述存在，失败同样延迟到关闭环境、清空筛选和删除扩展后统一抛出。
 - `test_04_hide_extension.py`：隐藏扩展，目标扩展名称固定为 `ZeroOmega`，其余数据读取 `test_data.hide_extension.extension_keyword/member_group/environment_name`；用例开头必须在“添加扩展”列表中找到已有扩展 `ZeroOmega`，找不到会直接失败并提示缺少前置扩展，不会自动创建扩展。用例编辑目标扩展，打开“隐藏设置”，确保“成员分组”为“全部分组”，保存后打开扩展卡片右下角开关；进入环境管理搜索并打开 `自动化扩展启用验证`，访问 `chrome://extensions/` 并断言页面文本不包含 `ZeroOmega`。当前既有 `ZeroOmega` 暂无稳定扩展 ID 可用于内核 target 精确检测，因此该辅助检测仅记录跳过；随后关闭环境、清空筛选、关闭扩展开关（带确认弹窗和最多 2 次重试）、关闭隐藏设置，不删除已有扩展。
+- `test_05_edit_extension_groups.py`：编辑 `Cookie-Editor` 的所属分组。搜索并精确定位扩展卡片后，悬浮更多图标进入“编辑扩展”，从关联下拉选项的 `is-selected` 状态读取完整原分组集合，保留原分组并追加 `扩展分组01`；保存后分别按原分组和新增分组筛选并断言目标扩展存在。随后再次编辑并移除 `扩展分组01`，按该分组筛选时断言目标扩展不存在，最后清空筛选。扩展列表的名称、分组和启用状态筛选清空后不会自动请求无筛选列表，因此清理方法始终再点击一次带 `.icon-search` 的搜索按钮并等待列表 loading/内容稳定，即使控件原本已经为空也会提交。Element Plus 将多个已选分组折叠为 `+ 1` 时仍可读取完整集合；异常路径会幂等恢复原分组并清理筛选。
+- `test_06_edit_local_extension_name.py`：编辑已有本地扩展 `ZeroOmega` 的名称。搜索目标卡片后分别记录独立解析的版本号和扩展详情，确认新名称不存在，再将“扩展名称”改为 `自动化-编辑本地扩展名称`；保存、搜索新名称并精确校验名称、版本号和扩展详情，随后再次编辑还原为 `ZeroOmega` 并重复校验，最后清空筛选并显式点击搜索按钮提交无筛选请求。页面对象只在本地扩展改名流程等待“扩展名称”回填，不把该要求施加给不提供可读名称字段的其他扩展类型；异常路径会判断当前是原名称还是新名称，仅在需要时幂等还原。
+- `test_07_create_extension_group.py`：创建并删除扩展分组。进入“分组管理”并等待“扩展分组管理”抽屉及抽屉内列表稳定，打开“创建扩展分组”弹窗，填写 `自动化-创建扩展分组` 和备注 `自动化-扩展分组备注`；保存后按七列表格精确读取名称、备注及操作能力。删除时先要求名称唯一，再在目标行操作列中取第二个图标并校验为 `.icon-delete`，确认“是否确定删除该分组？”后等待抽屉列表刷新并断言分组消失；异常路径会幂等删除固定测试分组并关闭抽屉。
+- `test_08_edit_extension_group_name.py`：编辑扩展分组名称并还原。精确找到 `扩展分组03`，记录备注和创建时间，按“备注 + 创建时间”唯一定位该行并校验操作列第一个图标为 `.icon-edit`；名称改为 `自动化-修改扩展分组名称` 后按相同稳定身份回找并断言，再编辑还原原名称。弹窗打开后等待名称和备注回填，保存时等待按钮状态、弹窗关闭和抽屉列表刷新；异常路径会按稳定身份幂等恢复原名称。
 
 最近验证记录：
 
+- `python run.py --config config/config.yaml --module test_08_edit_extension_group_name.py --attach-existing-app` 与 `python run.py --config config/config.yaml --business-module 扩展管理 --attach-existing-app`：2026-08-27 新增“编辑扩展分组名称并恢复”后，连接用户已打开 APP 的真实单跑和扩展管理 8 条模块回归均通过，结果分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`、`total=8 passed=8 failed=0 errors=0 skipped=0 flaky=0`；新增用例事件耗时分别为 `20.75s` 和 `18.30s`。完整 P1 为 `Ran 206 tests ... OK`；当前 P0 发现为 100 条，扩展管理为 8 条。`扩展分组03` 已还原，筛选和浮层已清理，原 APP 未关闭。
+- `python run.py --config config/config.yaml --module test_07_create_extension_group.py --attach-existing-app` 与 `python run.py --config config/config.yaml --business-module 扩展管理 --attach-existing-app`：2026-08-27 新增“创建扩展分组并删除”后，连接用户已打开的 APP 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，事件耗时 `17.41s`；7 条模块回归中新增用例再次通过（`17.38s`），模块总结果为 `total=7 passed=5 failed=0 errors=2 skipped=0 flaky=0`，两条错误均为既有编辑扩展保存后弹窗未关闭，发生在 `test_04_hide_extension.py` 和 `test_06_edit_local_extension_name.py`，与分组管理抽屉链路无关。完整 P1 为 `Ran 203 tests ... OK`；当前 P0 发现为 99 条，扩展管理为 7 条。现场复查确认测试分组不存在，`ZeroOmega` 名称和隐藏设置均已还原，APP 未关闭。
+- `python run.py --config config/config.yaml --module test_06_edit_local_extension_name.py --attach-existing-app` 与 `python run.py --config config/config.yaml --business-module 扩展管理 --attach-existing-app`：2026-08-27 新增“编辑本地扩展名称并恢复”后，连接用户已打开的 APP 完成真实单跑和扩展管理 6 条最终模块回归，结果分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`、`total=6 passed=6 failed=0 errors=0 skipped=0 flaky=0`；新增用例事件耗时分别为 `32.28s` 和 `30.62s`。真实 DOM 确认 `ZeroOmega` 卡片可独立读取名称、版本号 `3.4.1`、分组、扩展详情和提供方，编辑弹窗“扩展名称”会回填原值；`ZeroOmega` 已还原，筛选已清空，APP 未关闭。完整 P1 为 `Ran 200 tests ... OK`；当前 P0 发现为 98 条，扩展管理为 6 条。
+- `python run.py --config config/config.yaml --module test_05_edit_extension_groups.py --attach-existing-app` 与 `python run.py --config config/config.yaml --business-module 扩展管理 --attach-existing-app`：2026-08-27 新增“编辑扩展的所属分组并恢复”后，连接用户已打开的 APP 完成真实单跑和扩展管理 5 条模块回归，首次记录分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`、`total=5 passed=5 failed=0 errors=0 skipped=0 flaky=0`。补充“清空筛选后点击搜索按钮”行为后，最终代码再次单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例事件耗时 `29.51s`；随后模块回归为 `total=5 passed=4 failed=0 errors=1 skipped=0 flaky=1`，唯一错误来自原有 `test_04_hide_extension.py` 保存隐藏设置时编辑弹窗未关闭，残留遮罩使新增用例首轮失败，但新增用例第二轮通过（事件耗时 `28.70s`）并完成分组还原和筛选清理。完整 P1 为 `Ran 197 tests ... OK`；当前 P0 发现为 97 条，扩展管理为 5 条，原 APP 始终未由运行器关闭。
+- `python run.py --config config/config.yaml --module test_02_edit_member_group_name.py` 与 `python run.py --config config/config.yaml --module member_group_management`：2026-08-27 新增成员分组管理“编辑成员分组名称”用例后，Windows 托管 APP 真实单跑和模块回归均通过，结果分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`、`total=2 passed=2 failed=0 errors=0 skipped=0 flaky=0`。真实探测确认表格列为“成员分组名称、备注、包含成员、创建时间、操作”，首行第一个操作按钮为 `.icon-edit`；编辑弹窗会先出现空表单和权限 loading，随后异步回填原名称/备注，因此页面对象会等待标题、原名称和 loading 稳定后才填写。完整 P1 同步通过：`Ran 192 tests ... OK`；当前 P0 发现为 96 条，成员分组管理为 2 条。
 - `python run.py --config config/config.yaml --module global_settings --attach-existing-app`：2026-08-25 全局设置接口基准与按影响范围恢复落地后，22 条完整模块真实回归通过，`total=22 passed=22 failed=0 errors=0 skipped=0 flaky=0`，运行时间 `19:17:18~19:40:20`。每条运行前基准 GET 均首次成功并确认匹配；UI 保存继续保留控件状态断言，同时以目标 POST 响应和后续 GET 作为持久化证据。
 - `python run.py --config config/config.yaml --case <environment test_26...test_31> --attach-existing-app`：2026-08-25 六条环境数据关联用例真实联合回归通过，`total=6 passed=6 failed=0 errors=0 skipped=0 flaky=0`。六条用例内部耗时合计 `509.67s`，相比 2026-08-24 旧 UI 快照恢复流程的 `573.17s` 减少 `63.50s`，约 `11.1%`；当前主要耗时来自 18 次环境启动/关闭、环境列表重复加载、内核 CDP 接入及新环境创建/删除，不是三种存储接口本身。
 - `python run.py --config config/config.yaml --case tests.p0.global_settings.test_02_disable_browser_devtools.TestDisableBrowserDevtools.test_disable_browser_devtools --attach-existing-app`：2026-08-25 全局设置接口基准与按位恢复改造后真实单跑通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例耗时 `37.43s`。UI 保存响应监听和 GET 复查均在首次尝试成功；finally 检出 DevTools 位仍偏离基准后执行完整 POST，并再次 GET 通过，验证了 `browser_config.type` 只恢复本用例动态识别出的变化位。
@@ -655,4 +669,4 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 - `python -c "from streamlit_runner import discover_cases; cases=discover_cases(); print(len(cases))"`：新增代理管理用例后的早期发现数量为 59 条；当前可发现数量为 93 条。
 - `python run.py --config config/config.yaml --attach-existing-app`：早期全量 P0 运行通过，`total=54 passed=54 failed=0 errors=0 skipped=0 flaky=0`（2026-05-29 两次验证）；当前全量状态见 2026-07-01 记录。
 
-扩展管理、成员分组管理等模块已开始接入 P0 用例，后续新增用例继续按业务模块放入对应目录。
+扩展管理、成员分组管理等模块已接入 P0 用例，后续新增用例继续按业务模块放入对应目录。

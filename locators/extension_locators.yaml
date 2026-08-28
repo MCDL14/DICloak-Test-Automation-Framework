@@ -18,9 +18,40 @@ overlay_close_button:
 dialog:
   selector: ".el-dialog"
 
+# 扩展分组管理抽屉及标题，用于限定分组列表操作范围。
+group_drawer:
+  selector: ".el-drawer"
+
+group_drawer_title:
+  selector: ".el-drawer__title, .el-drawer__header"
+
+# 创建扩展分组弹窗标题。
+dialog_title:
+  selector: ".el-dialog__title, .el-dialog__header"
+
 # Element Plus 表单项候选。
 form_item:
   selector: ".el-form-item"
+
+# 扩展分组管理抽屉内的表格结构。
+group_table:
+  selector: ".el-table, table"
+
+group_table_header:
+  selector: ".el-table__header-wrapper th, thead th"
+
+group_table_row:
+  selector: ".el-table__row, tbody tr"
+
+group_table_cell:
+  selector: ".el-table__cell, td"
+
+# 扩展分组普通行操作列中的编辑、删除图标。
+group_edit_icon:
+  selector: ".icon-edit"
+
+group_delete_icon:
+  selector: ".icon-delete"
 
 # 扩展卡片容器，列表当前以卡片形式展示扩展。
 extension_card:
@@ -29,6 +60,22 @@ extension_card:
 # 扩展卡片右上角更多菜单触发器。
 card_dropdown:
   selector: ".el-dropdown"
+
+# 已添加扩展列表里的扩展名称搜索输入框。
+extension_name_search_input:
+  selector: "input[placeholder='扩展名称']"
+
+# 已添加扩展列表的搜索图标按钮，用于显式提交当前筛选条件。
+list_search_button:
+  selector: "button:has(.icon-search)"
+
+# Element Plus 选择器选中值的清空图标，用于清理列表分组和启用状态筛选。
+select_clear_icon:
+  selector: ".el-select__clear"
+
+# Element Plus 多选标签，用于读取和移除编辑弹窗里的扩展分组。
+select_tag:
+  selector: ".el-tag"
 
 # Element Plus 下拉菜单候选。
 dropdown_item:

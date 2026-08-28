@@ -22,6 +22,10 @@ overlay_close_button:
 dialog:
   selector: ".el-dialog"
 
+# 用于区分创建和编辑成员分组弹窗的标题。
+dialog_title:
+  selector: ".el-dialog__title"
+
 # Element Plus 表单项候选。
 form_item:
   selector: ".el-form-item"
@@ -38,6 +42,10 @@ table_row:
 
 table_cell:
   selector: ".el-table__cell, td"
+
+# 成员分组行内第一个编辑按钮图标。
+edit_icon:
+  selector: ".icon-edit"
 
 # 成员分组行内删除图标。
 delete_icon:

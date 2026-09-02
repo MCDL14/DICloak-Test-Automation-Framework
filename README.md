@@ -422,13 +422,26 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 全局设置页面会在进入后预先安装 `org_config` POST 响应监听。点击“确定”后不再等待“保存成功”提示，而是等待对应团队接口返回、页面 loading 结束并校验 HTTP 200 和业务 `code=0`；异常时最多点击“确定”3 次，每次等待 20 秒。成功响应的完整请求体会作为本次保存期望，再通过 GET 做语义复查。直接 GET/POST 的单次超时为 30 秒，最多尝试 3 次，请求头从当前 APP 获取版本、登录 token 和团队 ID，不发送 `X-Device-Id`，也不把 token 返回到 Python 或写入日志。
 
+框架已预留环境接口创建能力，但尚未接入任何 P0 用例。`EnvironmentCreateApiClient` 在当前 APP 页面上下文读取 `basic:state` 登录 token，并从页面标题读取 APP 版本，请求 `POST https://gin-server.dicloak.com/gin/v1/env` 时分别写入 `x-token`、`x-version`；token 不返回 Python、不写日志。固定请求体来自 `test_data/environment_create_api_payload.json`，与本地“创建环境接口实例”除变量字段外逐字段一致；调用方可传 `browser_version_id`、`name` 和可选 `remark`，内核默认 `142`，备注为空时请求体不包含 `remark`。本地 curl 实例含真实 token，已通过 `.gitignore` 排除。
+
+```python
+from core.environment_create_api import EnvironmentCreateApiClient
+
+client = EnvironmentCreateApiClient(cdp_driver)
+response = client.create_environment(
+    name="自动化-接口创建环境",
+    browser_version_id="142",
+    remark="自动化-环境备注",  # 不需要备注时省略
+)
+```
+
 用例 finally 只 GET 检查本用例实际影响的配置或位；主流程已经恢复成功时跳过重复 POST，仍有差异时把当前 GET 数据与固定基准合并成完整 POST 请求体，只回填本用例影响的块或位，再 GET 复查。原有保存前后复选框、开关、下拉值和意外联动 UI 断言继续保留，因此接口恢复不会替代功能流程本身的页面校验。
 
 长耗时链路已接入非侵入式阶段耗时日志，运行日志中可按 `PHASE elapsed` / `PHASE failed` 检索环境列表打开、环境创建提交、环境打开、环境关闭、环境删除、全局设置打开、快照采集、快照恢复和保存等待等阶段耗时。阶段日志只记录耗时和上下文，不参与断言、不吞异常，也不改变用例执行流程。
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；P1 完整组件回归为 `Ran 206 tests ... OK`。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；P1 完整组件回归为 `Ran 218 tests ... OK`。
 
 当前成员分组管理模块已接入 2 条 P0 用例，文件位于 `tests/p0/member_group_management/`：
 
@@ -564,6 +577,8 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 代理检测等待说明：创建代理弹窗会先确认真实检测已启动，例如“检测代理”按钮 disabled/loading、弹窗 loading、文案变化或最终结果已出现，再等待“连接测试成功/连接失败”；批量检测和列表行内检测继续基于按钮禁用、出口 IP 列变化和“检测中”状态等待。超时时会输出最后一次按钮状态、loading 状态、出口 IP 文案或当前行文本，便于区分代理连通性问题、APP 未发起检测和列表渲染/保存问题。
 
+自 DICloak V2.9.21 起，“创建代理”弹窗新增“代理方式”并默认选择 `PuraRoute代理`；该模式只显示“前往静态代理”，不会渲染自定义代理的类型、主机和端口字段。`ProxyPage.ensure_create_dialog_proxy_type()` 会先在标签为“代理方式”的表单项中精确切换到 `自定义代理`，等待“代理类型/代理主机/代理端口/检测代理”完整出现，再按标签为“代理类型”的下拉框选择 `HTTP`、`SOCKS5` 或 `NodeMaven (动态代理)`。定位不再按下拉框顺序或协议外观回退，避免把新增模式或国家/地区下拉框误认为代理类型。
+
 代理管理新版列表不直接展示代理 ID，`ProxyPage` 已改为读取表格“序号”作为行 key，用于创建后等待、行内检测、勾选、批量删除和删除后消失校验。代理检测类用例仍依赖配置中的本机系统代理 `windows_system_proxy.host/port` 可用；若 `127.0.0.1:7897` 未监听，检测失败或列表加载失败属于环境前置问题，不归类为元素定位失败。
 
 当前已新增扩展管理模块 8 条 P0 用例，文件位于 `tests/p0/extension_management/`：
@@ -579,6 +594,9 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 最近验证记录：
 
+- `EnvironmentCreateApiClient.create_environment(...)`：2026-09-02 经用户明确要求完成首次真实接口创建，使用当前 APP 登录态、`browser_version_id=142`、名称 `自动化-接口创建环境-20260902-150128` 和备注 `自动化-接口创建环境演示`；接口首次请求成功，HTTP 200、业务 `code=0`，返回环境 ID `2095044429792391169`。随后进入环境管理按完整名称搜索，列表显示序号 `3465`、名称和备注均正确、分组为“未分组”、操作为“打开”。该环境及搜索筛选按用户要求保留用于查看，未自动删除，原 APP 未关闭。
+- `python -m unittest tests.p1.test_environment_create_api -v` 与 `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-09-02 根据本地“创建环境接口实例”新增尚未接入 P0 的接口创建能力；固定模板 40 个字段与实例排除 `browser_version_id/name/remark` 后逐字段一致。8 条定向契约测试及 218 条完整 P1 均通过。本次只使用 Mock 验证请求构造、APP 登录态请求头、可选备注、响应校验和重试，没有向真实接口发送创建请求，也没有新增环境。
+- `python run.py --config config/config.yaml --business-module 代理管理 --attach-existing-app`：2026-09-01 针对“创建代理”新增默认 `PuraRoute代理` 修复后，连接用户已打开 APP 的代理管理 4 条模块回归全部通过，结果为 `total=4 passed=4 failed=0 errors=0 skipped=0 flaky=0`；创建的临时代理均已删除，Windows 系统代理已恢复，用于探测真实 UI 的临时脚本已删除，原 APP 未关闭。此前单独补跑自定义代理与 NodeMaven 用例也分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。完整 P1 为 `Ran 210 tests ... OK`；当前 P0 发现仍为 100 条，代理管理仍为 4 条。
 - `python run.py --config config/config.yaml --module test_08_edit_extension_group_name.py --attach-existing-app` 与 `python run.py --config config/config.yaml --business-module 扩展管理 --attach-existing-app`：2026-08-27 新增“编辑扩展分组名称并恢复”后，连接用户已打开 APP 的真实单跑和扩展管理 8 条模块回归均通过，结果分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`、`total=8 passed=8 failed=0 errors=0 skipped=0 flaky=0`；新增用例事件耗时分别为 `20.75s` 和 `18.30s`。完整 P1 为 `Ran 206 tests ... OK`；当前 P0 发现为 100 条，扩展管理为 8 条。`扩展分组03` 已还原，筛选和浮层已清理，原 APP 未关闭。
 - `python run.py --config config/config.yaml --module test_07_create_extension_group.py --attach-existing-app` 与 `python run.py --config config/config.yaml --business-module 扩展管理 --attach-existing-app`：2026-08-27 新增“创建扩展分组并删除”后，连接用户已打开的 APP 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，事件耗时 `17.41s`；7 条模块回归中新增用例再次通过（`17.38s`），模块总结果为 `total=7 passed=5 failed=0 errors=2 skipped=0 flaky=0`，两条错误均为既有编辑扩展保存后弹窗未关闭，发生在 `test_04_hide_extension.py` 和 `test_06_edit_local_extension_name.py`，与分组管理抽屉链路无关。完整 P1 为 `Ran 203 tests ... OK`；当前 P0 发现为 99 条，扩展管理为 7 条。现场复查确认测试分组不存在，`ZeroOmega` 名称和隐藏设置均已还原，APP 未关闭。
 - `python run.py --config config/config.yaml --module test_06_edit_local_extension_name.py --attach-existing-app` 与 `python run.py --config config/config.yaml --business-module 扩展管理 --attach-existing-app`：2026-08-27 新增“编辑本地扩展名称并恢复”后，连接用户已打开的 APP 完成真实单跑和扩展管理 6 条最终模块回归，结果分别为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`、`total=6 passed=6 failed=0 errors=0 skipped=0 flaky=0`；新增用例事件耗时分别为 `32.28s` 和 `30.62s`。真实 DOM 确认 `ZeroOmega` 卡片可独立读取名称、版本号 `3.4.1`、分组、扩展详情和提供方，编辑弹窗“扩展名称”会回填原值；`ZeroOmega` 已还原，筛选已清空，APP 未关闭。完整 P1 为 `Ran 200 tests ... OK`；当前 P0 发现为 98 条，扩展管理为 6 条。

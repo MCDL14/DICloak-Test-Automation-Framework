@@ -15,6 +15,8 @@ config/remote_sync.yaml
 config/remote_connection_cache.yaml
 config/account_groups.yaml
 config/.ui_account_profile_*.yaml
+# 本地抓取的创建环境 curl 含当前登录 token，只作为开发参考，不进入版本库。
+创建环境接口实例.txt
 logs/*
 reports/*
 screenshots/*

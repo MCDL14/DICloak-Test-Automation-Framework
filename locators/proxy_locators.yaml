@@ -49,3 +49,18 @@ table_cell:
 # 页面或弹层内的原生输入框候选。创建代理时按表单语义或顺序写入数据。
 input:
   selector: "input, textarea"
+
+# 创建代理弹窗中的 Element Plus 表单项和标签，用于按“代理方式”“代理类型”等业务语义限定控件。
+form_item:
+  selector: ".el-form-item"
+
+form_item_label:
+  selector: ".el-form-item__label"
+
+# “代理方式”单选项，当前包含 PuraRoute代理、自定义代理和 API提取。
+proxy_method_option:
+  selector: ".el-radio, .el-radio-button, label, [role='radio']"
+
+# 创建代理弹窗中的下拉选择器；页面对象会继续按精确表单标签限定到“代理类型”。
+select:
+  selector: ".el-select"

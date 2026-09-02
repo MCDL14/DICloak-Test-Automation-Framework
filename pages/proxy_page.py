@@ -223,9 +223,42 @@ class ProxyPage(BasePage):
         self.cdp.click_element_by_script(self._visible_text_element_script("创建代理"))
         self._wait_create_dialog_visible()
 
+    def ensure_create_dialog_proxy_method(self, method_text: str = "自定义代理") -> None:
+        self._wait_create_dialog_visible()
+        expected_method = str(method_text or "").strip()
+        if not expected_method:
+            raise ValueError("proxy method is empty")
+        if self.create_dialog_proxy_method() != expected_method:
+            self.cdp.click_element_by_script(
+                self._create_dialog_proxy_method_option_script(expected_method)
+            )
+
+        deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)
+        last_method = ""
+        last_custom_state: dict[str, object] = {}
+        while time.time() < deadline:
+            last_method = self.create_dialog_proxy_method()
+            if last_method == expected_method:
+                if expected_method != "自定义代理":
+                    return
+                state = self.cdp.evaluate(self._create_dialog_custom_proxy_form_state_script())
+                last_custom_state = state if isinstance(state, dict) else {}
+                if bool(last_custom_state.get("ready")):
+                    return
+            time.sleep(0.1)
+        raise TimeoutError(
+            "create proxy dialog method did not become ready: "
+            f"expected={expected_method!r}, actual={last_method!r}, custom_state={last_custom_state}"
+        )
+
+    def create_dialog_proxy_method(self) -> str:
+        self._wait_create_dialog_visible()
+        return str(self.cdp.evaluate(self._create_dialog_proxy_method_value_script()) or "").strip()
+
     def ensure_create_dialog_proxy_type(self, proxy_type: str = "HTTP") -> None:
         self._wait_create_dialog_visible()
-        clean_type = str(proxy_type).strip().upper()
+        self.ensure_create_dialog_proxy_method("自定义代理")
+        clean_type = self._normalize_create_dialog_proxy_type(proxy_type)
         if not clean_type:
             raise ValueError("proxy type is empty")
         current_type = self.create_dialog_proxy_type()
@@ -244,6 +277,15 @@ class ProxyPage(BasePage):
     def create_dialog_proxy_type(self) -> str:
         self._wait_create_dialog_visible()
         return str(self.cdp.evaluate(self._create_dialog_proxy_type_value_script()) or "").strip().upper()
+
+    @staticmethod
+    def _normalize_create_dialog_proxy_type(proxy_type: str) -> str:
+        clean_type = str(proxy_type or "").strip().upper()
+        match = re.search(
+            r"\b(HTTP|HTTPS|SOCKS5|SOCKS4|NODEMAVEN|IPFLY|922S5|IPROYAL|NETNUT)\b",
+            clean_type,
+        )
+        return match.group(1) if match else clean_type
 
     def fill_create_dialog(self, host: str, port: str, account: str, password: str) -> None:
         self._wait_create_dialog_visible()
@@ -1138,6 +1180,101 @@ class ProxyPage(BasePage):
         }}
         """.replace("__CREATE_DIALOG__", self._create_dialog_function())
 
+    def _create_dialog_proxy_method_value_script(self) -> str:
+        return f"""
+        () => {{
+            const dialog = __CREATE_DIALOG__();
+            if (!dialog) return "";
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const item = Array.from(dialog.querySelectorAll({self.locator("form_item")!r}))
+                .filter(visible)
+                .find((candidate) => clean(
+                    candidate.querySelector({self.locator("form_item_label")!r})?.innerText
+                ) === "代理方式");
+            if (!item) return "";
+            const checked = Array.from(item.querySelectorAll("input[type='radio']"))
+                .find((input) => input.checked) || null;
+            if (!checked) return "";
+            const option = checked.closest({self.locator("proxy_method_option")!r});
+            const text = clean(option?.innerText || option?.textContent);
+            if (text) return text;
+            const values = {{ IP_RESOURCE: "PuraRoute代理", CUSTOM: "自定义代理", FROM_API: "API提取" }};
+            return values[String(checked.value || "").toUpperCase()] || "";
+        }}
+        """.replace("__CREATE_DIALOG__", self._create_dialog_function())
+
+    def _create_dialog_proxy_method_option_script(self, method_text: str) -> str:
+        return f"""
+        () => {{
+            const expectedText = {str(method_text or '').strip()!r};
+            const dialog = __CREATE_DIALOG__();
+            if (!dialog) return null;
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const item = Array.from(dialog.querySelectorAll({self.locator("form_item")!r}))
+                .filter(visible)
+                .find((candidate) => clean(
+                    candidate.querySelector({self.locator("form_item_label")!r})?.innerText
+                ) === "代理方式");
+            if (!item) return null;
+            return Array.from(item.querySelectorAll({self.locator("proxy_method_option")!r}))
+                .filter(visible)
+                .find((option) => clean(option.innerText || option.textContent) === expectedText)
+                || null;
+        }}
+        """.replace("__CREATE_DIALOG__", self._create_dialog_function())
+
+    def _create_dialog_custom_proxy_form_state_script(self) -> str:
+        return f"""
+        () => {{
+            const dialog = __CREATE_DIALOG__();
+            if (!dialog) return {{ ready: false, reason: "dialog-missing" }};
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+            const formItems = Array.from(dialog.querySelectorAll({self.locator("form_item")!r}))
+                .filter(visible);
+            const itemByLabel = (label) => formItems.find((item) => clean(
+                item.querySelector({self.locator("form_item_label")!r})?.innerText
+            ) === label) || null;
+            const proxyTypeItem = itemByLabel("代理类型");
+            const inputs = Array.from(dialog.querySelectorAll("input")).filter(visible);
+            const host = inputs.find((input) => clean(input.getAttribute("placeholder")).includes("代理主机")) || null;
+            const port = inputs.find((input) => clean(input.getAttribute("placeholder")).includes("代理端口")) || null;
+            const detectButton = Array.from(dialog.querySelectorAll({self.locator("button")!r}))
+                .filter(visible)
+                .find((button) => clean(button.innerText || button.textContent) === "检测代理") || null;
+            const state = {{
+                proxy_type: Boolean(proxyTypeItem?.querySelector({self.locator("select")!r})),
+                host: Boolean(host),
+                port: Boolean(port),
+                detect_button: Boolean(detectButton),
+            }};
+            return {{ ...state, ready: state.proxy_type && state.host && state.port && state.detect_button }};
+        }}
+        """.replace("__CREATE_DIALOG__", self._create_dialog_function())
+
     def _create_dialog_proxy_type_value_script(self) -> str:
         return """
         () => {
@@ -1169,36 +1306,36 @@ class ProxyPage(BasePage):
         )
 
     def _create_dialog_proxy_type_select_function(self) -> str:
-        return """
-        (() => {
-            const visible = (el) => {
+        return f"""
+        (() => {{
+            const visible = (el) => {{
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
                 return style.display !== "none"
                     && style.visibility !== "hidden"
                     && rect.width > 0
                     && rect.height > 0;
-            };
+            }};
             const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-            const labelText = (el) => clean(el.closest(".el-form-item")?.querySelector(".el-form-item__label")?.innerText || "");
-            const protocolPattern = /\\b(HTTP|HTTPS|SOCKS5|SOCKS4|NODEMAVEN|IPFLY|922S5|IPROYAL|NETNUT)\\b/i;
-            const selects = Array.from(dialog.querySelectorAll(".el-select, .el-select__wrapper"))
+            const formItem = Array.from(dialog.querySelectorAll({self.locator("form_item")!r}))
                 .filter(visible)
-                .map((el) => {
-                    const input = el.querySelector("input");
-                    const rect = el.getBoundingClientRect();
-                    const text = clean(el.innerText || el.textContent || "");
-                    const value = clean(input ? input.value : "");
-                    return { el, text, value, label: labelText(el), x: rect.x, y: rect.y };
-                })
-                .filter((item, index, array) => array.findIndex((other) => other.el === item.el) === index)
-                .sort((left, right) => left.y - right.y || left.x - right.x);
-            const byLabel = selects.find((item) => item.label === "代理类型");
-            if (byLabel) return byLabel;
-            const byProtocol = selects.find((item) => protocolPattern.test(`${item.value} ${item.text}`));
-            if (byProtocol) return byProtocol;
-            return selects[1] || selects[0] || null;
-        })
+                .find((item) => clean(
+                    item.querySelector({self.locator("form_item_label")!r})?.innerText
+                ) === "代理类型");
+            const el = Array.from(formItem?.querySelectorAll({self.locator("select")!r}) || [])
+                .find(visible) || null;
+            if (!el) return null;
+            const input = el.querySelector("input");
+            const rect = el.getBoundingClientRect();
+            return {{
+                el,
+                text: clean(el.innerText || el.textContent || ""),
+                value: clean(input ? input.value : ""),
+                label: "代理类型",
+                x: rect.x,
+                y: rect.y,
+            }};
+        }})
         """
 
     def _visible_dropdown_option_script(self, text: str) -> str:

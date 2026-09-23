@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -569,15 +570,10 @@ class EnvironmentPage(BasePage):
 
     def environment_group_full_text_by_name_in_current_list(self, name: str) -> str:
         base_text = self.environment_group_text_by_name_in_current_list(name)
-        if "查看" not in base_text:
-            return base_text
-        self.cdp.press("Escape")
-        button_rect = self._element_rect_by_script(self._environment_group_view_button_script(name))
-        self.cdp.click_element_by_script(self._environment_group_view_button_script(name))
-        # 多分组折叠后必须点击当前行的“查看”，并读取与该按钮位置匹配的真实环境分组 popover。
-        detail_text = self._wait_environment_group_detail_text(base_text, button_rect)
-        self.cdp.press("Escape")
-        return f"{base_text}\n{detail_text}".strip()
+        return self._environment_group_full_text_from_view_button(
+            base_text,
+            self._environment_group_view_button_script(name),
+        )
 
     def environment_group_text_by_serial(self, serial: str) -> str:
         row = self._environment_row_by_serial(serial)
@@ -585,14 +581,29 @@ class EnvironmentPage(BasePage):
 
     def environment_group_full_text_by_serial(self, serial: str) -> str:
         base_text = self.environment_group_text_by_serial(serial)
+        return self._environment_group_full_text_from_view_button(
+            base_text,
+            self._environment_group_view_button_by_serial_script(serial),
+        )
+
+    def _environment_group_full_text_from_view_button(
+        self,
+        base_text: str,
+        button_script: str,
+    ) -> str:
         if "查看" not in base_text:
             return base_text
-        self.cdp.press("Escape")
-        button_rect = self._element_rect_by_script(self._environment_group_view_button_by_serial_script(serial))
-        self.cdp.click_element_by_script(self._environment_group_view_button_by_serial_script(serial))
-        detail_text = self._wait_environment_group_detail_text(base_text, button_rect)
-        self.cdp.press("Escape")
-        return f"{base_text}\n{detail_text}".strip()
+        # Element Plus 会复用 popper DOM 并以动画关闭。切换行前必须等旧浮层真正消失，
+        # 否则快速读取多行时可能取到上一行（通常是首行）的分组内容。
+        self._dismiss_environment_group_popover()
+        button_rect = self._element_rect_by_script(button_script)
+        self.cdp.click_element_by_script(button_script)
+        try:
+            # 浮层的 .view-more-main 是完整分组列表；不再拼接单元格内的
+            # “xxx 等 N 个 / 查看”折叠摘要，避免将 UI 文案误当作真实分组。
+            return self._wait_environment_group_detail_text(base_text, button_rect)
+        finally:
+            self._dismiss_environment_group_popover(button_script)
 
     def environment_remark_values_in_current_list(self) -> list[str]:
         return [
@@ -1944,15 +1955,33 @@ class EnvironmentPage(BasePage):
         self.cdp.hover_element_by_script(self._batch_more_operation_script())
         self.cdp.click_element_by_script(self._batch_more_menu_item_script("设置环境分组"))
         self._wait_batch_set_group_dialog_visible()
-        self.cdp.click_element_by_script(self._batch_group_modify_mode_script(modify_mode))
-        self._wait_batch_group_modify_mode_selected(modify_mode)
         self._select_batch_environment_groups(group_names)
         selected_groups = self.batch_environment_group_selected_values()
         self.cdp.press("Escape")
         self._wait_select_dropdown_closed()
+        # 选择分组会重新渲染表单，并把“修改方式”恢复成默认的“追加”。因此必须在
+        # 分组下拉关闭后最后选择修改方式；用 DOM click 避免底层表格 tooltip 抢占指针。
+        self._select_batch_group_modify_mode(modify_mode)
         self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
         self._wait_for_overlay_closed()
+        self._wait_for_environment_list_not_loading_with_refresh_retry()
         return selected_groups
+
+    def _select_batch_group_modify_mode(self, modify_mode: str) -> None:
+        clicked = self.cdp.evaluate(
+            f"""
+            () => {{
+                const finder = {self._batch_group_modify_mode_script(modify_mode)};
+                const radio = finder();
+                if (!radio) return false;
+                radio.click();
+                return true;
+            }}
+            """
+        )
+        if not clicked:
+            raise TimeoutError(f"batch group modify mode was not found: {modify_mode}")
+        self._wait_batch_group_modify_mode_selected(modify_mode)
 
     def batch_set_environment_tags(self, modify_mode: str, tag_names: list[str]) -> list[str]:
         self.cdp.click_element_by_script(self._batch_more_operation_script())
@@ -6102,8 +6131,13 @@ class EnvironmentPage(BasePage):
             .replace(";", "\n")
             .replace("/", "\n")
         )
-        groups = [item.strip() for item in normalized.splitlines() if item.strip()]
-        return self._unique_non_empty(groups or [text])
+        groups = []
+        for item in normalized.splitlines():
+            value = re.sub(r"\s*等\s*\d+\s*个\s*$", "", item).strip()
+            if not value or value == "查看":
+                continue
+            groups.append(value)
+        return self._unique_non_empty(groups)
 
     def _parse_environment_tag_text(self, tag_text: str) -> list[str]:
         text = str(tag_text).strip()
@@ -6384,19 +6418,16 @@ class EnvironmentPage(BasePage):
                         return xClose && verticalDistance <= 45;
                     };
                     const groupPopovers = Array.from(document.querySelectorAll(
-                        ".el-popover[aria-label='环境分组'], .el-popper[aria-label='环境分组']"
-                    )).filter((el) => visible(el) && nearButton(el));
+                        ".el-popover, .el-popper, .el-tooltip__popper"
+                    )).filter((el) => {
+                        const ariaLabel = (el.getAttribute("aria-label") || "").trim();
+                        const isGroupPopover = ariaLabel === "环境分组" || Boolean(el.querySelector(".view-more-main"));
+                        return visible(el) && isGroupPopover && nearButton(el);
+                    });
                     for (const popover of groupPopovers.reverse()) {
                         const main = popover.querySelector(".view-more-main");
                         const text = (main?.innerText || main?.textContent || "").trim();
                         if (text) return text;
-                    }
-                    const overlays = Array.from(document.querySelectorAll(
-                        ".el-popper, .el-popover, .el-tooltip__popper, .el-dialog"
-                    )).filter(visible);
-                    for (const overlay of overlays.reverse()) {
-                        const text = (overlay.innerText || overlay.textContent || "").trim();
-                        if (text && text !== "查看") return text;
                     }
                     return "";
                 }
@@ -6404,8 +6435,8 @@ class EnvironmentPage(BasePage):
                 .replace("__BUTTON_RECT__", rect_payload)
             )
             last_text = str(text or "").strip()
-            # 单元格自身也会触发一个只包含压缩文案和“查看”的 tooltip；这里等真正的完整分组气泡。
-            if last_text and "查看" not in last_text and last_text != compressed_text:
+            # 只接受与当前按钮位置匹配且包含 .view-more-main 的环境分组浮层。
+            if last_text and last_text != compressed_text:
                 return last_text
             time.sleep(0.2)
         raise TimeoutError(f"environment group detail did not appear: {last_text}")
@@ -6421,8 +6452,12 @@ class EnvironmentPage(BasePage):
                         return rect.width > 0 && rect.height > 0;
                     };
                     return Array.from(document.querySelectorAll(
-                        ".el-popover[aria-label='环境分组'], .el-popper[aria-label='环境分组']"
-                    )).filter(visible).length;
+                        ".el-popover, .el-popper, .el-tooltip__popper"
+                    )).filter((el) => {
+                        const ariaLabel = (el.getAttribute("aria-label") || "").trim();
+                        const isGroupPopover = ariaLabel === "环境分组" || Boolean(el.querySelector(".view-more-main"));
+                        return visible(el) && isGroupPopover;
+                    }).length;
                 }
                 """
             )
@@ -6430,6 +6465,14 @@ class EnvironmentPage(BasePage):
                 return
             time.sleep(0.2)
         raise TimeoutError("old environment group popover did not close")
+
+    def _dismiss_environment_group_popover(self, button_script: str | None = None) -> None:
+        # “查看”浮层不会响应 Escape。读取完成后再次点击当前行自己的触发器切换关闭，
+        # 再把真实鼠标移走并等待 Element Plus 离场动画结束，避免下一行仍命中旧 popper。
+        if button_script:
+            self.cdp.click_element_by_script(button_script)
+        self.cdp._page().mouse.move(1, 1)
+        self._wait_no_environment_group_popover()
 
     def _element_rect_by_script(self, script: str) -> dict:
         rect = self.cdp.evaluate(

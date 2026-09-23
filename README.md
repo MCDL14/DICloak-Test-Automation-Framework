@@ -448,7 +448,7 @@ delete_response = client.delete_environments([environment_id])
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 101 条 P0 用例：环境管理 44 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；P1 完整组件回归为 `Ran 230 tests ... OK`。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 101 条 P0 用例：环境管理 44 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；P1 完整组件回归为 `Ran 237 tests ... OK`。
 
 当前成员分组管理模块已接入 2 条 P0 用例，文件位于 `tests/p0/member_group_management/`：
 
@@ -462,7 +462,7 @@ delete_response = client.delete_environments([environment_id])
 - `test_03_batch_create_environments.py`
 - `test_04_create_134_kernel_environment.py`
 - `test_05_batch_create_134_kernel_environments.py`
-- `test_06_batch_import_environments.py`
+- `test_06_batch_import_environments.py`：上传项目内 xlsx 后提交批量导入，校验 3 行全部成功、列表中环境存在并删除。提交时精确读取批量导入抽屉、确定按钮 loading 和导入结果弹窗：第一次点击后抽屉仍开且按钮保持 idle 时，观察 3 秒并额外等待 2 秒，补点前再次检查状态，仅在仍未启动时第二次点击；两次均未启动才关闭并重新打开抽屉、重新上传文件，最多重开 2 次。
 - `test_07_edit_environment_name.py`
 - `test_08_edit_fixed_open_url.py`
 - `test_09_filter_environment_group.py`
@@ -475,7 +475,7 @@ delete_response = client.delete_environments([environment_id])
 - `test_16_create_multi_group_environment.py`
 - `test_17_batch_create_multi_group_environments.py`
 - `test_18_edit_single_environment_multi_group.py`
-- `test_19_batch_edit_environment_multi_group.py`
+- `test_19_batch_edit_environment_multi_group.py`：批量读取前三个环境的原分组，依次验证追加、覆盖和重置为未分组。多分组折叠单元格通过当前环境序号对应的“查看”触发器读取完整浮层内容；读取后再次点击同一触发器并等待浮层关闭，避免复用旧 popper 导致后续环境误读首行内容。批量弹窗先完成分组选择并关闭下拉，最后选择“追加/覆盖”，防止分组控件重渲染把修改方式重置为默认“追加”。
 - `test_20_create_tag.py`
 - `test_21_create_environment_with_tags.py`
 - `test_22_batch_create_environments_with_tags.py`
@@ -602,6 +602,8 @@ delete_response = client.delete_environments([environment_id])
 
 最近验证记录：
 
+- `python run.py --config config/config.yaml --case tests.p0.environment_management.test_06_batch_import_environments.TestBatchImportEnvironments.test_batch_import_environments --attach-existing-app`：2026-09-22 真实 DOM 探测确认批量导入抽屉为 `.envV2Edit-drawer.el-drawer.rtl.open`、文件控件为 `input[type=file][name=file]`；第一次确定后抽屉保持打开、按钮无 loading、结果弹窗不出现，第二次确定后约 100ms 内按钮进入 `is-loading/disabled/aria-disabled=true` 并出现导入结果。加入同创建环境一致的提交状态判断和重开兜底后，连接用户已打开 APP 真实运行 `1/1` 通过，3 行全部成功，导入环境已全部删除，用例事件耗时 `40.39s`，unittest 总耗时 `49.774s`。新增 4 条 P1，完整 P1 为 `Ran 237 tests ... OK`，临时探测脚本已删除，原 APP 未关闭。
+- `python run.py --config config/config.yaml --case tests.p0.environment_management.test_19_batch_edit_environment_multi_group.TestBatchEditEnvironmentMultiGroup.test_batch_edit_environment_multi_group --attach-existing-app`：2026-09-22 修复多分组完整值读取与批量修改方式重置问题后，连接用户已打开 APP 连续真实运行两次均通过，结果均为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例事件耗时分别为 `30.83s`、`26.25s`。逐行读取按环境序号关联当前“查看”按钮及其邻近浮层，排除“等 N 个/查看”折叠文案，读取后主动关闭旧浮层；批量弹窗在分组选择完成后最后确认修改方式。完整 P1 为 `Ran 233 tests ... OK`，原 APP 未关闭。
 - `python run.py --config config/config.yaml --case tests.p0.environment_management.test_44_new_environment_cookie_persistence_via_api.TestNewEnvironmentCookiePersistenceViaApi.test_api_created_environment_cookie_survives_close_reopen_and_local_cache_deletion --attach-existing-app`：2026-09-10 连接用户已打开 APP 真实运行通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例事件耗时 `110.22s`，unittest 总耗时 `120.003s`。创建、列表确认、批量删除均首次请求成功；三次 Cookie 状态均为 `MCDL004 / 已登录`，删除本地缓存后仍从云端恢复。接口删除后列表查询已确认同名环境不存在，APP 筛选和全局设置已恢复，原 APP 未关闭。
 - `python -m unittest tests.p1.test_environment_create_api -v` 与 `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-09-10 基础能力阶段为环境接口客户端新增创建响应 `data.id` 保存、`POST /gin/v1/env/list` 列表查询和 `DELETE /gin/v1/env/batch` 批量删除能力；列表接口支持以 `value` 传入环境名称筛选。当时 18 条定向契约测试及 228 条完整 P1 均通过，P0 为 100 条且尚未接入这些接口能力。该阶段只使用 Mock 验证创建 ID 提取/保存、列表参数及请求构造、批量删除请求构造、当前 APP 身份、成功响应和本地 ID 状态更新，没有向真实接口发送请求，也没有删除既有演示环境；当前结果见上方新增 P0 记录。
 - `EnvironmentCreateApiClient.create_environment(...)`：2026-09-02 经用户明确要求完成首次真实接口创建，使用当前 APP 登录态、`browser_version_id=142`、名称 `自动化-接口创建环境-20260902-150128` 和备注 `自动化-接口创建环境演示`；接口首次请求成功，HTTP 200、业务 `code=0`，返回环境 ID `2095044429792391169`。随后进入环境管理按完整名称搜索，列表显示序号 `3465`、名称和备注均正确、分组为“未分组”、操作为“打开”。该环境及搜索筛选按用户要求保留用于查看，未自动删除，原 APP 未关闭。

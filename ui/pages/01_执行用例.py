@@ -27,6 +27,7 @@ import hashlib
 from collections import defaultdict
 import inspect
 from pathlib import Path
+from typing import Any, Mapping
 
 # 确保项目根目录在 sys.path 中（ui/pages/ 的上上级）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -49,7 +50,11 @@ from core.ui_log_filter import (
     failure_detail_text as _failure_detail_text,
     unsuccessful_log_text as _unsuccessful_log_text,
 )
-from core.ui_progress import case_progress_snapshot
+from core.ui_progress import (
+    case_progress_snapshot,
+    retry_plan_from_action,
+    split_retry_plan_by_target,
+)
 from ui.components.case_progress import render_case_progress as render_case_progress_component
 from ui.components.case_selector import render_case_selector
 from streamlit_runner import (
@@ -84,6 +89,8 @@ _CLI_SUMMARY_RE = re.compile(
 _REMOTE_EXIT_RE = re.compile(r"远程(?:执行完成|健康检查结束) → 节点=([^\s]+) 退出码=(\d+) 耗时=([\d.]+)s")
 _REMOTE_HEALTH_DONE_RE = re.compile(r"远程健康检查完成 → 失败=(\d+)")
 _REMOTE_ARTIFACT_RE = re.compile(r"远程产物归档 → 文件数=(\d+) 本地目录=(.+)")
+_LAST_EXECUTION_RESULT_KEY = "execute_cases_last_result"
+_LAST_RETRY_EVENT_KEY = "execute_cases_last_retry_event"
 
 _ACCOUNT_GROUPS_PATH = _PROJECT_ROOT / "config" / "account_groups.yaml"
 _CONFIG_PATH = _PROJECT_ROOT / "config" / "config.yaml"
@@ -597,23 +604,36 @@ def _render_case_progress(
     execution_started_at: float,
     running: bool,
     render_sequence: int,
-) -> None:
-    snapshot = case_progress_snapshot(
+    platform_case_ids: Mapping[str, list[str]] | None = None,
+    snapshot_override: dict[str, Any] | None = None,
+    component_key: str | None = None,
+    elapsed_seconds_override: float | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    snapshot = snapshot_override or case_progress_snapshot(
         selected_cases,
         log_lines,
         platforms=platforms,
         default_platform=default_platform,
+        platform_case_ids=platform_case_ids,
         observed_at=time.time(),
     )
+    key = component_key or (
+        f"execution_case_progress_component_{execution_started_at:.6f}_{render_sequence}"
+    )
     with container.container():
-        render_case_progress_component(
+        event = render_case_progress_component(
             snapshot=snapshot,
-            elapsed_seconds=max(0.0, time.time() - execution_started_at),
+            elapsed_seconds=(
+                max(0.0, elapsed_seconds_override)
+                if elapsed_seconds_override is not None
+                else max(0.0, time.time() - execution_started_at)
+            ),
             running=running,
             state_key=f"{execution_started_at:.6f}",
-            key=f"execution_case_progress_component_{render_sequence}",
+            key=key,
             default=None,
         )
+    return event, snapshot
 
 
 def _case_progress_log_relevant(line: str) -> bool:
@@ -1382,11 +1402,100 @@ with col_info:
     else:
         st.caption("远程执行会使用下方已勾选用例；显示模块和搜索显示只影响列表可见性。")
 
+current_execution_context = {
+    "execution_mode": execution_mode,
+    "attach_existing": attach_existing,
+    "local_account_profile": local_account_profile,
+    "remote_host_name": remote_host_name,
+    "remote_attach_existing": remote_attach_existing,
+    "remote_collect_artifacts": remote_collect_artifacts,
+    "remote_sync_before_run": remote_sync_before_run,
+    "remote_ssh_host": remote_ssh_host,
+    "remote_ssh_port": remote_ssh_port,
+    "remote_ssh_username": remote_ssh_username,
+    "remote_ssh_password": remote_ssh_password,
+    "remote_account_profile": remote_account_profile,
+}
+
+retry_plan: dict[str, list[str]] = {}
+last_execution_result = st.session_state.get(_LAST_EXECUTION_RESULT_KEY)
+if (
+    isinstance(last_execution_result, dict)
+    and not run_clicked
+    and not health_clicked
+    and not code_status_clicked
+    and not code_sync_clicked
+):
+    persisted_title = st.empty()
+    persisted_title.markdown(
+        '<div class="dicloak-section-title">最近一次用例结果</div>',
+        unsafe_allow_html=True,
+    )
+    persisted_progress = st.empty()
+    retry_event, _ = _render_case_progress(
+        persisted_progress,
+        selected_cases=list(last_execution_result.get("selected_cases") or []),
+        log_lines=[],
+        platforms=list(last_execution_result.get("platforms") or []),
+        default_platform=str(last_execution_result.get("default_platform") or "本机"),
+        execution_started_at=float(last_execution_result.get("started_at") or time.time()),
+        running=False,
+        render_sequence=int(last_execution_result.get("render_sequence") or 0),
+        platform_case_ids=last_execution_result.get("platform_case_ids"),
+        snapshot_override=last_execution_result.get("snapshot"),
+        component_key=str(last_execution_result.get("component_key") or "execution_case_progress_last"),
+        elapsed_seconds_override=float(last_execution_result.get("elapsed_seconds") or 0.0),
+    )
+    if isinstance(retry_event, dict):
+        retry_event_id = str(retry_event.get("event_id") or "")
+        if retry_event_id and retry_event_id != st.session_state.get(_LAST_RETRY_EVENT_KEY):
+            st.session_state[_LAST_RETRY_EVENT_KEY] = retry_event_id
+            retry_plan = retry_plan_from_action(
+                last_execution_result.get("snapshot") or {},
+                retry_event,
+            )
+            if not retry_plan:
+                st.warning("没有找到可重试的断言失败或执行异常用例。")
+            elif task_status.get("locked"):
+                st.warning("当前仍有后台任务运行，暂不能启动重试。")
+                retry_plan = {}
+            else:
+                persisted_title.empty()
+                persisted_progress.empty()
+
+retry_requested = bool(retry_plan)
+if run_clicked:
+    st.session_state.pop(_LAST_EXECUTION_RESULT_KEY, None)
+
+run_context = current_execution_context
+run_selected_ids = list(selected_ids)
+run_selected_cases = list(selected_cases)
+run_platform_case_ids: dict[str, list[str]] | None = None
+run_is_dual = execution_mode == "本机 + Mac 远程"
+run_has_remote = execution_mode in {"远程节点", "本机 + Mac 远程"}
+if retry_requested:
+    run_context = dict(last_execution_result.get("execution_context") or {})
+    run_platform_case_ids = {platform: list(case_ids) for platform, case_ids in retry_plan.items()}
+    run_selected_ids = list(dict.fromkeys(
+        case_id
+        for platform_cases in run_platform_case_ids.values()
+        for case_id in platform_cases
+    ))
+    run_selected_cases = [case_by_id[case_id] for case_id in run_selected_ids if case_id in case_by_id]
+    missing_retry_ids = [case_id for case_id in run_selected_ids if case_id not in case_by_id]
+    if missing_retry_ids:
+        st.error(f"以下用例已不在当前代码中，无法重试：{'、'.join(missing_retry_ids)}")
+        retry_requested = False
+        retry_plan = {}
+    local_retry_ids, remote_retry_ids = split_retry_plan_by_target(retry_plan)
+    run_is_dual = bool(local_retry_ids and remote_retry_ids)
+    run_has_remote = bool(remote_retry_ids)
+
 # ═══════════════════════════════════════════════════════════════════
 # 执行逻辑：后台线程 + 前台轮询日志
 # ═══════════════════════════════════════════════════════════════════
 
-if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
+if run_clicked or retry_requested or health_clicked or code_status_clicked or code_sync_clicked:
     # ── 占位容器（运行中动态更新） ──
     log_placeholder = st.empty()
     status_placeholder = st.empty()
@@ -1394,13 +1503,23 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
 
     log_queue: queue.Queue = queue.Queue()
     stop_event = create_ui_stop_event()
-    progress_platforms, progress_default_platform, show_case_progress = _progress_platforms_for_run(
-        execution_mode,
-        remote_scope,
-    )
-    show_case_progress = show_case_progress and bool(selected_cases) and bool(run_clicked)
+    if retry_requested:
+        progress_platforms = list(retry_plan)
+        progress_default_platform = progress_platforms[0]
+        show_case_progress = bool(run_selected_cases)
+    else:
+        progress_platforms, progress_default_platform, show_case_progress = _progress_platforms_for_run(
+            execution_mode,
+            remote_scope,
+        )
+        show_case_progress = show_case_progress and bool(run_selected_cases) and bool(run_clicked)
 
-    if execution_mode in {"远程节点", "本机 + Mac 远程"} and remote_cache_enabled and remote_connection_ready:
+    if (
+        not retry_requested
+        and execution_mode in {"远程节点", "本机 + Mac 远程"}
+        and remote_cache_enabled
+        and remote_connection_ready
+    ):
         try:
             save_remote_connection_cache(
                 remote_host_name,
@@ -1452,6 +1571,60 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
             },
             daemon=True,
         )
+    elif retry_requested:
+        retry_common = {
+            "remote_host_name": str(run_context.get("remote_host_name") or ""),
+            "remote_attach_existing_app": bool(run_context.get("remote_attach_existing")),
+            "remote_collect_artifacts": bool(run_context.get("remote_collect_artifacts")),
+            "remote_sync_before_run": bool(run_context.get("remote_sync_before_run")),
+            "remote_ssh_host": str(run_context.get("remote_ssh_host") or ""),
+            "remote_ssh_port": _safe_port(run_context.get("remote_ssh_port")),
+            "remote_ssh_username": str(run_context.get("remote_ssh_username") or ""),
+            "remote_ssh_password": str(run_context.get("remote_ssh_password") or ""),
+            "remote_account_profile": dict(run_context.get("remote_account_profile") or {}),
+        }
+        if local_retry_ids and remote_retry_ids:
+            thread = threading.Thread(
+                target=run_local_and_remote,
+                args=(local_retry_ids, log_queue),
+                kwargs={
+                    "remote_test_ids": remote_retry_ids,
+                    "local_attach_existing_app": bool(run_context.get("attach_existing", True)),
+                    "local_account_profile": dict(run_context.get("local_account_profile") or {}),
+                    **retry_common,
+                    "stop_event": stop_event,
+                },
+                daemon=True,
+            )
+        elif local_retry_ids:
+            thread = threading.Thread(
+                target=run_selected_tests,
+                args=(local_retry_ids, log_queue),
+                kwargs={
+                    "attach_existing_app": bool(run_context.get("attach_existing", True)),
+                    "account_profile": dict(run_context.get("local_account_profile") or {}),
+                    "stop_event": stop_event,
+                },
+                daemon=True,
+            )
+        else:
+            thread = threading.Thread(
+                target=run_remote_cli,
+                args=(retry_common.pop("remote_host_name"), "cases", "", log_queue),
+                kwargs={
+                    "attach_existing_app": retry_common.pop("remote_attach_existing_app"),
+                    "collect_artifacts": retry_common.pop("remote_collect_artifacts"),
+                    "sync_before_run": retry_common.pop("remote_sync_before_run"),
+                    "ssh_host": retry_common.pop("remote_ssh_host"),
+                    "ssh_port": retry_common.pop("remote_ssh_port"),
+                    "ssh_username": retry_common.pop("remote_ssh_username"),
+                    "ssh_password": retry_common.pop("remote_ssh_password"),
+                    "case_ids": remote_retry_ids,
+                    "account_profile": retry_common.pop("remote_account_profile"),
+                    "stop_event": stop_event,
+                },
+                daemon=True,
+            )
     elif execution_mode == "本机":
         thread = threading.Thread(
             target=run_selected_tests,
@@ -1513,13 +1686,14 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
     if show_case_progress:
         _render_case_progress(
             progress_placeholder,
-            selected_cases=selected_cases,
+            selected_cases=run_selected_cases,
             log_lines=log_lines,
             platforms=progress_platforms,
             default_platform=progress_default_platform,
             execution_started_at=execution_started_at,
             running=thread.is_alive(),
             render_sequence=progress_render_sequence,
+            platform_case_ids=run_platform_case_ids,
         )
     if health_clicked:
         status_placeholder.info("⏳ 正在检查远程节点...")
@@ -1549,13 +1723,14 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
                     progress_render_sequence += 1
                     _render_case_progress(
                         progress_placeholder,
-                        selected_cases=selected_cases,
+                        selected_cases=run_selected_cases,
                         log_lines=log_lines,
                         platforms=progress_platforms,
                         default_platform=progress_default_platform,
                         execution_started_at=execution_started_at,
                         running=thread.is_alive(),
                         render_sequence=progress_render_sequence,
+                        platform_case_ids=run_platform_case_ids,
                     )
             except queue.Empty:
                 _refresh_execution_status(task_status_container, thread=thread)
@@ -1575,16 +1750,33 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
     _refresh_execution_status(task_status_container)
     if show_case_progress:
         progress_render_sequence += 1
-        _render_case_progress(
+        final_component_key = (
+            f"execution_case_progress_component_{execution_started_at:.6f}_{progress_render_sequence}"
+        )
+        _, final_progress_snapshot = _render_case_progress(
             progress_placeholder,
-            selected_cases=selected_cases,
+            selected_cases=run_selected_cases,
             log_lines=log_lines,
             platforms=progress_platforms,
             default_platform=progress_default_platform,
             execution_started_at=execution_started_at,
             running=False,
             render_sequence=progress_render_sequence,
+            platform_case_ids=run_platform_case_ids,
+            component_key=final_component_key,
         )
+        st.session_state[_LAST_EXECUTION_RESULT_KEY] = {
+            "snapshot": final_progress_snapshot,
+            "selected_cases": run_selected_cases,
+            "platforms": progress_platforms,
+            "default_platform": progress_default_platform,
+            "platform_case_ids": run_platform_case_ids,
+            "started_at": execution_started_at,
+            "elapsed_seconds": max(0.0, time.time() - execution_started_at),
+            "render_sequence": progress_render_sequence,
+            "component_key": final_component_key,
+            "execution_context": run_context,
+        }
 
     # ═══════════════════════════════════════════════════════════════
     # 结果解析与展示
@@ -1597,12 +1789,12 @@ if run_clicked or health_clicked or code_status_clicked or code_sync_clicked:
         height=_LOG_DISPLAY_HEIGHT,
     )
 
-    if health_clicked or code_status_clicked or code_sync_clicked or execution_mode in {"远程节点", "本机 + Mac 远程"}:
+    if health_clicked or code_status_clicked or code_sync_clicked or run_has_remote:
         _render_remote_result_summary(log_lines)
 
     combined_summaries = (
         _parse_prefixed_result_summaries(log_lines)
-        if execution_mode == "本机 + Mac 远程" and run_clicked
+        if run_is_dual and (run_clicked or retry_requested)
         else {}
     )
     if combined_summaries:

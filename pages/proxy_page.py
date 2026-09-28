@@ -22,7 +22,34 @@ class ProxyPage(BasePage):
         self.cdp.click_element_by_script(self._visible_menu_item_script("代理管理"))
         if self.cdp.evaluate(self._batch_create_page_visible_script()):
             self.return_from_batch_create()
+        self.ensure_proxy_list_tab()
         self._wait_for_proxy_list()
+
+    def ensure_proxy_list_tab(self, timeout_seconds: int | None = None) -> None:
+        """Keep proxy cases on the proxy-list tab when proxy management remembers another tab."""
+        timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "page_seconds", 10)
+        started_at = time.time()
+        deadline = started_at + timeout_seconds
+        clicked = False
+        last_state: object = None
+        while time.time() < deadline:
+            last_state = self.cdp.evaluate(self._proxy_list_tab_state_script())
+            if isinstance(last_state, dict) and last_state.get("active"):
+                return
+            if isinstance(last_state, dict) and last_state.get("found"):
+                if not clicked:
+                    self.cdp.click_element_by_script(self._proxy_list_tab_script())
+                    clicked = True
+                time.sleep(0.2)
+                continue
+            # Older APP versions have no proxy sub-tabs. Give a new tab layout time
+            # to render before accepting the already-visible list as the legacy UI.
+            if time.time() - started_at >= min(1.0, timeout_seconds) and self.cdp.evaluate(
+                self._proxy_list_visible_script()
+            ):
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"proxy list tab did not become active: last_state={last_state}")
 
     def proxy_serials_by_host_port(self, host: str, port: str) -> set[str]:
         return {
@@ -1336,6 +1363,56 @@ class ProxyPage(BasePage):
                 y: rect.y,
             }};
         }})
+        """
+
+    def _proxy_list_tab_state_script(self) -> str:
+        return f"""
+        () => {{
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, "").trim();
+            const targets = Array.from(document.querySelectorAll({self.locator("proxy_tab_candidates")!r}))
+                .filter(visible)
+                .filter((el) => clean(el.innerText || el.textContent) === "代理列表")
+                .map((el) => el.closest('[role="tab"], .el-tabs__item, .el-radio-button, button') || el);
+            const uniqueTargets = Array.from(new Set(targets));
+            const active = uniqueTargets.some((el) => {{
+                const classNames = String(el.className || "");
+                const checked = el.matches('input:checked') || Boolean(el.querySelector('input:checked'));
+                return el.getAttribute("aria-selected") === "true"
+                    || el.getAttribute("aria-checked") === "true"
+                    || /(^|\\s)(is-active|active)(\\s|$)/.test(classNames)
+                    || checked;
+            }});
+            return {{ found: uniqueTargets.length > 0, active }};
+        }}
+        """
+
+    def _proxy_list_tab_script(self) -> str:
+        return f"""
+        () => {{
+            const visible = (el) => {{
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            }};
+            const clean = (value) => String(value || "").replace(/\\s+/g, "").trim();
+            return Array.from(document.querySelectorAll({self.locator("proxy_tab_candidates")!r}))
+                .filter(visible)
+                .filter((el) => clean(el.innerText || el.textContent) === "代理列表")
+                .map((el) => el.closest('[role="tab"], .el-tabs__item, .el-radio-button, button') || el)
+                .find((el) => !el.matches(':disabled, [aria-disabled="true"]'))
+                || null;
+        }}
         """
 
     def _visible_dropdown_option_script(self, text: str) -> str:

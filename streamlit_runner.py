@@ -917,6 +917,7 @@ def run_local_and_remote(
     test_ids: list[str],
     log_queue: queue.Queue,
     *,
+    remote_test_ids: list[str] | None = None,
     local_attach_existing_app: bool,
     local_account_profile: dict[str, Any],
     remote_host_name: str,
@@ -939,6 +940,8 @@ def run_local_and_remote(
     if active_stop_event is None:
         return
 
+    local_ids = list(test_ids)
+    remote_ids = list(test_ids if remote_test_ids is None else remote_test_ids)
     local_log = _PrefixedLogQueue(log_queue, "Windows")
     remote_log = _PrefixedLogQueue(log_queue, "macOS")
     errors: list[tuple[str, Exception]] = []
@@ -946,7 +949,7 @@ def run_local_and_remote(
     def run_local() -> None:
         try:
             _run_selected_tests_unlocked(
-                test_ids,
+                local_ids,
                 local_log,
                 attach_existing_app=local_attach_existing_app,
                 account_profile=local_account_profile,
@@ -970,7 +973,7 @@ def run_local_and_remote(
                 ssh_port=remote_ssh_port,
                 ssh_username=remote_ssh_username,
                 ssh_password=remote_ssh_password,
-                case_ids=test_ids,
+                case_ids=remote_ids,
                 account_profile=remote_account_profile,
                 stop_event=active_stop_event,
             )
@@ -981,13 +984,16 @@ def run_local_and_remote(
             remote_log.put(f"远程执行器异常：{exc}")
 
     try:
-        local_thread = threading.Thread(target=run_local, name="ui-windows-run", daemon=True)
-        remote_thread = threading.Thread(target=run_remote, name="ui-macos-run", daemon=True)
+        workers: list[threading.Thread] = []
+        if local_ids:
+            workers.append(threading.Thread(target=run_local, name="ui-windows-run", daemon=True))
+        if remote_ids:
+            workers.append(threading.Thread(target=run_remote, name="ui-macos-run", daemon=True))
         log_queue.put("开始 Windows 本机与 macOS 远程同步执行")
-        local_thread.start()
-        remote_thread.start()
-        local_thread.join()
-        remote_thread.join()
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
         if errors:
             labels = "、".join(label for label, _ in errors)
             log_queue.put(f"同步执行结束，以下执行端发生异常：{labels}")

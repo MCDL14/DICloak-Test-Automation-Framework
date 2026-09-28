@@ -108,6 +108,47 @@ class ProxyCreateDialogModeTests(unittest.TestCase):
             "NODEMAVEN",
         )
 
+    def test_proxy_list_tab_is_clicked_when_another_tab_is_active(self) -> None:
+        self.cdp.evaluate.side_effect = [
+            {"found": True, "active": False},
+            {"found": True, "active": True},
+        ]
+
+        self.page.ensure_proxy_list_tab(timeout_seconds=1)
+
+        self.cdp.click_element_by_script.assert_called_once()
+        tab_script = self.cdp.click_element_by_script.call_args.args[0]
+        self.assertIn("代理列表", tab_script)
+
+    def test_proxy_list_tab_is_not_clicked_when_already_active(self) -> None:
+        self.cdp.evaluate.return_value = {"found": True, "active": True}
+
+        self.page.ensure_proxy_list_tab(timeout_seconds=1)
+
+        self.cdp.click_element_by_script.assert_not_called()
+
+    def test_open_list_always_checks_proxy_list_tab_before_waiting_for_table(self) -> None:
+        call_order: list[str] = []
+        with (
+            mock.patch.object(self.page, "dismiss_blocking_overlays"),
+            mock.patch.object(
+                self.page,
+                "ensure_proxy_list_tab",
+                side_effect=lambda: call_order.append("tab"),
+            ) as ensure_tab,
+            mock.patch.object(
+                self.page,
+                "_wait_for_proxy_list",
+                side_effect=lambda: call_order.append("list"),
+            ) as wait_list,
+        ):
+            self.cdp.evaluate.return_value = False
+            self.page.open_list()
+
+        ensure_tab.assert_called_once_with()
+        wait_list.assert_called_once_with()
+        self.assertEqual(call_order, ["tab", "list"])
+
 
 class _playwright_page:
     def __enter__(self):

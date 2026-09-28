@@ -7,7 +7,11 @@ from time import perf_counter
 from unittest.mock import Mock
 
 from core.result import AutomationTestResult
-from core.ui_progress import case_progress_snapshot
+from core.ui_progress import (
+    case_progress_snapshot,
+    retry_plan_from_action,
+    split_retry_plan_by_target,
+)
 
 
 CASES = [
@@ -87,6 +91,79 @@ class UiProgressTests(unittest.TestCase):
         self.assertEqual(snapshot["total"], 4)
         self.assertEqual(snapshot["finished"], 2)
         self.assertEqual(snapshot["problem"], 1)
+
+    def test_platform_specific_snapshot_does_not_create_cross_platform_pending_rows(self) -> None:
+        snapshot = case_progress_snapshot(
+            CASES,
+            [],
+            platforms=["Windows", "macOS"],
+            default_platform="Windows",
+            platform_case_ids={
+                "Windows": [CASES[0]["id"]],
+                "macOS": [CASES[1]["id"]],
+            },
+        )
+
+        identities = {(row["执行端"], row["原始用例"]) for row in snapshot["rows"]}
+        self.assertEqual(
+            identities,
+            {
+                ("Windows", CASES[0]["id"]),
+                ("macOS", CASES[1]["id"]),
+            },
+        )
+
+    def test_retry_plan_routes_all_problem_rows_to_their_original_platforms(self) -> None:
+        snapshot = case_progress_snapshot(
+            CASES,
+            [
+                "[Windows] 2026-08-24 10:00:00 [ERROR] CASE FAIL tests.demo.TestOne.test_one elapsed=1.00s",
+                "[macOS] 2026-08-24 10:00:00 [ERROR] CASE ERROR tests.demo.TestTwo.test_two elapsed=1.00s",
+            ],
+            platforms=["Windows", "macOS"],
+            default_platform="Windows",
+        )
+
+        plan = retry_plan_from_action(snapshot, {"scope": "all"})
+
+        self.assertEqual(plan["Windows"], [CASES[0]["id"]])
+        self.assertEqual(plan["macOS"], [CASES[1]["id"]])
+
+    def test_retry_plan_supports_group_and_single_case_actions(self) -> None:
+        snapshot = case_progress_snapshot(
+            CASES,
+            [
+                "2026-08-24 10:00:00 [ERROR] CASE FAIL tests.demo.TestOne.test_one elapsed=1.00s",
+                "2026-08-24 10:00:00 [ERROR] CASE ERROR tests.demo.TestTwo.test_two elapsed=1.00s",
+            ],
+        )
+
+        failed_plan = retry_plan_from_action(
+            snapshot,
+            {"scope": "group", "status_code": "failed"},
+        )
+        single_plan = retry_plan_from_action(
+            snapshot,
+            {
+                "scope": "case",
+                "platform": "本机",
+                "case_id": CASES[1]["id"],
+            },
+        )
+
+        self.assertEqual(failed_plan, {"本机": [CASES[0]["id"]]})
+        self.assertEqual(single_plan, {"本机": [CASES[1]["id"]]})
+
+    def test_retry_target_split_maps_windows_local_and_macos_remote(self) -> None:
+        local_ids, remote_ids = split_retry_plan_by_target({
+            "本机": ["local-one"],
+            "Windows": ["local-two", "local-one"],
+            "远程": ["remote-one"],
+            "macOS": ["remote-two", "remote-one"],
+        })
+
+        self.assertEqual(local_ids, ["local-one", "local-two"])
+        self.assertEqual(remote_ids, ["remote-one", "remote-two"])
 
     def test_failure_error_and_skip_keep_distinct_labels_durations_and_details(self) -> None:
         cases = CASES + [

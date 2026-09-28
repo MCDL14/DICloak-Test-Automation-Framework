@@ -2,6 +2,10 @@
 proxy_menu_candidates:
   selector: ".el-menu-item, li, a, button, span, div"
 
+# 代理管理顶部页签；进入模块后可能保留在其它页签，页面对象会精确确认“代理列表”是否激活。
+proxy_tab_candidates:
+  selector: ".el-tabs__item, [role='tab'], .el-radio-button, button, div, span"
+
 # 页面或弹层内按可见文本点击的候选集合，例如“创建代理”“确定”。
 visible_text_candidates:
   selector: "button, div, span, a"

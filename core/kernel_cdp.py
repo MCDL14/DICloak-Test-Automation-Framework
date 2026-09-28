@@ -1595,6 +1595,17 @@ def _click_bilibili_login_entry(ws, deadline: float) -> None:
                         && rect.height > 0;
                 };
                 const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                const preferred = [
+                    ".header-avatar-unlogin-entry",
+                    ".header-avatar-unlogin-inner",
+                    ".header-avatar-unlogin-wrap",
+                ]
+                    .map((selector) => document.querySelector(selector))
+                    .find((el) => el && visible(el));
+                if (preferred) {
+                    preferred.click();
+                    return true;
+                }
                 const candidates = Array.from(document.querySelectorAll("button,a,span,div"))
                     .filter(visible)
                     .map((el) => ({ el, text: clean(el.innerText || el.textContent), rect: el.getBoundingClientRect() }))
@@ -1647,9 +1658,14 @@ def _open_bilibili_password_login_if_needed(ws, deadline: float) -> None:
                         && rect.height > 0;
                 };
                 const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                const popoverLogin = document.querySelector(".login-panel-popover .login-btn");
+                if (popoverLogin && visible(popoverLogin)) {
+                    popoverLogin.click();
+                    return true;
+                }
                 const target = Array.from(document.querySelectorAll("button,a,span,div"))
                     .filter(visible)
-                    .find((el) => ["密码登录", "账号登录", "其他方式登录"].includes(clean(el.innerText || el.textContent)));
+                    .find((el) => ["立即登录", "密码登录", "账号登录", "其他方式登录"].includes(clean(el.innerText || el.textContent)));
                 if (!target) return false;
                 target.click();
                 return true;

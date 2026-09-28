@@ -206,6 +206,7 @@
       font-weight: 600;
     }
     .group-title { display: flex; align-items: center; gap: 8px; }
+    .group-actions { display: flex; align-items: center; gap: 8px; }
     .group-marker { width: 4px; height: 18px; border-radius: 2px; }
     .group-failure .group-marker { background: var(--failure); }
     .group-error .group-marker { background: var(--error); }
@@ -214,12 +215,20 @@
     .group-pending .group-marker { background: var(--pending); }
     .group-passed .group-marker { background: var(--passed); }
     .group-count { color: var(--muted); font-weight: 400; }
+    .row-wrap {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: stretch;
+      gap: 6px;
+      margin: 0 10px 5px;
+    }
     .row {
       display: grid;
       grid-template-columns: 112px 38px 72px minmax(95px, 0.7fr) minmax(180px, 1.6fr) 82px;
       align-items: center;
       min-height: 44px;
-      margin: 0 10px 5px;
+      width: 100%;
+      margin: 0;
       padding: 7px 10px;
       border: 1px solid var(--border);
       border-radius: 6px;
@@ -236,6 +245,21 @@
     .group-pending .row { opacity: 0.72; }
     .group-passed .row { border-color: var(--passed-border); background: var(--passed-bg); }
     .row:hover { opacity: 1; }
+    .retry-button {
+      min-height: 32px;
+      padding: 5px 10px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      color: inherit;
+      background: var(--surface);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .retry-button:hover { border-color: var(--active); color: var(--active); }
+    .retry-all { color: var(--active); }
+    .retry-one { align-self: stretch; min-width: 58px; }
     .status { display: flex; align-items: center; gap: 7px; min-width: 0; font-weight: 600; }
     .status-icon {
       display: inline-grid;
@@ -259,6 +283,7 @@
     .time { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
     .status-running + .seq ~ .time { color: var(--active); }
     .detail {
+      grid-column: 1 / -1;
       margin: -1px 18px 8px;
       padding: 8px 10px;
       border-left: 2px solid var(--border-strong);
@@ -398,6 +423,15 @@
       window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
     }
 
+    function emitRetry(action) {
+      post("streamlit:setComponentValue", {
+        value: {
+          ...action,
+          event_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        },
+      });
+    }
+
     function resizeFrame() {
       requestAnimationFrame(() => {
         const height = Math.ceil(root.getBoundingClientRect().height);
@@ -458,7 +492,7 @@
     }
 
     function makeRow(row) {
-      const wrapper = element("div");
+      const wrapper = element("div", "row-wrap");
       const identity = rowIdentity(row);
       const button = element("button", "row");
       button.type = "button";
@@ -484,6 +518,20 @@
         render();
       });
       wrapper.append(button);
+      if (!args.running && ["failed", "error"].includes(row["状态码"])) {
+        const retry = element("button", "retry-button retry-one", "重试");
+        retry.type = "button";
+        retry.setAttribute("aria-label", `重试 ${row["用例"] || row["原始用例"] || "失败用例"}`);
+        retry.addEventListener("click", (event) => {
+          event.stopPropagation();
+          emitRetry({
+            scope: "case",
+            platform: row["执行端"] || "",
+            case_id: row["原始用例"] || "",
+          });
+        });
+        wrapper.append(retry);
+      }
       if (expandedRow === identity) wrapper.append(element("div", "detail", row["详情"] || "详情请查看执行日志。"));
       return wrapper;
     }
@@ -559,6 +607,13 @@
       }
 
       const right = element("div", "tool-right");
+      const problemCount = (counts.failed || 0) + (counts.error || 0);
+      if (!args.running && problemCount > 0) {
+        const retryAll = element("button", "retry-button retry-all", `全部重试失败/异常 ${problemCount}`);
+        retryAll.type = "button";
+        retryAll.addEventListener("click", () => emitRetry({ scope: "all" }));
+        right.append(retryAll);
+      }
       const moduleLabel = element("label", "module-filter");
       moduleLabel.append(element("span", "module-filter-mark", "≡"));
       const select = element("select", "module-select");
@@ -597,7 +652,18 @@
         const groupHead = element("div", "group-head");
         const title = element("span", "group-title");
         title.append(element("span", "group-marker"), element("span", "", group.label));
-        groupHead.append(title, element("span", "group-count", `${groupRows.length} 条`));
+        const groupActions = element("span", "group-actions");
+        groupActions.append(element("span", "group-count", `${groupRows.length} 条`));
+        if (!args.running && ["failure", "error"].includes(group.id)) {
+          const retryGroup = element("button", "retry-button", "本组全部重试");
+          retryGroup.type = "button";
+          retryGroup.addEventListener("click", () => emitRetry({
+            scope: "group",
+            status_code: group.id === "failure" ? "failed" : "error",
+          }));
+          groupActions.append(retryGroup);
+        }
+        groupHead.append(title, groupActions);
         groupNode.append(groupHead);
 
         const limited = LIMITED_GROUPS.has(group.id) && !expandedGroups.has(group.id) && groupRows.length > ROW_LIMIT;

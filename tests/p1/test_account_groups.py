@@ -369,6 +369,42 @@ class AccountGroupTests(unittest.TestCase):
         self.assertCountEqual(started, ["local", "remote"])
         self.assertFalse(streamlit_runner.ui_task_status()["locked"])
 
+    def test_combined_runner_accepts_different_local_and_remote_retry_sets(self) -> None:
+        log_queue: queue.Queue = queue.Queue()
+        captured: dict[str, list[str]] = {}
+
+        def local_side_effect(test_ids, *_args, **_kwargs) -> int:
+            captured["local"] = list(test_ids)
+            return 0
+
+        def remote_side_effect(*_args, **kwargs) -> int:
+            captured["remote"] = list(kwargs["case_ids"])
+            return 0
+
+        with (
+            patch("streamlit_runner._run_selected_tests_unlocked", side_effect=local_side_effect),
+            patch("streamlit_runner._run_remote_cli_unlocked", side_effect=remote_side_effect),
+        ):
+            streamlit_runner.run_local_and_remote(
+                ["tests.p0.local.TestLocal.test_one"],
+                log_queue,
+                remote_test_ids=["tests.p0.remote.TestRemote.test_two"],
+                local_attach_existing_app=True,
+                local_account_profile=runtime_account_profile(_sample_group("Windows", "1")),
+                remote_host_name="macos-arm64",
+                remote_attach_existing_app=False,
+                remote_collect_artifacts=False,
+                remote_sync_before_run=False,
+                remote_ssh_host="127.0.0.1",
+                remote_ssh_port=22,
+                remote_ssh_username="tester",
+                remote_ssh_password="",
+                remote_account_profile=runtime_account_profile(_sample_group("macOS", "2")),
+            )
+
+        self.assertEqual(captured["local"], ["tests.p0.local.TestLocal.test_one"])
+        self.assertEqual(captured["remote"], ["tests.p0.remote.TestRemote.test_two"])
+
 
 if __name__ == "__main__":
     unittest.main()

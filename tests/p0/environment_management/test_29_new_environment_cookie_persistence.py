@@ -7,6 +7,7 @@ from pathlib import Path
 from core.assertions import assert_equal, assert_true
 from core.cdp_driver import CDPDriver
 from core.config import load_config, timeout_seconds
+from core.environment_create_api import EnvironmentCreateApiClient
 from core.environment_cache import (
     delete_numeric_environment_cache_dirs,
     numeric_environment_cache_dirs,
@@ -27,6 +28,8 @@ CASE_MODULE = "环境管理"
 ENVIRONMENT_NAME = "自动化-新环境Cookie持续保持"
 EXPECTED_LOGIN_STATUS = "已登录"
 EXPECTED_ACCOUNT = "MCDL004"
+API_STATE_TIMEOUT_SECONDS = 30
+API_STATE_POLL_SECONDS = 1
 
 
 class TestNewEnvironmentCookiePersistence(unittest.TestCase):
@@ -61,7 +64,9 @@ class TestNewEnvironmentCookiePersistence(unittest.TestCase):
             bitmask_blocks={"data_sync_config"},
         )
         personal_settings_page = PersonalSettingsPage(cdp_driver=self.cdp, config=self.config)
+        environment_api: EnvironmentCreateApiClient | None = None
         cookie_sync_changed = False
+        environment_id = ""
         cleanup_error: Exception | None = None
         try:
             environment_page.open_list()
@@ -77,18 +82,35 @@ class TestNewEnvironmentCookiePersistence(unittest.TestCase):
             )
             self.logger.info("Cookie data sync is enabled: changed=%s", cookie_sync_changed)
 
-            environment_page.open_list()
-            environment_page.search_environment_without_assert(ENVIRONMENT_NAME)
-            if environment_page.environment_visible_in_current_list(ENVIRONMENT_NAME):
-                self._close_environment_if_open(
-                    environment_page,
-                    environment_close_timeout=environment_close_timeout,
-                    kernel_process_timeout=kernel_process_timeout,
+            device_id = self._open_environment_list_and_capture_device_id(
+                environment_page,
+            )
+            environment_api = EnvironmentCreateApiClient(
+                self.cdp,
+                device_id=device_id,
+            )
+            stale_environment_ids = self._environment_ids_from_api(environment_api)
+            if stale_environment_ids:
+                environment_api.delete_environments(stale_environment_ids)
+                self._wait_environment_api_state(
+                    environment_api,
+                    expected_present=False,
                 )
-                environment_page.delete_environment_from_current_list(ENVIRONMENT_NAME)
-                environment_page.wait_environment_absent_in_current_list(ENVIRONMENT_NAME)
+            environment_page.clear_search()
 
-            environment_page.create_environment(ENVIRONMENT_NAME)
+            environment_api.create_environment(
+                name=ENVIRONMENT_NAME,
+                browser_version_id="142",
+            )
+            environment_id = environment_api.last_created_environment_id
+            assert_true(bool(environment_id), "创建环境接口未保存响应 data.id")
+            self._wait_environment_api_state(
+                environment_api,
+                expected_present=True,
+                environment_id=environment_id,
+            )
+
+            environment_page.search_environment(ENVIRONMENT_NAME)
             environment_page.wait_environment_visible_in_current_list(ENVIRONMENT_NAME)
             assert_equal(
                 environment_page.environment_action_text(ENVIRONMENT_NAME),
@@ -197,26 +219,44 @@ class TestNewEnvironmentCookiePersistence(unittest.TestCase):
                 f"删除本地缓存并恢复后的账号错误: actual={third_account}",
             )
 
-            environment_page.delete_environment_from_current_list(ENVIRONMENT_NAME)
-            environment_page.search_environment_without_assert(ENVIRONMENT_NAME)
-            assert_true(
-                not environment_page.environment_visible_in_current_list(ENVIRONMENT_NAME),
-                f"新建环境删除后仍然存在: {ENVIRONMENT_NAME}",
+            environment_api.delete_environments(environment_id)
+            self._wait_environment_api_state(
+                environment_api,
+                expected_present=False,
             )
+            environment_id = ""
+            environment_page.clear_search()
         finally:
+            if environment_id:
+                try:
+                    environment_page.open_list()
+                    environment_page.search_environment_without_assert(ENVIRONMENT_NAME)
+                    self._close_environment_if_open(
+                        environment_page,
+                        environment_close_timeout=environment_close_timeout,
+                        kernel_process_timeout=kernel_process_timeout,
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "Failed to close API-created environment during cleanup: %s",
+                        exc,
+                    )
             try:
-                environment_page.open_list()
-                environment_page.search_environment_without_assert(ENVIRONMENT_NAME)
-                self._close_environment_if_open(
-                    environment_page,
-                    environment_close_timeout=environment_close_timeout,
-                    kernel_process_timeout=kernel_process_timeout,
+                cleanup_ids = (
+                    self._environment_ids_from_api(environment_api)
+                    if environment_api is not None
+                    else []
                 )
-                if environment_page.environment_visible_in_current_list(ENVIRONMENT_NAME):
-                    environment_page.delete_environment_from_current_list(ENVIRONMENT_NAME)
-                    environment_page.wait_environment_absent_in_current_list(ENVIRONMENT_NAME)
-            except Exception:
-                pass
+                if environment_id and environment_id not in cleanup_ids:
+                    cleanup_ids.append(environment_id)
+                if cleanup_ids and environment_api is not None:
+                    environment_api.delete_environments(cleanup_ids)
+                    self._wait_environment_api_state(
+                        environment_api,
+                        expected_present=False,
+                    )
+            except Exception as exc:
+                self.logger.warning("Failed to delete API-created environment during cleanup: %s", exc)
             try:
                 environment_page.clear_search()
             except Exception:
@@ -227,6 +267,54 @@ class TestNewEnvironmentCookiePersistence(unittest.TestCase):
                 cleanup_error = exc
             if cleanup_error:
                 raise cleanup_error
+
+    def _open_environment_list_and_capture_device_id(
+        self,
+        environment_page: EnvironmentPage,
+    ) -> str:
+        page = self.cdp._page()
+
+        def is_environment_list_request(request) -> bool:
+            return (
+                "/gin/v1/env/list" in request.url
+                and request.method.upper() == "POST"
+            )
+
+        with page.expect_request(is_environment_list_request, timeout=30_000) as request_info:
+            environment_page.open_list()
+        device_id = str(request_info.value.headers.get("x-device-id") or "").strip()
+        assert_true(bool(device_id), "APP 环境列表请求未携带 x-device-id")
+        return device_id
+
+    def _environment_ids_from_api(
+        self,
+        environment_api: EnvironmentCreateApiClient,
+    ) -> list[str]:
+        return environment_api.environment_ids_by_name(ENVIRONMENT_NAME)
+
+    def _wait_environment_api_state(
+        self,
+        environment_api: EnvironmentCreateApiClient,
+        *,
+        expected_present: bool,
+        environment_id: str = "",
+    ) -> None:
+        deadline = time.time() + API_STATE_TIMEOUT_SECONDS
+        last_environment_ids: list[str] = []
+        while time.time() < deadline:
+            last_environment_ids = self._environment_ids_from_api(environment_api)
+            if expected_present:
+                if environment_id in last_environment_ids:
+                    return
+            elif not last_environment_ids:
+                return
+            time.sleep(API_STATE_POLL_SECONDS)
+        expected_text = "存在" if expected_present else "不存在"
+        raise AssertionError(
+            "环境列表接口状态确认超时: "
+            f"expected={expected_text}, name={ENVIRONMENT_NAME}, "
+            f"environment_id={environment_id}, actual_ids={last_environment_ids}"
+        )
 
     def _open_read_cookie_status_and_close(
         self,

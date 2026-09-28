@@ -183,7 +183,7 @@ Mac 当前已验证：
 - `python run.py --config config/config.macos.yaml --level P0` 通过，结果 `total=59 passed=58 failed=0 errors=0 skipped=1 flaky=1`。
 - UI 远程节点模式已完成“同步当前代码”后执行 `P0 全量` 验证，结果 `total=59 passed=57 failed=0 errors=1 skipped=1 flaky=0`；唯一错误为代理创建弹窗确认后未关闭，保留为 Mac 远端代理业务/环境问题继续排查。
 
-以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 已扩展为 101 条，最新状态见“最近验证记录”。
+以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 为 100 条，最新状态见“最近验证记录”。
 
 Mac 当前跳过项：
 
@@ -193,6 +193,7 @@ Mac 当前跳过项：
 
 - macOS 当前仍不支持系统代理启停能力。
 - `test_create_custom_proxy_detect_and_delete` 不再因系统代理 unsupported 跳过；Mac 上会继续执行代理创建、检测和删除流程。最近一次 UI 远程 P0 全量中该用例在创建弹窗确认后未关闭，未作为框架同步链路阻塞项掩盖。
+- `ProxyPage.open_list()` 进入代理管理后会检查“代理列表”Tab 是否激活；若 APP 记住了其它 Tab，则先切回代理列表并等待激活，再判断表格加载。已经在代理列表时不会重复点击；没有二级 Tab 的旧版 APP 继续按列表可见性兼容。
 
 详细记录见 `Mac远程跑通记录.md`。
 
@@ -204,7 +205,7 @@ Mac 当前跳过项：
 streamlit run ui/app.py
 ```
 
-UI 支持用例发现、按模块筛选、批量选择、实时日志、执行进度、运行结果统计和历史日志查看，并复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路。执行页当前采用“侧边栏筛选 + 模块卡片总览 + 卡片内展开用例 + 底部执行摘要”的选择布局：用例列表优先展示中文业务名称，原始 test id 仅保留在 hover 帮助和实际执行命令中，真正执行时仍把原始 test id 作为 `--case` 参数传给 CLI。用例运行中日志区只展示最近 50 行，避免全量执行时页面被大量日志拖慢；执行进度组件按断言失败、执行错误、跳过、运行/重试中、待执行和已通过分组，显示总耗时与每条用例耗时，并支持在组件内组合使用状态筛选和模块筛选，不会触发 Streamlit 整页重跑。执行结束后顶部日志区会自动收敛为失败、错误、异常等未成功日志；完整过程日志仍以运行历史和 `logs/` 文件为准。用例运行中点击 Streamlit 右上角 `Stop` 会同步取消后台执行：本机任务中断独立 CLI 子进程，远程任务向 SSH PTY 发送 `Ctrl+C`。UI 还支持把 Windows 本机和 macOS 远程执行作为一个同步任务并行启动、统一停止，并分别展示两端结果。不要在 UI 任务之外再用 CLI 抢占同一个 APP、CDP 端口、测试账号或业务数据。详细说明见 `UI使用文档.md`。
+UI 支持用例发现、按模块筛选、批量选择、实时日志、执行进度、运行结果统计和历史日志查看，并复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路。执行页当前采用“侧边栏筛选 + 模块卡片总览 + 卡片内展开用例 + 底部执行摘要”的选择布局：用例列表优先展示中文业务名称，原始 test id 仅保留在 hover 帮助和实际执行命令中，真正执行时仍把原始 test id 作为 `--case` 参数传给 CLI。用例运行中日志区只展示最近 50 行，避免全量执行时页面被大量日志拖慢；执行进度组件按断言失败、执行错误、跳过、运行/重试中、待执行和已通过分组，显示总耗时与每条用例耗时，并支持在组件内组合使用状态筛选和模块筛选，不会触发 Streamlit 整页重跑。执行结束后，断言失败和执行错误区域提供“全部重试失败/异常”“本组全部重试”和逐条“重试”：本机结果仍在本机运行，远程结果仍发往原远端节点，Windows + macOS 同步执行时会按每条结果的执行端拆分 test id，两端失败集合不同也不会交叉误跑。执行结束后顶部日志区会自动收敛为失败、错误、异常等未成功日志；完整过程日志仍以运行历史和 `logs/` 文件为准。用例运行中点击 Streamlit 右上角 `Stop` 会同步取消后台执行：本机任务中断独立 CLI 子进程，远程任务向 SSH PTY 发送 `Ctrl+C`。UI 还支持把 Windows 本机和 macOS 远程执行作为一个同步任务并行启动、统一停止，并分别展示两端结果。不要在 UI 任务之外再用 CLI 抢占同一个 APP、CDP 端口、测试账号或业务数据。详细说明见 `UI使用文档.md`。
 
 ### 自动化账号组与同步执行
 
@@ -357,7 +358,7 @@ CDP 9222: none
 
 ## 失败重试机制
 
-框架在 `core/runner.py` 的执行编排层接入用例级重试。`run.retry_times` 表示异常后额外重试次数，例如 `retry_times: 1` 表示异常用例最多执行 2 次；`run.retry_interval_seconds` 表示两次尝试之间的等待秒数。断言失败属于明确业务结果不符合预期，不再自动重试；只有 unittest `error` 这类执行异常才会按配置重试。
+框架在 `core/runner.py` 的执行编排层接入用例级自动重试。`run.retry_times` 表示异常后额外重试次数，例如 `retry_times: 1` 表示异常用例最多执行 2 次；`run.retry_interval_seconds` 表示两次尝试之间的等待秒数。断言失败属于明确业务结果不符合预期，不会自动重试；只有 unittest `error` 这类执行异常才会按配置自动重试。执行结束后，UI 允许用户明确手动重试断言失败或执行异常用例，该操作会启动一次新的选定用例执行，不改变上述自动重试策略。
 
 重试按单条 unittest 用例重新加载新的 `TestCase` 实例，并完整执行一轮用例生命周期，所以每次重试都会重新触发：
 
@@ -422,7 +423,7 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 全局设置页面会在进入后预先安装 `org_config` POST 响应监听。点击“确定”后不再等待“保存成功”提示，而是等待对应团队接口返回、页面 loading 结束并校验 HTTP 200 和业务 `code=0`；异常时最多点击“确定”3 次，每次等待 20 秒。成功响应的完整请求体会作为本次保存期望，再通过 GET 做语义复查。直接 GET/POST 的单次超时为 30 秒，最多尝试 3 次，请求头从当前 APP 获取版本、登录 token 和团队 ID，不发送 `X-Device-Id`，也不把 token 返回到 Python 或写入日志。
 
-框架已提供环境接口创建、列表查询和批量删除能力，并已在新拷贝的 `test_44_new_environment_cookie_persistence_via_api.py` 中首次接入 P0，原 `test_29` 保持不变。`EnvironmentCreateApiClient` 在当前 APP 页面上下文读取 `basic:state` 登录 token，并从页面标题读取 APP 版本，请求时分别写入 `x-token`、`x-version`；token 不返回 Python、不写日志。真实列表接口还要求 APP 当前请求的 `x-device-id`；客户端接受可选 `device_id`，新 P0 通过 Playwright 侦听普通环境列表请求动态取得该值，不读取或传回 token。创建请求使用 `POST https://gin-server.dicloak.com/gin/v1/env`，固定请求体来自 `test_data/environment_create_api_payload.json`；调用方可传 `browser_version_id`、`name` 和可选 `remark`，内核默认 `142`，备注为空时请求体不包含 `remark`。创建成功后仍返回完整响应，同时将精确的 `data.id` 保存到 `last_created_environment_id`，并把本客户端会话内的非重复 ID 记录到 `created_environment_ids`。列表请求使用 `POST https://gin-server.dicloak.com/gin/v1/env/list`，支持参数化 `page_size`、`page_no`、`env_tag_list_type`、`order_by`、`sort`、`detail` 和环境名称筛选字段 `value`；`environment_ids_by_name()` 会从真实响应 `data.list` 中按精确名称提取 ID。批量删除请求使用 `DELETE https://gin-server.dicloak.com/gin/v1/env/batch`，请求体为 `{"ids": [...]}`，删除成功后同步清理客户端保存的对应 ID。三种请求均要求 HTTP 200、JSON 对象和业务 `code=0`。本地 curl 实例含真实 token，已通过 `.gitignore` 排除。
+框架已提供环境接口创建、列表查询和批量删除能力，并已正式接入 `test_29_new_environment_cookie_persistence.py`。`EnvironmentCreateApiClient` 在当前 APP 页面上下文读取 `basic:state` 登录 token，并从页面标题读取 APP 版本，请求时分别写入 `x-token`、`x-version`；token 不返回 Python、不写日志。真实列表接口还要求 APP 当前请求的 `x-device-id`；正式 P0 通过 Playwright 侦听普通环境列表请求动态取得该值，不读取或传回 token。创建请求使用 `POST https://gin-server.dicloak.com/gin/v1/env`，固定请求体来自 `test_data/environment_create_api_payload.json`；调用方可传 `browser_version_id`、`name` 和可选 `remark`，内核默认 `142`，备注为空时请求体不包含 `remark`。创建成功后仍返回完整响应，同时将精确的 `data.id` 保存到 `last_created_environment_id`，并把本客户端会话内的非重复 ID 记录到 `created_environment_ids`。列表请求使用 `POST https://gin-server.dicloak.com/gin/v1/env/list`，支持参数化 `page_size`、`page_no`、`env_tag_list_type`、`order_by`、`sort`、`detail` 和环境名称筛选字段 `value`；`environment_ids_by_name()` 会从真实响应 `data.list` 中按精确名称提取 ID。批量删除请求使用 `DELETE https://gin-server.dicloak.com/gin/v1/env/batch`，请求体为 `{"ids": [...]}`，删除成功后同步清理客户端保存的对应 ID。三种请求均要求 HTTP 200、JSON 对象和业务 `code=0`。本地 curl 实例含真实 token，已通过 `.gitignore` 排除。
 
 ```python
 from core.environment_create_api import EnvironmentCreateApiClient
@@ -448,14 +449,14 @@ delete_response = client.delete_environments([environment_id])
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 101 条 P0 用例：环境管理 44 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；P1 完整组件回归为 `Ran 237 tests ... OK`。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；P1 完整组件回归为 `Ran 248 tests ... OK`。
 
 当前成员分组管理模块已接入 2 条 P0 用例，文件位于 `tests/p0/member_group_management/`：
 
 - `test_01_create_member_group.py`：创建成员分组，校验名称和备注后删除。
 - `test_02_edit_member_group_name.py`：读取列表首行名称、备注和创建时间，等待编辑弹窗异步数据及权限树 loading 稳定后修改名称为 `自动化-编辑成员分组名称`；保存后按“备注 + 创建时间”唯一回找并断言名称、备注和创建时间，再按同一稳定身份还原原名称。主流程异常时也会在 `finally` 中幂等尝试还原，避免污染共享团队数据。
 
-当前环境管理模块已接入 44 条 P0 用例，文件位于 `tests/p0/environment_management/`：
+当前环境管理模块已接入 43 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
 - `test_01_kernel_integrity.py`：按独立阶段校验 142 内核首次启动、缓存拷贝、缓存启动路径、134 内核下载和 134 环境启动；中间阶段失败会记录原因并继续执行后续阶段，最后统一汇总断言，避免 134 下载被前置断言阻断。
 - `test_02_create_default_environment.py`
@@ -485,7 +486,7 @@ delete_response = client.delete_environments([environment_id])
 - `test_26_cookie_data_validation.py`：先执行 `data_sync_config` 接口基准检查，再回到环境管理页并通过全局设置统一入口进入页面；入口等待 `#/setting` 页面可见、“正在加载中...”文案与 loading 遮罩消失、数据同步区域呈现且复选框状态稳定，再检查页面至少有 3 个复选框处于已勾选状态，并安装当前团队配置 POST 监听。不满足时会先重新进入环境管理页，再进入全局设置，最多重新进入 2 次；重试两次后仍不足 3 个时直接以断言异常结束当前用例。随后确保“数据设置 → 数据同步 → Cookie”已勾选，精确搜索并三次打开预置环境 `Cookie数据校验`；每次通过内核 CDP 访问 `http://cookie.dicloak.localhost:18080`、读取登录状态、关闭环境并校验按钮恢复为“打开”。第二次校验后读取 APP 基础设置中的环境缓存目录，只删除其直接子级中名称为 19 位纯数字、且不是链接或重解析点的目录，确认删除完成后第三次打开环境，断言 Cookie 登录状态仍为“已登录”。该用例显式声明 `local_auth_lab` 运行时依赖，结束阶段只在实际写入后检查和恢复数据同步影响位。
 - `test_27_local_storage_data_validation.py`：复用同一全局设置加载保护，确保“数据设置 → 数据同步 → Local Storage”已勾选；未勾选时只允许该项从未勾选变为已勾选，检测到其他复选框同时变化会在保存前失败。随后精确搜索并三次打开预置环境 `Local Storage数据校验`，通过内核 CDP 访问 `http://localstorage.dicloak.localhost:18080` 并读取登录状态；每次关闭环境并校验按钮恢复为“打开”，前两次分别断言“已登录”，中间保留 3 秒业务等待。第二次后安全删除缓存根目录直接子级中的 19 位纯数字普通目录并确认无残留，第三次打开后再次断言云端恢复的 Local Storage 登录状态为“已登录”。该用例显式声明 `local_auth_lab` 运行时依赖；2026-08-03 三用例串行真实回归中一次通过。
 - `test_28_indexeddb_data_validation.py`：确保“数据设置 → 数据同步 → IndexedDB”已勾选；未勾选时只允许 `IndexedDB` 一个复选框变化，保存后重新进入页面确认持久状态。随后精确搜索并三次打开预置环境 `IndexedDB数据校验`，通过内核 CDP 访问 `http://indexeddb.dicloak.localhost:18080` 并读取登录状态；每次关闭环境、等待内核停止并确认按钮恢复为“打开”，前两次状态任一次不是“已登录”即结束当前用例，第一次和第二次之间保留 3 秒业务等待。第二次后读取基础设置中的缓存目录，安全删除直接子级中的 19 位纯数字普通目录并确认无残留，第三次打开后断言 IndexedDB 登录状态仍为“已登录”。该用例显式声明 `local_auth_lab` 运行时依赖；2026-08-03 三用例串行真实回归中一次通过。
-- `test_29_new_environment_cookie_persistence.py`：确保 Cookie 数据同步已勾选后，先删除可能由中断运行留下的同名自动化环境，再沿用原有 `create_environment()` 流程创建默认配置环境 `自动化-新环境Cookie持续保持`，不额外选择环境分组，也不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://cookie.dicloak.localhost:18080`，使用 `config/test_data.yaml` 中的本地账号 `MCDL004` 登录，等待 2 秒并读取状态；关闭环境且按钮恢复“打开”后断言账号和状态。等待 3 秒再次打开并断言 Cookie 仍保持登录；随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录，第三次打开并断言云端恢复后仍为 `MCDL004 / 已登录`。最后删除环境并确认列表中不存在；任一阶段失败时也会尝试关闭并清理该专用环境。该用例已接入 `data_sync_config` 接口前置检查和按影响位恢复。
+- `test_29_new_environment_cookie_persistence.py`：正式“新环境 Cookie 数据同步恢复”用例。确保 Cookie 数据同步已勾选后，从 APP 正常环境列表请求取得当前 `x-device-id`，通过环境列表接口按精确名称查询并清理同名残留；再用创建接口以 `browser_version_id=142` 创建 `自动化-新环境Cookie持续保持`，保存响应 `data.id`，并由列表接口确认名称和 ID 均已出现。随后回到 APP 搜索该环境，完成首次登录、普通重开、删除本地缓存后三次 Cookie 恢复验证。结束时通过批量删除接口删除保存的环境 ID，列表接口确认同名环境不存在后只清空 APP 筛选；异常路径仅在环境尚未删除时进入 APP 尝试关闭，再按接口查询到的 ID 幂等清理。该用例保留原测试 ID 和中文展示名，并接入 `data_sync_config` 接口前置检查及按影响位恢复。
 - `test_30_new_environment_local_storage_persistence.py`：确保 Local Storage 数据同步已勾选后，清理可能由异常中断留下的同名环境，并沿用原有 `create_environment()` 创建默认配置环境 `自动化-新环境Local Storage持续保持`；不额外选择环境分组，不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://localstorage.dicloak.localhost:18080`，使用本地测试数据中的 `MCDL005` 登录，等待 2 秒后读取状态；每次均先关闭环境、等待内核退出并确认按钮恢复为“打开”，再断言账号和状态。等待 3 秒后二次验证，随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录并确认无残留，第三次打开验证 Local Storage 云端恢复，最后删除环境并确认不存在。该用例已接入 `data_sync_config` 接口前置检查和按影响位恢复。
 - `test_31_new_environment_indexeddb_persistence.py`：确保 IndexedDB 数据同步已勾选后，清理可能由异常中断留下的同名环境，并沿用原有 `create_environment()` 创建默认配置环境 `自动化-新环境IndexedDB持续保持`；不额外选择环境分组，不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://indexeddb.dicloak.localhost:18080`，使用本地测试数据中的 `MCDL006` 登录，等待 2 秒后读取状态；每次均先关闭环境、等待内核退出并确认按钮恢复为“打开”，再断言账号和状态。等待 3 秒后二次验证，随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录并确认无残留，第三次打开验证 IndexedDB 云端恢复，最后删除环境并确认不存在。该用例已接入 `data_sync_config` 接口前置检查和按影响位恢复。
 - `test_32_individual_environment_cookie_sync.py`：创建环境 `自动化-环境单独设置-cookie同步` 时展开“高级设置”，将“数据同步”从“全局设置”切换为“自定义”，并把已知同步项精确调整为仅勾选 `Cookie`。创建成功后首次打开环境访问 `http://cookie.dicloak.localhost:18080`，复用 `local_auth_lab_login.cookie` 本地测试账号 `MCDL004` 登录并等待 2 秒读取状态；关闭环境并校验操作按钮恢复为“打开”后断言 `MCDL004 / 已登录`。等待 3 秒后二次打开验证 Cookie 仍保持登录；随后进入个人设置基础设置读取 APP 环境缓存目录，只删除名称为 19 位纯数字的直接子目录并确认无残留；第三次打开环境验证删除本地缓存后 Cookie 云端恢复仍为 `MCDL004 / 已登录`。最后删除该环境并确认列表中不存在；异常流程也会尝试关闭和清理同名环境。2026-08-17 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
@@ -501,7 +502,6 @@ delete_response = client.delete_environments([environment_id])
 - `test_41_individual_environment_clear_all_cache_every_open_no_cloud_sync.py`：创建默认配置环境 `自动化-环境单独设置-清除本地全部缓存-每次都清除-不同步云端数据` 后首次打开，依次访问 Cookie、Local Storage、IndexedDB 三个本地模拟站，分别使用共享账号 `MCDL004`、`MCDL005`、`MCDL006` 登录并等待 2 秒，关闭环境且确认操作按钮恢复为“打开”后逐项断言已登录。随后编辑该环境，将“清除本地缓存”切换为“自定义”，设置“清除方式”为“清除本地全部缓存”、“清除频率”为“每次打开环境时都清除”，并确保“清除后，再同步云端数据”开关关闭；再次打开环境后只逐站读取登录态，不执行登录操作，最终断言三站均为 `未登录`。用例最后删除新建环境，异常流程也会尝试关闭和清理同名环境。2026-08-19 Windows 联合真实回归通过：`total=2 passed=2 failed=0 errors=0 skipped=0 flaky=0`。
 - `test_42_create_custom_proxy_environment.py`：创建环境 `自动化-使用-自定义代理-的环境`，在创建抽屉中切换“代理设置”为“自定义代理”，通过快捷输入解析 `http://192.168.20.33:7897`，断言解析出的 IP 为 `192.168.20.33`、端口为 `7897`；保存后搜索并确认环境出现在列表中，打开环境前记录浏览器主进程集合，点击“打开”后最多等待 100 秒检测本次新增的 `GinsBrowser` 主进程。随后根据新主进程解析内核 CDP 端口，固定访问 `https://chromewebstore.google.com/`；目标主机正确、页面无导航错误/`ERR_` 且存在有效正文时判定代理连通。连通性断言失败会先记录，仍继续关闭并删除环境，清理完成后再令用例失败。该用例不验证出口 IP 或代理地区；开始和 `finally` 均会按精确名称清理同名环境。
 - `test_43_create_environment_with_existing_proxy.py`：创建环境 `自动化-使用-已有代理-的环境`，在创建抽屉中切换“代理设置”为“已有代理”，搜索 `7897` 并选择当前匹配结果第一项，保存后打开环境。创建按钮、抽屉、名称填写、代理下拉、搜索结果、选中值、提交和列表行均只作为元素/流程等待，超时抛操作异常，不作为业务断言。用例只保留三类业务断言：60 秒内出现本次新增的 `GinsBrowser` 主进程；打开后按钮由“打开”扭转为“关闭”且关闭后恢复为“打开”；通过新进程的内核 CDP 固定访问 `https://chromewebstore.google.com/` 并验证可达。连通性失败会先记录，仍继续关闭、验证按钮恢复并删除环境，清理完成后再令用例失败。用例依赖账号中已有可搜索到 `7897` 的代理，不创建、修改、检测或删除代理，也不验证代理地址、类型、出口 IP 或地区。
-- `test_44_new_environment_cookie_persistence_via_api.py`：从 `test_29_new_environment_cookie_persistence.py` 完整拷贝后只替换环境生命周期边界，原用例不变。用例进入环境列表时仅从普通列表请求动态取得 `x-device-id`，不读取该 APP 请求的列表响应判断存在性，也不先用 APP 搜索同名环境；前置同名残留查询与清理完全使用环境列表/批量删除接口。随后通过接口以 `browser_version_id=142` 创建 `自动化-接口新环境Cookie持续保持`，保存 `data.id`，通过列表接口按精确名称和 ID 确认已创建，再回到 APP 搜索并继续三次打开、Cookie 登录保持及删除本地缓存后云端恢复流程。最后使用批量删除接口删除保存的环境 ID，通过列表接口确认同名环境不存在后只清空 APP 筛选，不再进入 APP 查找或断言环境已删除。`finally` 仅在主流程尚未完成接口删除时才会进入 APP 尝试关闭运行中环境，之后按同名 ID 幂等清理并恢复全局 Cookie 同步设置。
 当前全局设置模块已接入 22 条 P0 用例，文件位于 `tests/p0/global_settings/`：
 
 所有全局设置用例统一通过 `GlobalSettingsPage.open()` 进入。当前路由不在 `#/setting` 时才点击“全局设置”；已经位于设置页时不重复点击。入口会等待页面标识、loading 状态、`#AsyncData` 和复选框状态稳定，并要求至少 3 个复选框已勾选；首次检查不满足时，按“环境管理 → 全局设置”完整重新进入，最多重试 2 次。页面稳定后安装当前团队 `org_config` POST 响应监听，确保监听发生在任何“确定”点击之前。
@@ -510,7 +510,7 @@ delete_response = client.delete_environments([environment_id])
 
 22 条全局设置 P0 和环境管理中会临时修改全局数据同步项的 `test_26` 至 `test_31` 都在业务流程前执行接口基准检查，并在 `finally` 中只恢复本用例实际影响的配置块或位。主流程已自行恢复时只 GET 确认并跳过 POST；不再逐用例采集或恢复整页 UI 快照。书签基准为关闭状态，因此关闭语义只校验 `status=false`，不依赖 GET 返回被禁用时的历史文件内容。
 
-- `test_01_disable_view_password.py`：校验禁止查看网站密码。
+- `test_01_disable_view_password.py`：校验禁止查看网站密码。B 站首页当前为两段式登录入口：先点击顶部 `.header-avatar-unlogin-entry` 展开登录提示浮层，再点击 `.login-panel-popover .login-btn` 的“立即登录”打开账号密码弹窗；框架兼容旧版直接弹窗路径，随后填写测试密码并验证眼睛按钮无法把密码变为明文。
 - `test_02_disable_browser_devtools.py`：禁止打开浏览器开发者工具。
 - `test_03_disable_extension_management.py`：禁止管理/移除扩展，以及从本地安装扩展至浏览器。
 - `test_04_disable_member_access_google_extension_pages.py`：禁止成员访问谷歌扩展商店和扩展设置页面。
@@ -602,9 +602,13 @@ delete_response = client.delete_environments([environment_id])
 
 最近验证记录：
 
+- 执行结果手动重试能力：2026-09-28 在断言失败/执行错误结果中新增全局全部重试、本组全部重试和单条重试。重试计划只接受最终快照中 `failed/error` 状态的原始 test id，并按 `本机/Windows → 本机执行`、`远程/macOS → 原远端节点` 路由；Windows 与 macOS 的失败集合可以不同。新增 6 条 P1，定向 28 条通过，Streamlit `AppTest` 页面加载 `exceptions 0`，完整 P1 `Ran 245 tests ... OK`，Python 编译和静态差异检查通过。因本机 Computer Use 浏览器策略服务连续失败，未点击真实 UI 重试按钮，避免误启动业务用例。
+- 代理管理列表 Tab 兼容：2026-09-28 将“代理列表”激活检查接入 `ProxyPage.open_list()` 公共入口，四条代理管理 P0 均自动继承。新增 3 条 P1，覆盖其它 Tab 时切换、已激活时不重复点击以及列表等待顺序；定向 `7/7`、完整 P1 `248/248`、Python 编译和静态差异检查通过，本次未运行真实代理 P0。
+- `python run.py --config config/config.yaml --case tests.p0.global_settings.test_01_disable_view_password.TestDisableViewPassword.test_disable_view_password_blocks_password_manager --attach-existing-app`：2026-09-23 通过真实 142 内核 DOM 确认 B 站顶部登录入口改为两段式：首次点击只显示 `.login-panel-popover`，必须再点其中 `.login-btn`“立即登录”才出现 `.bili-mini-mask` 登录弹窗及 `input[type=password]`。公共内核 CDP 逻辑已优先使用当前稳定类名，同时保留旧文案回退；目标 P0 真实单跑 `1/1` 通过，用例事件耗时 `35.69s`，完整 P1 `Ran 239 tests ... OK`，环境已关闭，临时探测脚本已删除，原 APP 未关闭。
+- `test_29_new_environment_cookie_persistence.py`：2026-09-23 将已验证的接口创建、列表确认和接口删除实现完整迁入正式“新环境 Cookie 数据同步恢复”用例；规范化比较确认除正式类名、方法名、环境名称和登录 `run_id` 外，与原接口拷贝实现完全一致。删除拷贝文件后 P0 为 100 条、环境管理为 43 条。按此前要求不重复真实运行该 Cookie 恢复 P0；Python 编译、环境接口契约回归、完整 P1、P0 发现数量及静态差异检查通过。
 - `python run.py --config config/config.yaml --case tests.p0.environment_management.test_06_batch_import_environments.TestBatchImportEnvironments.test_batch_import_environments --attach-existing-app`：2026-09-22 真实 DOM 探测确认批量导入抽屉为 `.envV2Edit-drawer.el-drawer.rtl.open`、文件控件为 `input[type=file][name=file]`；第一次确定后抽屉保持打开、按钮无 loading、结果弹窗不出现，第二次确定后约 100ms 内按钮进入 `is-loading/disabled/aria-disabled=true` 并出现导入结果。加入同创建环境一致的提交状态判断和重开兜底后，连接用户已打开 APP 真实运行 `1/1` 通过，3 行全部成功，导入环境已全部删除，用例事件耗时 `40.39s`，unittest 总耗时 `49.774s`。新增 4 条 P1，完整 P1 为 `Ran 237 tests ... OK`，临时探测脚本已删除，原 APP 未关闭。
 - `python run.py --config config/config.yaml --case tests.p0.environment_management.test_19_batch_edit_environment_multi_group.TestBatchEditEnvironmentMultiGroup.test_batch_edit_environment_multi_group --attach-existing-app`：2026-09-22 修复多分组完整值读取与批量修改方式重置问题后，连接用户已打开 APP 连续真实运行两次均通过，结果均为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例事件耗时分别为 `30.83s`、`26.25s`。逐行读取按环境序号关联当前“查看”按钮及其邻近浮层，排除“等 N 个/查看”折叠文案，读取后主动关闭旧浮层；批量弹窗在分组选择完成后最后确认修改方式。完整 P1 为 `Ran 233 tests ... OK`，原 APP 未关闭。
-- `python run.py --config config/config.yaml --case tests.p0.environment_management.test_44_new_environment_cookie_persistence_via_api.TestNewEnvironmentCookiePersistenceViaApi.test_api_created_environment_cookie_survives_close_reopen_and_local_cache_deletion --attach-existing-app`：2026-09-10 连接用户已打开 APP 真实运行通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例事件耗时 `110.22s`，unittest 总耗时 `120.003s`。创建、列表确认、批量删除均首次请求成功；三次 Cookie 状态均为 `MCDL004 / 已登录`，删除本地缓存后仍从云端恢复。接口删除后列表查询已确认同名环境不存在，APP 筛选和全局设置已恢复，原 APP 未关闭。
+- 接口生命周期 Cookie 恢复流程历史真实验证：2026-09-10 连接用户已打开 APP 运行通过，`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例事件耗时 `110.22s`，unittest 总耗时 `120.003s`。创建、列表确认、批量删除均首次请求成功；三次 Cookie 状态均为 `MCDL004 / 已登录`，删除本地缓存后仍从云端恢复。接口删除后列表查询已确认同名环境不存在，APP 筛选和全局设置已恢复，原 APP 未关闭；该实现已于 2026-09-23 迁入正式 `test_29`。
 - `python -m unittest tests.p1.test_environment_create_api -v` 与 `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-09-10 基础能力阶段为环境接口客户端新增创建响应 `data.id` 保存、`POST /gin/v1/env/list` 列表查询和 `DELETE /gin/v1/env/batch` 批量删除能力；列表接口支持以 `value` 传入环境名称筛选。当时 18 条定向契约测试及 228 条完整 P1 均通过，P0 为 100 条且尚未接入这些接口能力。该阶段只使用 Mock 验证创建 ID 提取/保存、列表参数及请求构造、批量删除请求构造、当前 APP 身份、成功响应和本地 ID 状态更新，没有向真实接口发送请求，也没有删除既有演示环境；当前结果见上方新增 P0 记录。
 - `EnvironmentCreateApiClient.create_environment(...)`：2026-09-02 经用户明确要求完成首次真实接口创建，使用当前 APP 登录态、`browser_version_id=142`、名称 `自动化-接口创建环境-20260902-150128` 和备注 `自动化-接口创建环境演示`；接口首次请求成功，HTTP 200、业务 `code=0`，返回环境 ID `2095044429792391169`。随后进入环境管理按完整名称搜索，列表显示序号 `3465`、名称和备注均正确、分组为“未分组”、操作为“打开”。该环境及搜索筛选按用户要求保留用于查看，未自动删除，原 APP 未关闭。
 - `python -m unittest tests.p1.test_environment_create_api -v` 与 `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-09-02 根据本地“创建环境接口实例”新增尚未接入 P0 的接口创建能力；固定模板 40 个字段与实例排除 `browser_version_id/name/remark` 后逐字段一致。8 条定向契约测试及 218 条完整 P1 均通过。本次只使用 Mock 验证请求构造、APP 登录态请求头、可选备注、响应校验和重试，没有向真实接口发送创建请求，也没有新增环境。

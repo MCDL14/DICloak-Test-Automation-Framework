@@ -4,7 +4,7 @@ import re
 from collections import Counter
 from datetime import datetime
 from time import time
-from typing import Any
+from typing import Any, Iterable, Mapping
 
 
 CASE_EVENT_RE = re.compile(
@@ -45,13 +45,20 @@ def case_progress_snapshot(
     *,
     platforms: list[str] | tuple[str, ...] = ("本机",),
     default_platform: str = "本机",
+    platform_case_ids: Mapping[str, Iterable[str]] | None = None,
     observed_at: float | None = None,
 ) -> dict[str, Any]:
     records: dict[tuple[str, str], dict[str, Any]] = {}
     known_case_ids = {str(case.get("id", "")) for case in selected_cases}
+    allowed_case_ids = {
+        str(platform): {str(case_id) for case_id in case_ids}
+        for platform, case_ids in (platform_case_ids or {}).items()
+    }
     for platform in platforms:
         for index, case in enumerate(selected_cases, start=1):
             case_id = str(case.get("id", ""))
+            if allowed_case_ids and case_id not in allowed_case_ids.get(str(platform), set()):
+                continue
             records[(platform, case_id)] = {
                 "执行端": platform,
                 "序号": str(index),
@@ -128,6 +135,61 @@ def case_progress_snapshot(
         "problem": problem,
         "progress": (finished / total) if total else 0.0,
     }
+
+
+def retry_plan_from_action(
+    snapshot: Mapping[str, Any],
+    action: Mapping[str, Any] | None,
+) -> dict[str, list[str]]:
+    """Build an authoritative platform -> case-id retry plan from a component action."""
+    if not isinstance(action, Mapping):
+        return {}
+    scope = str(action.get("scope") or "")
+    if scope not in {"all", "group", "case"}:
+        return {}
+    requested_status = str(action.get("status_code") or "")
+    requested_platform = str(action.get("platform") or "")
+    requested_case_id = str(action.get("case_id") or "")
+    plan: dict[str, list[str]] = {}
+    for raw_row in snapshot.get("rows") or []:
+        if not isinstance(raw_row, Mapping):
+            continue
+        status = str(raw_row.get("状态码") or "")
+        if status not in {"failed", "error"}:
+            continue
+        if scope == "group" and status != requested_status:
+            continue
+        platform = str(raw_row.get("执行端") or "")
+        case_id = str(raw_row.get("原始用例") or "")
+        if scope == "case" and (
+            platform != requested_platform or case_id != requested_case_id
+        ):
+            continue
+        if not platform or not case_id:
+            continue
+        platform_cases = plan.setdefault(platform, [])
+        if case_id not in platform_cases:
+            platform_cases.append(case_id)
+    return plan
+
+
+def split_retry_plan_by_target(
+    plan: Mapping[str, Iterable[str]],
+) -> tuple[list[str], list[str]]:
+    """Map UI platform labels back to local and remote execution targets."""
+    local_ids = list(dict.fromkeys(
+        str(case_id)
+        for platform in ("本机", "Windows")
+        for case_id in plan.get(platform, ())
+        if str(case_id)
+    ))
+    remote_ids = list(dict.fromkeys(
+        str(case_id)
+        for platform in ("远程", "macOS")
+        for case_id in plan.get(platform, ())
+        if str(case_id)
+    ))
+    return local_ids, remote_ids
 
 
 def _update_record(

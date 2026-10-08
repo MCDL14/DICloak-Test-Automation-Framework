@@ -282,6 +282,37 @@
     .case-name { min-width: 0; overflow-wrap: anywhere; }
     .time { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
     .status-running + .seq ~ .time { color: var(--active); }
+    .issue-summary {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      margin: -1px 4px 3px;
+      padding: 7px 9px;
+      border-radius: 5px;
+      background: var(--surface-soft);
+      font-size: 12px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+    .issue-type {
+      flex: 0 0 auto;
+      padding: 1px 6px;
+      border: 1px solid currentColor;
+      border-radius: 10px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .group-failure .issue-type { color: var(--failure); }
+    .group-error .issue-type { color: var(--error); }
+    .issue-copy { min-width: 0; }
+    .issue-reason { color: inherit; }
+    .issue-original {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
     .detail {
       grid-column: 1 / -1;
       margin: -1px 18px 8px;
@@ -531,6 +562,22 @@
           });
         });
         wrapper.append(retry);
+      }
+      if (["failed", "error"].includes(row["状态码"]) && row["中文原因"]) {
+        const issue = element("div", "issue-summary");
+        const exceptionClass = row["异常类"] ? `（${row["异常类"]}）` : "";
+        const issueCopy = element("div", "issue-copy");
+        issueCopy.append(element("span", "issue-reason", row["中文原因"]));
+        if (row["原始错误"]) {
+          const original = String(row["原始错误"]);
+          const preview = original.length > 360 ? `${original.slice(0, 359)}…` : original;
+          issueCopy.append(element("span", "issue-original", `英文原文：${preview}`));
+        }
+        issue.append(
+          element("span", "issue-type", `${row["错误类型"] || row["状态"]}${exceptionClass}`),
+          issueCopy,
+        );
+        wrapper.append(issue);
       }
       if (expandedRow === identity) wrapper.append(element("div", "detail", row["详情"] || "详情请查看执行日志。"));
       return wrapper;

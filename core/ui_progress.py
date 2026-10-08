@@ -6,6 +6,8 @@ from datetime import datetime
 from time import time
 from typing import Any, Iterable, Mapping
 
+from core.ui_error_localization import is_exception_summary_line, summarize_ui_issue
+
 
 CASE_EVENT_RE = re.compile(
     r"^(?:\[(?P<platform>[^\]]+)\]\s+)?"
@@ -37,6 +39,7 @@ STATUS_LABELS = {
     "skipped": "跳过",
 }
 FINISHED_STATUSES = {"passed", "flaky_passed", "failed", "error", "skipped"}
+PLATFORM_PREFIX_RE = re.compile(r"^\[(?P<platform>[^\]]+)\]\s+")
 
 
 def case_progress_snapshot(
@@ -73,7 +76,7 @@ def case_progress_snapshot(
             }
 
     observed_timestamps: list[float] = []
-    for line in log_lines:
+    for line in _coalesce_problem_log_lines(log_lines, default_platform=default_platform):
         event_timestamp = _line_timestamp(line)
         if event_timestamp is not None:
             observed_timestamps.append(event_timestamp)
@@ -105,6 +108,7 @@ def case_progress_snapshot(
         if not event:
             continue
         status = _status_from_case_event(event.group("event"))
+        issue = _event_issue(line, status)
         _update_record(
             records,
             known_case_ids,
@@ -113,7 +117,11 @@ def case_progress_snapshot(
             status,
             event_timestamp=event_timestamp,
             elapsed_seconds=_line_elapsed_seconds(line),
-            detail=_event_detail(line, status),
+            detail=issue.detail_text if issue else _event_detail(line, status),
+            error_type=issue.error_type if issue else "",
+            exception_class=issue.exception_class if issue else "",
+            chinese_reason=issue.chinese_reason if issue else "",
+            original_error=issue.original_error if issue else "",
         )
 
     reference_time = observed_at
@@ -202,6 +210,10 @@ def _update_record(
     event_timestamp: float | None = None,
     elapsed_seconds: float | None = None,
     detail: str = "",
+    error_type: str = "",
+    exception_class: str = "",
+    chinese_reason: str = "",
+    original_error: str = "",
 ) -> None:
     case_id = str(case_id or "")
     if case_id not in known_case_ids:
@@ -234,6 +246,14 @@ def _update_record(
     record["状态"] = STATUS_LABELS[status]
     if detail:
         record["详情"] = detail
+    if error_type:
+        record["错误类型"] = error_type
+    if exception_class:
+        record["异常类"] = exception_class
+    if chinese_reason:
+        record["中文原因"] = chinese_reason
+    if original_error:
+        record["原始错误"] = original_error
 
 
 def _public_record(record: dict[str, Any], observed_at: float) -> dict[str, Any]:
@@ -278,6 +298,49 @@ def _event_detail(line: str, status: str) -> str:
     detail = detail_lines[-1] if detail_lines else "详情请查看执行日志。"
     prefix = "断言失败" if status == "failed" else "执行错误"
     return f"{prefix}：{detail}"
+
+
+def _event_issue(line: str, status: str):
+    if status not in {"failed", "error"}:
+        return None
+    detail_lines = [item.strip() for item in line.splitlines()[1:] if item.strip()]
+    return summarize_ui_issue("\n".join(detail_lines), status)
+
+
+def _coalesce_problem_log_lines(log_lines: list[str], *, default_platform: str) -> list[str]:
+    """Attach line-oriented traceback output to its preceding CASE FAIL/ERROR event."""
+    coalesced: list[str] = []
+    active_problem_index: dict[str, int] = {}
+    for raw_line in log_lines:
+        line = str(raw_line or "")
+        event = CASE_EVENT_RE.match(line)
+        if event:
+            platform = event.group("platform") or default_platform
+            coalesced.append(line)
+            if event.group("event") in {"FAIL", "ERROR"}:
+                active_problem_index[platform] = len(coalesced) - 1
+            else:
+                active_problem_index.pop(platform, None)
+            continue
+
+        prefix = PLATFORM_PREFIX_RE.match(line)
+        platform = prefix.group("platform") if prefix else default_platform
+        content = line[prefix.end():] if prefix else line
+        active_index = active_problem_index.get(platform)
+        if active_index is not None and (
+            not _starts_new_log_record(content) or is_exception_summary_line(content)
+        ):
+            if content.strip():
+                coalesced[active_index] = f"{coalesced[active_index]}\n{content}"
+            continue
+        if active_index is not None:
+            active_problem_index.pop(platform, None)
+        coalesced.append(line)
+    return coalesced
+
+
+def _starts_new_log_record(line: str) -> bool:
+    return bool(LOG_TIMESTAMP_RE.match(str(line or "").strip()))
 
 
 def _status_from_case_event(event: str) -> str:

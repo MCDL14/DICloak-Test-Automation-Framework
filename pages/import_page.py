@@ -16,6 +16,7 @@ class ImportPage(BasePage):
     BATCH_IMPORT_DRAWER_REOPEN_RETRIES = 2
     BATCH_IMPORT_SUBMIT_STATE_SECONDS = 3
     BATCH_IMPORT_SECOND_SUBMIT_DELAY_SECONDS = 2
+    IMPORT_RESULT_TERMINAL_STATUSES = {"成功", "失败"}
 
     def open_batch_import(self) -> None:
         self.cdp.click_element_by_script(self._batch_create_dropdown_caret_script())
@@ -100,7 +101,7 @@ class ImportPage(BasePage):
             return
         try:
             self.cdp.click_element_by_script(self._batch_import_button_script("取消"), timeout=3000)
-        except TimeoutError:
+        except Exception:
             self.cdp.press("Escape")
         self._wait_batch_import_drawer_closed()
 
@@ -116,13 +117,21 @@ class ImportPage(BasePage):
         timeout_seconds = timeout_seconds or config_timeout_seconds(self.config, "batch_import_seconds", 120)
         deadline = time.time() + timeout_seconds
         last_text = ""
+        last_rows: list[dict[str, str]] = []
         while time.time() < deadline:
             last_text = self.read_import_result()
             rows = self.import_result_rows()
-            if rows and len(rows) >= expected_count:
-                return rows[:expected_count]
+            last_rows = rows[:expected_count]
+            if len(last_rows) == expected_count and all(
+                row.get("result") in self.IMPORT_RESULT_TERMINAL_STATUSES
+                for row in last_rows
+            ):
+                return last_rows
             time.sleep(0.5)
-        raise TimeoutError(f"batch import result did not appear: expected={expected_count}, text={last_text}")
+        raise TimeoutError(
+            "batch import result did not finish rendering: "
+            f"expected={expected_count}, rows={last_rows}, text={last_text}"
+        )
 
     def import_result_rows(self) -> list[dict[str, str]]:
         value = self.cdp.evaluate(
@@ -158,6 +167,48 @@ class ImportPage(BasePage):
     def close_import_result(self) -> None:
         self.cdp.click_element_by_script(self._import_result_close_button_script())
         self._wait_import_result_closed()
+
+    def close_import_result_if_visible(self) -> bool:
+        """Best-effort idempotent cleanup for normal and assertion-failure paths."""
+        if not self._import_result_dialog_visible():
+            return False
+        click_error: Exception | None = None
+        try:
+            self.close_import_result()
+            return True
+        except Exception as exc:
+            click_error = exc
+            # Element Plus overlays can be mid-transition when an assertion interrupts the flow.
+            # Escape is a safe secondary close path for the top-most result dialog.
+        try:
+            self.cdp.press("Escape")
+            self._wait_import_result_closed()
+            return True
+        except Exception as escape_error:
+            raise RuntimeError(
+                "failed to close batch import result dialog with button and Escape: "
+                f"button_error={click_error}; escape_error={escape_error}"
+            ) from escape_error
+
+    def close_batch_import_if_visible(self) -> bool:
+        if not self._batch_import_drawer_visible():
+            return False
+        self._close_batch_import_drawer_for_retry()
+        return True
+
+    def close_import_overlays(self) -> None:
+        """Leave the environment list usable even when import verification fails."""
+        errors: list[str] = []
+        for label, closer in (
+            ("result_dialog", self.close_import_result_if_visible),
+            ("import_drawer", self.close_batch_import_if_visible),
+        ):
+            try:
+                closer()
+            except Exception as exc:
+                errors.append(f"{label}={type(exc).__name__}: {exc}")
+        if errors:
+            raise RuntimeError("batch import overlay cleanup incomplete: " + "; ".join(errors))
 
     def _wait_batch_import_drawer_visible(self) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "page_seconds", 10)

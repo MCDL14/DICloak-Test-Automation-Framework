@@ -48,6 +48,7 @@ from core.account_groups import (
 from core.config import ConfigError, load_config
 from core.ui_log_filter import (
     failure_detail_text as _failure_detail_text,
+    localized_failure_overview_text as _localized_failure_overview_text,
     unsuccessful_log_text as _unsuccessful_log_text,
 )
 from core.ui_progress import (
@@ -645,6 +646,7 @@ def _case_progress_log_relevant(line: str) -> bool:
         or "CASE SKIP" in line
         or "Retrying " in line
         or "Test passed after retry:" in line
+        or bool(re.search(r"(?:Error|Exception):", line))
     )
 
 
@@ -1820,6 +1822,11 @@ if run_clicked or retry_requested or health_clicked or code_status_clicked or co
                     )
                     with st.expander("失败/错误详情", expanded=True):
                         failure_details = _failure_detail_text(target_text)
+                        localized_overview = _localized_failure_overview_text(target_text)
+                        if localized_overview:
+                            st.markdown("**中文原因摘要**")
+                            st.code(localized_overview, language="text")
+                            st.markdown("**原始错误详情**")
                         st.code(failure_details or "详情请查看上方完整日志。", language="text")
         if has_failure:
             status_placeholder.warning("同步执行完成，至少一个执行端存在失败、错误或缺少结果。")
@@ -1837,6 +1844,11 @@ if run_clicked or retry_requested or health_clicked or code_status_clicked or co
                 with st.expander("失败/错误详情", expanded=True):
                     failure_details = _failure_detail_text(full_text)
                     if failure_details:
+                        localized_overview = _localized_failure_overview_text(full_text)
+                        if localized_overview:
+                            st.markdown("**中文原因摘要**")
+                            st.code(localized_overview, language="text")
+                            st.markdown("**原始错误详情**")
                         st.code(failure_details, language="text")
                     else:
                         st.caption("详情请查看上方完整日志中的 CASE FAIL/CASE ERROR 行")

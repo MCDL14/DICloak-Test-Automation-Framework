@@ -39,7 +39,7 @@ class TestBatchImportEnvironments(unittest.TestCase):
 
         environment_page = EnvironmentPage(cdp_driver=self.cdp, config=self.config)
         import_page = ImportPage(cdp_driver=self.cdp, config=self.config)
-        imported = False
+        import_attempted = False
 
         try:
             environment_page.open_list()
@@ -47,6 +47,7 @@ class TestBatchImportEnvironments(unittest.TestCase):
 
             import_page.open_batch_import()
             import_page.choose_import_file(import_file)
+            import_attempted = True
             import_page.submit_import()
             result_rows = import_page.wait_import_result(
                 expected_count=len(import_names),
@@ -69,7 +70,6 @@ class TestBatchImportEnvironments(unittest.TestCase):
                     f"batch import row was not successful: {row}",
                 )
             import_page.close_import_result()
-            imported = True
 
             environment_page.open_list()
             environment_page.search_environment_without_assert(name_prefix)
@@ -90,18 +90,22 @@ class TestBatchImportEnvironments(unittest.TestCase):
                 not environment_page.environment_names_by_prefix_in_current_list(name_prefix),
                 f"batch imported environments were not deleted: prefix={name_prefix}",
             )
-            imported = False
+            import_attempted = False
         finally:
             try:
-                if imported:
+                import_page.close_import_overlays()
+            except Exception as exc:
+                self.logger.warning("批量导入异常清理未能关闭导入弹窗/抽屉: %s", exc)
+            try:
+                if import_attempted:
                     environment_page.open_list()
                     self._delete_imported_environments(environment_page, name_prefix)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.logger.warning("批量导入异常清理未能删除测试环境: %s", exc)
             try:
                 environment_page.clear_search()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.logger.warning("批量导入异常清理未能清空环境筛选: %s", exc)
 
     def _import_environment_names(self, file_path: Path) -> list[str]:
         names: list[str] = []

@@ -200,6 +200,27 @@ class UiProgressTests(unittest.TestCase):
         self.assertEqual(rows["skipped"]["用时秒"], 0.1)
         self.assertEqual(rows["skipped"]["详情"], "跳过原因：platform mismatch")
 
+    def test_line_oriented_traceback_updates_chinese_reason_and_error_type(self) -> None:
+        snapshot = case_progress_snapshot(
+            CASES[:1],
+            [
+                "[macOS] 2026-09-29 10:00:00 [INFO] CASE START #1 tests.demo.TestOne.test_one",
+                "[macOS] 2026-09-29 10:00:02 [ERROR] CASE ERROR tests.demo.TestOne.test_one elapsed=2.00s",
+                "[macOS] Traceback (most recent call last):",
+                '[macOS]   File "demo.py", line 10, in test_one',
+                "[macOS] TimeoutError: script did not return a visible enabled element before timeout",
+                "[macOS] 2026-09-29 10:00:03 [INFO] Final test summary: total=1 passed=0 failed=0 errors=1",
+            ],
+            platforms=["macOS"],
+            default_platform="macOS",
+        )
+
+        row = snapshot["rows"][0]
+        self.assertEqual(row["错误类型"], "元素等待超时")
+        self.assertEqual(row["异常类"], "TimeoutError")
+        self.assertIn("可见、可操作状态超时", row["中文原因"])
+        self.assertIn("原始错误：TimeoutError:", row["详情"])
+
     def test_running_case_exposes_live_elapsed_baseline(self) -> None:
         observed_at = datetime.strptime("2026-08-24 10:00:03", "%Y-%m-%d %H:%M:%S").timestamp()
         snapshot = case_progress_snapshot(

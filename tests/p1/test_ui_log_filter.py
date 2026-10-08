@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from core.ui_log_filter import failure_detail_text, unsuccessful_log_text
+from core.ui_log_filter import (
+    failure_detail_text,
+    localized_failure_overview_text,
+    unsuccessful_log_text,
+)
 
 
 class UiLogFilterTests(unittest.TestCase):
@@ -74,6 +78,24 @@ class UiLogFilterTests(unittest.TestCase):
         self.assertIn("[FAIL] APP path missing", detail)
         self.assertIn("远程执行失败：退出码=1", detail)
         self.assertNotIn("[PASS] Python dependency ok", detail)
+
+    def test_localized_overview_precedes_original_failure_log(self) -> None:
+        log_text = "\n".join(
+            [
+                "2026-09-29 10:00:00 [ERROR] CASE ERROR tests.demo.TestBad.test_bad elapsed=2.00s",
+                "Traceback (most recent call last):",
+                "TimeoutError: element did not appear",
+                "2026-09-29 10:00:03 [INFO] Final test summary: total=1 passed=0 failed=0 errors=1",
+            ]
+        )
+
+        overview = localized_failure_overview_text(log_text)
+        displayed = unsuccessful_log_text(log_text)
+
+        self.assertIn("等待超时（TimeoutError）", overview)
+        self.assertIn("中文失败摘要", displayed)
+        self.assertLess(displayed.index("中文失败摘要"), displayed.index("原始失败日志"))
+        self.assertIn("TimeoutError: element did not appear", displayed)
 
 
 if __name__ == "__main__":

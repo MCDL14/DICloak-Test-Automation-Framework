@@ -207,6 +207,8 @@ streamlit run ui/app.py
 
 UI 支持用例发现、按模块筛选、批量选择、实时日志、执行进度、运行结果统计和历史日志查看，并复用 CLI 的恢复、截图、重试、flaky 统计和飞书通知链路。执行页当前采用“侧边栏筛选 + 模块卡片总览 + 卡片内展开用例 + 底部执行摘要”的选择布局：用例列表优先展示中文业务名称，原始 test id 仅保留在 hover 帮助和实际执行命令中，真正执行时仍把原始 test id 作为 `--case` 参数传给 CLI。用例运行中日志区只展示最近 50 行，避免全量执行时页面被大量日志拖慢；执行进度组件按断言失败、执行错误、跳过、运行/重试中、待执行和已通过分组，显示总耗时与每条用例耗时，并支持在组件内组合使用状态筛选和模块筛选，不会触发 Streamlit 整页重跑。执行结束后，断言失败和执行错误区域提供“全部重试失败/异常”“本组全部重试”和逐条“重试”：本机结果仍在本机运行，远程结果仍发往原远端节点，Windows + macOS 同步执行时会按每条结果的执行端拆分 test id，两端失败集合不同也不会交叉误跑。执行结束后顶部日志区会自动收敛为失败、错误、异常等未成功日志；完整过程日志仍以运行历史和 `logs/` 文件为准。用例运行中点击 Streamlit 右上角 `Stop` 会同步取消后台执行：本机任务中断独立 CLI 子进程，远程任务向 SSH PTY 发送 `Ctrl+C`。UI 还支持把 Windows 本机和 macOS 远程执行作为一个同步任务并行启动、统一停止，并分别展示两端结果。不要在 UI 任务之外再用 CLI 抢占同一个 APP、CDP 端口、测试账号或业务数据。详细说明见 `UI使用文档.md`。
 
+失败结果会把逐行输出的 traceback 重新关联到对应 `CASE FAIL/ERROR`，并在进度卡片中直接展示中文错误类型、原异常类和中文原因，例如“断言失败（AssertionError）”“元素未找到（NoSuchElementException）”“元素等待超时（TimeoutError）”“连接失败（ConnectionRefusedError）”。点击用例仍可查看原始错误，页面顶部和执行结果展开区也会先显示中文摘要、再显示完整英文 traceback。
+
 ### 自动化账号组与同步执行
 
 首次使用前，打开 UI 的“自动化账号组”页面维护固定的两组数据。每组包含：
@@ -449,7 +451,7 @@ delete_response = client.delete_environments([environment_id])
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；P1 完整组件回归为 `Ran 248 tests ... OK`。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；P1 完整组件回归为 `Ran 267 tests ... OK`。
 
 当前成员分组管理模块已接入 2 条 P0 用例，文件位于 `tests/p0/member_group_management/`：
 
@@ -602,8 +604,11 @@ delete_response = client.delete_environments([environment_id])
 
 最近验证记录：
 
+- 批量导入环境结果等待与异常清理：2026-09-30 根据 APP 3.0.4 失败现场确认，导入结果表格会先创建完整行数、再异步把结果列从 `--` 更新为“成功/失败”；旧逻辑仅按行数返回，导致第 4 行仍为占位符时提前断言，且断言发生在关闭弹窗之前。现改为等待全部预期行进入终态；`finally` 无条件清理导入结果弹窗和残留抽屉，关闭按钮处于切换动画或抛出 Playwright 点击异常时用 `Escape` 兜底；两类弹层独立清理，一个失败也必须继续处理另一个。随后按导入尝试状态删除测试环境并清空筛选。新增 5 条 P1，定向 `9/9`、完整 P1 `267/267`、Python 编译和静态差异检查通过；本次未重新运行真实 P0，未操作用户当前 APP。
+- UI 断言中英文双语：2026-09-29 在既有中文错误分类基础上，补充常见断言句式和项目业务术语的中文语义转换；进程 ID、文件路径、URL、状态等关键值不改写，失败卡片同时显示中文原因与英文原文，展开区继续保留完整 traceback。截图中的 `kernel executable path is not under expected cache dir` 可显示为“内核可执行文件路径不在预期缓存目录下”，并将 `pid/executable/expected_parent` 显示为“进程 ID/可执行文件/预期父目录”。未知新断言使用明确中文兜底，不伪造语义，同时保留原英文。新增 4 条 P1，定向 `29/29`、完整 P1 `262/262`、Streamlit `AppTest exceptions 0` 通过。
 - 执行结果手动重试能力：2026-09-28 在断言失败/执行错误结果中新增全局全部重试、本组全部重试和单条重试。重试计划只接受最终快照中 `failed/error` 状态的原始 test id，并按 `本机/Windows → 本机执行`、`远程/macOS → 原远端节点` 路由；Windows 与 macOS 的失败集合可以不同。新增 6 条 P1，定向 28 条通过，Streamlit `AppTest` 页面加载 `exceptions 0`，完整 P1 `Ran 245 tests ... OK`，Python 编译和静态差异检查通过。因本机 Computer Use 浏览器策略服务连续失败，未点击真实 UI 重试按钮，避免误启动业务用例。
 - 代理管理列表 Tab 兼容：2026-09-28 将“代理列表”激活检查接入 `ProxyPage.open_list()` 公共入口，四条代理管理 P0 均自动继承。新增 3 条 P1，覆盖其它 Tab 时切换、已激活时不重复点击以及列表等待顺序；定向 `7/7`、完整 P1 `248/248`、Python 编译和静态差异检查通过，本次未运行真实代理 P0。
+- UI 中文失败原因基础能力：2026-09-29 将逐行 traceback 与对应 `CASE FAIL/ERROR` 重新归并，进度卡片直接显示中文错误类型、原异常类和中文原因；顶部失败日志及执行结果展开区按“中文摘要 → 原始 traceback”展示。覆盖断言预期/实际值、已有中文断言、元素未找到、元素等待超时、连接失败、复杂业务断言及远端前缀日志。真实回放“禁用扩展管理和本地安装”失败日志可生成中文关键状态摘要；该阶段新增 10 条 P1，定向 `25/25`、完整 P1 `258/258`、Streamlit `AppTest exceptions 0`、Python 编译和静态差异检查通过。
 - `python run.py --config config/config.yaml --case tests.p0.global_settings.test_01_disable_view_password.TestDisableViewPassword.test_disable_view_password_blocks_password_manager --attach-existing-app`：2026-09-23 通过真实 142 内核 DOM 确认 B 站顶部登录入口改为两段式：首次点击只显示 `.login-panel-popover`，必须再点其中 `.login-btn`“立即登录”才出现 `.bili-mini-mask` 登录弹窗及 `input[type=password]`。公共内核 CDP 逻辑已优先使用当前稳定类名，同时保留旧文案回退；目标 P0 真实单跑 `1/1` 通过，用例事件耗时 `35.69s`，完整 P1 `Ran 239 tests ... OK`，环境已关闭，临时探测脚本已删除，原 APP 未关闭。
 - `test_29_new_environment_cookie_persistence.py`：2026-09-23 将已验证的接口创建、列表确认和接口删除实现完整迁入正式“新环境 Cookie 数据同步恢复”用例；规范化比较确认除正式类名、方法名、环境名称和登录 `run_id` 外，与原接口拷贝实现完全一致。删除拷贝文件后 P0 为 100 条、环境管理为 43 条。按此前要求不重复真实运行该 Cookie 恢复 P0；Python 编译、环境接口契约回归、完整 P1、P0 发现数量及静态差异检查通过。
 - `python run.py --config config/config.yaml --case tests.p0.environment_management.test_06_batch_import_environments.TestBatchImportEnvironments.test_batch_import_environments --attach-existing-app`：2026-09-22 真实 DOM 探测确认批量导入抽屉为 `.envV2Edit-drawer.el-drawer.rtl.open`、文件控件为 `input[type=file][name=file]`；第一次确定后抽屉保持打开、按钮无 loading、结果弹窗不出现，第二次确定后约 100ms 内按钮进入 `is-loading/disabled/aria-disabled=true` 并出现导入结果。加入同创建环境一致的提交状态判断和重开兜底后，连接用户已打开 APP 真实运行 `1/1` 通过，3 行全部成功，导入环境已全部删除，用例事件耗时 `40.39s`，unittest 总耗时 `49.774s`。新增 4 条 P1，完整 P1 为 `Ran 237 tests ... OK`，临时探测脚本已删除，原 APP 未关闭。

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pages.import_page import ImportPage, _BatchImportSubmitNotStarted
 
@@ -57,6 +58,75 @@ class _BatchImportRetryProbe(ImportPage):
     def choose_import_file(self, file_path: str | Path) -> None:
         self.calls.append(("choose-file", Path(file_path)))
         self._selected_import_file = Path(file_path)
+
+
+class _BatchImportResultProbe(ImportPage):
+    def __init__(self, row_snapshots: list[list[dict[str, str]]]) -> None:
+        self.row_snapshots = list(row_snapshots)
+        self.calls: list[str] = []
+
+    def read_import_result(self) -> str:
+        return "成功: 3 条 / 失败: 0 条"
+
+    def import_result_rows(self) -> list[dict[str, str]]:
+        self.calls.append("read-rows")
+        if len(self.row_snapshots) > 1:
+            return self.row_snapshots.pop(0)
+        return self.row_snapshots[0]
+
+
+class _BatchImportOverlayProbe(ImportPage):
+    def __init__(self, *, result_visible: bool, drawer_visible: bool) -> None:
+        self.result_visible = result_visible
+        self.drawer_visible = drawer_visible
+        self.calls: list[str] = []
+
+    def _import_result_dialog_visible(self) -> bool:
+        return self.result_visible
+
+    def close_import_result(self) -> None:
+        self.calls.append("close-result")
+        self.result_visible = False
+
+    def _batch_import_drawer_visible(self) -> bool:
+        return self.drawer_visible
+
+    def _close_batch_import_drawer_for_retry(self) -> None:
+        self.calls.append("close-drawer")
+        self.drawer_visible = False
+
+
+class _BatchImportOverlayFallbackProbe(_BatchImportOverlayProbe):
+    def __init__(self) -> None:
+        super().__init__(result_visible=True, drawer_visible=False)
+        self.cdp = self
+
+    def close_import_result(self) -> None:
+        self.calls.append("close-result-timeout")
+        raise RuntimeError("playwright click timeout while transitioning")
+
+    def press(self, key: str) -> None:
+        self.calls.append(f"press-{key}")
+        self.result_visible = False
+
+    def _wait_import_result_closed(self) -> None:
+        self.calls.append("wait-result-closed")
+        if self.result_visible:
+            raise TimeoutError("still visible")
+
+
+class _BatchImportOverlayIndependentCleanupProbe(_BatchImportOverlayProbe):
+    def __init__(self) -> None:
+        super().__init__(result_visible=True, drawer_visible=True)
+        self.cdp = self
+
+    def close_import_result(self) -> None:
+        self.calls.append("close-result-error")
+        raise RuntimeError("button failed")
+
+    def press(self, key: str) -> None:
+        self.calls.append(f"press-{key}-error")
+        raise RuntimeError("keyboard failed")
 
 
 class BatchImportSubmitTests(unittest.TestCase):
@@ -115,6 +185,60 @@ class BatchImportSubmitTests(unittest.TestCase):
                 ("choose-file", Path("自动化-导入环境.xlsx")),
                 ("submit", 3),
             ],
+        )
+
+    def test_wait_import_result_ignores_placeholder_rows_until_statuses_are_terminal(self) -> None:
+        pending_rows = [
+            {"line": "4", "result": "--", "reason": "", "cells": "4\n--"},
+            {"line": "5", "result": "成功", "reason": "--", "cells": "5\n成功\n--"},
+            {"line": "6", "result": "成功", "reason": "--", "cells": "6\n成功\n--"},
+        ]
+        complete_rows = [
+            {"line": str(line), "result": "成功", "reason": "--", "cells": f"{line}\n成功\n--"}
+            for line in (4, 5, 6)
+        ]
+        page = _BatchImportResultProbe([pending_rows, complete_rows])
+
+        with patch("pages.import_page.time.sleep", return_value=None):
+            rows = page.wait_import_result(expected_count=3, timeout_seconds=1)
+
+        self.assertEqual([row["result"] for row in rows], ["成功", "成功", "成功"])
+        self.assertEqual(page.calls, ["read-rows", "read-rows"])
+
+    def test_close_import_overlays_closes_result_before_drawer(self) -> None:
+        page = _BatchImportOverlayProbe(result_visible=True, drawer_visible=True)
+
+        page.close_import_overlays()
+
+        self.assertEqual(page.calls, ["close-result", "close-drawer"])
+
+    def test_close_import_overlays_is_idempotent_when_nothing_is_open(self) -> None:
+        page = _BatchImportOverlayProbe(result_visible=False, drawer_visible=False)
+
+        page.close_import_overlays()
+
+        self.assertEqual(page.calls, [])
+
+    def test_close_import_result_falls_back_to_escape_during_transition(self) -> None:
+        page = _BatchImportOverlayFallbackProbe()
+
+        closed = page.close_import_result_if_visible()
+
+        self.assertTrue(closed)
+        self.assertEqual(
+            page.calls,
+            ["close-result-timeout", "press-Escape", "wait-result-closed"],
+        )
+
+    def test_drawer_cleanup_still_runs_when_result_dialog_cleanup_fails(self) -> None:
+        page = _BatchImportOverlayIndependentCleanupProbe()
+
+        with self.assertRaisesRegex(RuntimeError, "result_dialog"):
+            page.close_import_overlays()
+
+        self.assertEqual(
+            page.calls,
+            ["close-result-error", "press-Escape-error", "close-drawer"],
         )
 
 

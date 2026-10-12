@@ -6,7 +6,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import streamlit_runner
 from core.remote_runner import RemoteRunCancelled, _stream_channel
@@ -98,6 +98,19 @@ class UITaskCancellationTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertNotEqual(result[0], 0)
         self.assertFalse(streamlit_runner.ui_task_status()["locked"])
+
+    def test_process_stop_callback_runs_full_stop_chain_only_once(self) -> None:
+        process = Mock()
+        with patch("streamlit_runner._stop_process_tree") as stop_process_tree:
+            callback = streamlit_runner._make_process_stop_callback(
+                process,
+                graceful_timeout=1.25,
+            )
+
+            callback()
+            callback()
+
+        stop_process_tree.assert_called_once_with(process, graceful_timeout=1.25)
 
     def test_remote_channel_receives_ctrl_c_when_cancelled(self) -> None:
         log_queue: queue.Queue = queue.Queue()

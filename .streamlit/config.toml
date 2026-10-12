@@ -1,0 +1,3 @@
+[runner]
+# Keep menu reruns distinct from the toolbar's explicit Stop request.
+fastReruns = false

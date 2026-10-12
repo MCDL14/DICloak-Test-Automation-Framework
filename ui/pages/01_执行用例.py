@@ -6,7 +6,7 @@
 ==== 设计要点 ====
 - 用例发现使用 @st.cache_data(ttl=30) 缓存，避免每次交互都重新扫描
 - 勾选状态使用 st.session_state 持久化，切换 expander 不会丢失
-- 后台线程执行 + 前台 queue 轮询实现实时日志流
+- 后台线程执行 + 会话级 runtime + 非阻塞 queue 排空实现可跨页面恢复的实时日志流
 - 结果通过正则解析 "运行完成 → 总计=..." 结构化摘要行
 - 失败/错误的飞书通知由 streamlit_runner 内部自动发送，本页无需处理
 
@@ -50,6 +50,13 @@ from core.ui_log_filter import (
     failure_detail_text as _failure_detail_text,
     localized_failure_overview_text as _localized_failure_overview_text,
     unsuccessful_log_text as _unsuccessful_log_text,
+)
+from core.ui_execution_runtime import (
+    ACTIVE_EXECUTION_SESSION_KEY,
+    create_execution_runtime,
+    drain_execution_runtime,
+    execution_runtime_running,
+    watch_native_ui_stop,
 )
 from core.ui_progress import (
     case_progress_snapshot,
@@ -811,7 +818,12 @@ def _render_execution_status(container, *, allow_reset_button: bool) -> dict[str
     return task_status
 
 
-def _refresh_execution_status(container, *, thread: threading.Thread | None = None) -> dict[str, object]:
+def _refresh_execution_status(
+    container,
+    *,
+    thread: threading.Thread | None = None,
+    allow_stop_button: bool = False,
+) -> dict[str, object]:
     if thread and thread.is_alive():
         deadline = time.time() + 1.0
         while time.time() < deadline:
@@ -819,7 +831,7 @@ def _refresh_execution_status(container, *, thread: threading.Thread | None = No
             if status.get("locked") or not thread.is_alive():
                 break
             time.sleep(0.05)
-    return _render_execution_status(container, allow_reset_button=False)
+    return _render_execution_status(container, allow_reset_button=allow_stop_button)
 
 
 @st.cache_data(ttl=30, show_spinner="正在读取远程节点...")
@@ -1360,6 +1372,11 @@ else:
 # 运行按钮
 # ═══════════════════════════════════════════════════════════════════
 
+active_execution = st.session_state.get(ACTIVE_EXECUTION_SESSION_KEY)
+if not isinstance(active_execution, dict):
+    st.session_state.pop(ACTIVE_EXECUTION_SESSION_KEY, None)
+    active_execution = None
+
 st.markdown('<div class="dicloak-runbar"></div>', unsafe_allow_html=True)
 col_info, col_btn = st.columns([3, 1], vertical_alignment="center")
 with col_btn:
@@ -1385,7 +1402,7 @@ with col_btn:
             or (remote_scope == "cases" and not _remote_selected_cases_supported())
             or (remote_scope == "cases" and bool(remote_account_missing))
         )
-    if task_status.get("locked"):
+    if task_status.get("locked") or active_execution is not None:
         run_disabled = True
     run_clicked = st.button(
         run_label,
@@ -1423,6 +1440,7 @@ retry_plan: dict[str, list[str]] = {}
 last_execution_result = st.session_state.get(_LAST_EXECUTION_RESULT_KEY)
 if (
     isinstance(last_execution_result, dict)
+    and active_execution is None
     and not run_clicked
     and not health_clicked
     and not code_status_clicked
@@ -1433,6 +1451,8 @@ if (
         '<div class="dicloak-section-title">最近一次用例结果</div>',
         unsafe_allow_html=True,
     )
+    if last_execution_result.get("stopped"):
+        st.info("上一次执行已停止，可以重新执行所选用例。")
     persisted_progress = st.empty()
     retry_event, _ = _render_case_progress(
         persisted_progress,
@@ -1497,114 +1517,167 @@ if retry_requested:
 # 执行逻辑：后台线程 + 前台轮询日志
 # ═══════════════════════════════════════════════════════════════════
 
-if run_clicked or retry_requested or health_clicked or code_status_clicked or code_sync_clicked:
+start_execution_requested = bool(
+    run_clicked or retry_requested or health_clicked or code_status_clicked or code_sync_clicked
+)
+if start_execution_requested or active_execution is not None:
     # ── 占位容器（运行中动态更新） ──
     log_placeholder = st.empty()
     status_placeholder = st.empty()
     progress_placeholder = st.empty()
 
-    log_queue: queue.Queue = queue.Queue()
-    stop_event = create_ui_stop_event()
-    if retry_requested:
-        progress_platforms = list(retry_plan)
-        progress_default_platform = progress_platforms[0]
-        show_case_progress = bool(run_selected_cases)
-    else:
-        progress_platforms, progress_default_platform, show_case_progress = _progress_platforms_for_run(
-            execution_mode,
-            remote_scope,
-        )
-        show_case_progress = show_case_progress and bool(run_selected_cases) and bool(run_clicked)
-
-    if (
-        not retry_requested
-        and execution_mode in {"远程节点", "本机 + Mac 远程"}
-        and remote_cache_enabled
-        and remote_connection_ready
-    ):
-        try:
-            save_remote_connection_cache(
-                remote_host_name,
-                ssh_host=remote_ssh_host,
-                ssh_port=remote_ssh_port,
-                ssh_username=remote_ssh_username,
-                ssh_password=remote_ssh_password if remember_password else "",
+    if active_execution is None:
+        log_queue: queue.Queue = queue.Queue()
+        stop_event = create_ui_stop_event()
+        if retry_requested:
+            progress_platforms = list(retry_plan)
+            progress_default_platform = progress_platforms[0]
+            show_case_progress = bool(run_selected_cases)
+        else:
+            progress_platforms, progress_default_platform, show_case_progress = _progress_platforms_for_run(
+                execution_mode,
+                remote_scope,
             )
-        except Exception as exc:
-            st.warning(f"连接缓存保存失败：{exc}")
+            show_case_progress = show_case_progress and bool(run_selected_cases) and bool(run_clicked)
 
-    # 启动后台执行线程
-    if health_clicked:
-        thread = threading.Thread(
-            target=check_remote_host,
-            args=(remote_host_name, log_queue),
-            kwargs={
-                "ssh_host": remote_ssh_host,
-                "ssh_port": remote_ssh_port,
-                "ssh_username": remote_ssh_username,
-                "ssh_password": remote_ssh_password,
-                "stop_event": stop_event,
-            },
-            daemon=True,
-        )
-    elif code_status_clicked:
-        thread = threading.Thread(
-            target=check_remote_code,
-            args=(remote_host_name, log_queue),
-            kwargs={
-                "ssh_host": remote_ssh_host,
-                "ssh_port": remote_ssh_port,
-                "ssh_username": remote_ssh_username,
-                "ssh_password": remote_ssh_password,
-                "stop_event": stop_event,
-            },
-            daemon=True,
-        )
-    elif code_sync_clicked:
-        thread = threading.Thread(
-            target=sync_remote_code,
-            args=(remote_host_name, log_queue),
-            kwargs={
-                "ssh_host": remote_ssh_host,
-                "ssh_port": remote_ssh_port,
-                "ssh_username": remote_ssh_username,
-                "ssh_password": remote_ssh_password,
-                "stop_event": stop_event,
-            },
-            daemon=True,
-        )
-    elif retry_requested:
-        retry_common = {
-            "remote_host_name": str(run_context.get("remote_host_name") or ""),
-            "remote_attach_existing_app": bool(run_context.get("remote_attach_existing")),
-            "remote_collect_artifacts": bool(run_context.get("remote_collect_artifacts")),
-            "remote_sync_before_run": bool(run_context.get("remote_sync_before_run")),
-            "remote_ssh_host": str(run_context.get("remote_ssh_host") or ""),
-            "remote_ssh_port": _safe_port(run_context.get("remote_ssh_port")),
-            "remote_ssh_username": str(run_context.get("remote_ssh_username") or ""),
-            "remote_ssh_password": str(run_context.get("remote_ssh_password") or ""),
-            "remote_account_profile": dict(run_context.get("remote_account_profile") or {}),
-        }
-        if local_retry_ids and remote_retry_ids:
+        if (
+            not retry_requested
+            and execution_mode in {"远程节点", "本机 + Mac 远程"}
+            and remote_cache_enabled
+            and remote_connection_ready
+        ):
+            try:
+                save_remote_connection_cache(
+                    remote_host_name,
+                    ssh_host=remote_ssh_host,
+                    ssh_port=remote_ssh_port,
+                    ssh_username=remote_ssh_username,
+                    ssh_password=remote_ssh_password if remember_password else "",
+                )
+            except Exception as exc:
+                st.warning(f"连接缓存保存失败：{exc}")
+
+        # 启动后台执行线程。运行态先写入 session_state，切页时后台任务仍可被重新接管。
+        if health_clicked:
             thread = threading.Thread(
-                target=run_local_and_remote,
-                args=(local_retry_ids, log_queue),
+                target=check_remote_host,
+                args=(remote_host_name, log_queue),
                 kwargs={
-                    "remote_test_ids": remote_retry_ids,
-                    "local_attach_existing_app": bool(run_context.get("attach_existing", True)),
-                    "local_account_profile": dict(run_context.get("local_account_profile") or {}),
-                    **retry_common,
+                    "ssh_host": remote_ssh_host,
+                    "ssh_port": remote_ssh_port,
+                    "ssh_username": remote_ssh_username,
+                    "ssh_password": remote_ssh_password,
                     "stop_event": stop_event,
                 },
                 daemon=True,
             )
-        elif local_retry_ids:
+        elif code_status_clicked:
+            thread = threading.Thread(
+                target=check_remote_code,
+                args=(remote_host_name, log_queue),
+                kwargs={
+                    "ssh_host": remote_ssh_host,
+                    "ssh_port": remote_ssh_port,
+                    "ssh_username": remote_ssh_username,
+                    "ssh_password": remote_ssh_password,
+                    "stop_event": stop_event,
+                },
+                daemon=True,
+            )
+        elif code_sync_clicked:
+            thread = threading.Thread(
+                target=sync_remote_code,
+                args=(remote_host_name, log_queue),
+                kwargs={
+                    "ssh_host": remote_ssh_host,
+                    "ssh_port": remote_ssh_port,
+                    "ssh_username": remote_ssh_username,
+                    "ssh_password": remote_ssh_password,
+                    "stop_event": stop_event,
+                },
+                daemon=True,
+            )
+        elif retry_requested:
+            retry_common = {
+                "remote_host_name": str(run_context.get("remote_host_name") or ""),
+                "remote_attach_existing_app": bool(run_context.get("remote_attach_existing")),
+                "remote_collect_artifacts": bool(run_context.get("remote_collect_artifacts")),
+                "remote_sync_before_run": bool(run_context.get("remote_sync_before_run")),
+                "remote_ssh_host": str(run_context.get("remote_ssh_host") or ""),
+                "remote_ssh_port": _safe_port(run_context.get("remote_ssh_port")),
+                "remote_ssh_username": str(run_context.get("remote_ssh_username") or ""),
+                "remote_ssh_password": str(run_context.get("remote_ssh_password") or ""),
+                "remote_account_profile": dict(run_context.get("remote_account_profile") or {}),
+            }
+            if local_retry_ids and remote_retry_ids:
+                thread = threading.Thread(
+                    target=run_local_and_remote,
+                    args=(local_retry_ids, log_queue),
+                    kwargs={
+                        "remote_test_ids": remote_retry_ids,
+                        "local_attach_existing_app": bool(run_context.get("attach_existing", True)),
+                        "local_account_profile": dict(run_context.get("local_account_profile") or {}),
+                        **retry_common,
+                        "stop_event": stop_event,
+                    },
+                    daemon=True,
+                )
+            elif local_retry_ids:
+                thread = threading.Thread(
+                    target=run_selected_tests,
+                    args=(local_retry_ids, log_queue),
+                    kwargs={
+                        "attach_existing_app": bool(run_context.get("attach_existing", True)),
+                        "account_profile": dict(run_context.get("local_account_profile") or {}),
+                        "stop_event": stop_event,
+                    },
+                    daemon=True,
+                )
+            else:
+                thread = threading.Thread(
+                    target=run_remote_cli,
+                    args=(retry_common.pop("remote_host_name"), "cases", "", log_queue),
+                    kwargs={
+                        "attach_existing_app": retry_common.pop("remote_attach_existing_app"),
+                        "collect_artifacts": retry_common.pop("remote_collect_artifacts"),
+                        "sync_before_run": retry_common.pop("remote_sync_before_run"),
+                        "ssh_host": retry_common.pop("remote_ssh_host"),
+                        "ssh_port": retry_common.pop("remote_ssh_port"),
+                        "ssh_username": retry_common.pop("remote_ssh_username"),
+                        "ssh_password": retry_common.pop("remote_ssh_password"),
+                        "case_ids": remote_retry_ids,
+                        "account_profile": retry_common.pop("remote_account_profile"),
+                        "stop_event": stop_event,
+                    },
+                    daemon=True,
+                )
+        elif execution_mode == "本机":
             thread = threading.Thread(
                 target=run_selected_tests,
-                args=(local_retry_ids, log_queue),
+                args=(selected_ids, log_queue),
                 kwargs={
-                    "attach_existing_app": bool(run_context.get("attach_existing", True)),
-                    "account_profile": dict(run_context.get("local_account_profile") or {}),
+                    "attach_existing_app": attach_existing,
+                    "account_profile": local_account_profile,
+                    "stop_event": stop_event,
+                },
+                daemon=True,
+            )
+        elif execution_mode == "本机 + Mac 远程":
+            thread = threading.Thread(
+                target=run_local_and_remote,
+                args=(selected_ids, log_queue),
+                kwargs={
+                    "local_attach_existing_app": attach_existing,
+                    "local_account_profile": local_account_profile,
+                    "remote_host_name": remote_host_name,
+                    "remote_attach_existing_app": remote_attach_existing,
+                    "remote_collect_artifacts": remote_collect_artifacts,
+                    "remote_sync_before_run": remote_sync_before_run,
+                    "remote_ssh_host": remote_ssh_host,
+                    "remote_ssh_port": remote_ssh_port,
+                    "remote_ssh_username": remote_ssh_username,
+                    "remote_ssh_password": remote_ssh_password,
+                    "remote_account_profile": remote_account_profile,
                     "stop_event": stop_event,
                 },
                 daemon=True,
@@ -1612,143 +1685,165 @@ if run_clicked or retry_requested or health_clicked or code_status_clicked or co
         else:
             thread = threading.Thread(
                 target=run_remote_cli,
-                args=(retry_common.pop("remote_host_name"), "cases", "", log_queue),
+                args=(remote_host_name, remote_scope, remote_value, log_queue),
                 kwargs={
-                    "attach_existing_app": retry_common.pop("remote_attach_existing_app"),
-                    "collect_artifacts": retry_common.pop("remote_collect_artifacts"),
-                    "sync_before_run": retry_common.pop("remote_sync_before_run"),
-                    "ssh_host": retry_common.pop("remote_ssh_host"),
-                    "ssh_port": retry_common.pop("remote_ssh_port"),
-                    "ssh_username": retry_common.pop("remote_ssh_username"),
-                    "ssh_password": retry_common.pop("remote_ssh_password"),
-                    "case_ids": remote_retry_ids,
-                    "account_profile": retry_common.pop("remote_account_profile"),
+                    "attach_existing_app": remote_attach_existing,
+                    "collect_artifacts": remote_collect_artifacts,
+                    "sync_before_run": remote_sync_before_run,
+                    "ssh_host": remote_ssh_host,
+                    "ssh_port": remote_ssh_port,
+                    "ssh_username": remote_ssh_username,
+                    "ssh_password": remote_ssh_password,
+                    "case_ids": selected_ids if remote_scope == "cases" else None,
+                    "account_profile": remote_account_profile if remote_scope == "cases" else None,
                     "stop_event": stop_event,
                 },
                 daemon=True,
             )
-    elif execution_mode == "本机":
-        thread = threading.Thread(
-            target=run_selected_tests,
-            args=(selected_ids, log_queue),
-            kwargs={
-                "attach_existing_app": attach_existing,
-                "account_profile": local_account_profile,
-                "stop_event": stop_event,
+        execution_started_at = time.time()
+        active_execution = create_execution_runtime(
+            thread=thread,
+            log_queue=log_queue,
+            stop_event=stop_event,
+            started_at=execution_started_at,
+            metadata={
+                "selected_cases": run_selected_cases,
+                "progress_platforms": progress_platforms,
+                "progress_default_platform": progress_default_platform,
+                "show_case_progress": show_case_progress,
+                "platform_case_ids": run_platform_case_ids,
+                "execution_context": run_context,
+                "run_is_dual": run_is_dual,
+                "run_has_remote": run_has_remote,
+                "run_clicked": bool(run_clicked),
+                "retry_requested": bool(retry_requested),
+                "health_clicked": bool(health_clicked),
+                "code_status_clicked": bool(code_status_clicked),
+                "code_sync_clicked": bool(code_sync_clicked),
             },
-            daemon=True,
         )
-    elif execution_mode == "本机 + Mac 远程":
-        thread = threading.Thread(
-            target=run_local_and_remote,
-            args=(selected_ids, log_queue),
-            kwargs={
-                "local_attach_existing_app": attach_existing,
-                "local_account_profile": local_account_profile,
-                "remote_host_name": remote_host_name,
-                "remote_attach_existing_app": remote_attach_existing,
-                "remote_collect_artifacts": remote_collect_artifacts,
-                "remote_sync_before_run": remote_sync_before_run,
-                "remote_ssh_host": remote_ssh_host,
-                "remote_ssh_port": remote_ssh_port,
-                "remote_ssh_username": remote_ssh_username,
-                "remote_ssh_password": remote_ssh_password,
-                "remote_account_profile": remote_account_profile,
-                "stop_event": stop_event,
-            },
-            daemon=True,
-        )
+        st.session_state[ACTIVE_EXECUTION_SESSION_KEY] = active_execution
+        thread.start()
     else:
-        thread = threading.Thread(
-            target=run_remote_cli,
-            args=(remote_host_name, remote_scope, remote_value, log_queue),
-            kwargs={
-                "attach_existing_app": remote_attach_existing,
-                "collect_artifacts": remote_collect_artifacts,
-                "sync_before_run": remote_sync_before_run,
-                "ssh_host": remote_ssh_host,
-                "ssh_port": remote_ssh_port,
-                "ssh_username": remote_ssh_username,
-                "ssh_password": remote_ssh_password,
-                "case_ids": selected_ids if remote_scope == "cases" else None,
-                "account_profile": remote_account_profile if remote_scope == "cases" else None,
-                "stop_event": stop_event,
-            },
-            daemon=True,
-        )
-    execution_started_at = time.time()
-    thread.start()
-    _refresh_execution_status(task_status_container, thread=thread)
+        thread = active_execution["thread"]
+        log_queue = active_execution["log_queue"]
+        stop_event = active_execution["stop_event"]
+        execution_started_at = float(active_execution["started_at"])
+        run_selected_cases = list(active_execution.get("selected_cases") or [])
+        progress_platforms = list(active_execution.get("progress_platforms") or [])
+        progress_default_platform = str(active_execution.get("progress_default_platform") or "本机")
+        show_case_progress = bool(active_execution.get("show_case_progress"))
+        run_platform_case_ids = active_execution.get("platform_case_ids")
+        run_context = dict(active_execution.get("execution_context") or {})
+        run_is_dual = bool(active_execution.get("run_is_dual"))
+        run_has_remote = bool(active_execution.get("run_has_remote"))
+        run_clicked = bool(active_execution.get("run_clicked"))
+        retry_requested = bool(active_execution.get("retry_requested"))
+        health_clicked = bool(active_execution.get("health_clicked"))
+        code_status_clicked = bool(active_execution.get("code_status_clicked"))
+        code_sync_clicked = bool(active_execution.get("code_sync_clicked"))
 
-    # 前台轮询 queue，实时刷新日志
-    log_lines: list[str] = []
-    last_log_time = time.time()
-    idle_warning_shown = False
-    progress_render_sequence = 0
-    if show_case_progress:
-        _render_case_progress(
-            progress_placeholder,
-            selected_cases=run_selected_cases,
-            log_lines=log_lines,
-            platforms=progress_platforms,
-            default_platform=progress_default_platform,
-            execution_started_at=execution_started_at,
-            running=thread.is_alive(),
-            render_sequence=progress_render_sequence,
-            platform_case_ids=run_platform_case_ids,
-        )
-    if health_clicked:
-        status_placeholder.info("⏳ 正在检查远程节点...")
-    elif code_status_clicked:
-        status_placeholder.info("⏳ 正在检查远端代码...")
-    elif code_sync_clicked:
-        status_placeholder.info("⏳ 正在同步远端代码...")
-    else:
-        status_placeholder.info("⏳ 正在执行...")
+    with watch_native_ui_stop(active_execution, request_ui_task_stop):
+        # 新任务在本页顶部渲染侧栏时还未启动，因此等执行锁就绪后补一次带
+        # 停止按钮的状态。恢复已有任务时顶部已经渲染过按钮，不能在同一轮
+        # Streamlit 脚本中重复创建同 key 的 widget。
+        if start_execution_requested:
+            _refresh_execution_status(
+                task_status_container,
+                thread=thread,
+                allow_stop_button=True,
+            )
 
-    received_sentinel = False
-    try:
-        while True:
-            try:
-                msg = log_queue.get(timeout=1)
-                if msg is None:          # 哨兵：执行结束
-                    received_sentinel = True
-                    break
-                log_lines.append(msg)
-                last_log_time = time.time()
-                idle_warning_shown = False
-                _refresh_execution_status(task_status_container, thread=thread)
-                # 只保留最近日志行避免 UI 卡顿
+        # 每次页面重跑只做一次非阻塞队列排空。执行状态和完整日志保存在
+        # session_state 中，因此切换到其他菜单只会停止本页渲染，不会取消后台任务；
+        # 返回本页后会从累计日志恢复当前进度。
+        new_log_lines = drain_execution_runtime(active_execution)
+        log_lines = active_execution.setdefault("log_lines", [])
+        progress_render_sequence = int(active_execution.get("render_sequence") or 0)
+        for line in new_log_lines:
+            if show_case_progress and _case_progress_log_relevant(line):
+                progress_render_sequence += 1
+        active_execution["render_sequence"] = progress_render_sequence
+
+        if log_lines:
+            display = "\n".join(log_lines[-_LOG_DISPLAY_LINES:])
+            log_placeholder.code(display, language="text", height=_LOG_DISPLAY_HEIGHT)
+
+        runtime_running = execution_runtime_running(active_execution)
+        if show_case_progress:
+            _render_case_progress(
+                progress_placeholder,
+                selected_cases=run_selected_cases,
+                log_lines=log_lines,
+                platforms=progress_platforms,
+                default_platform=progress_default_platform,
+                execution_started_at=execution_started_at,
+                running=runtime_running,
+                render_sequence=progress_render_sequence,
+                platform_case_ids=run_platform_case_ids,
+            )
+
+        while runtime_running:
+            new_log_lines = drain_execution_runtime(active_execution)
+            relevant_progress_log = False
+            for line in new_log_lines:
+                if show_case_progress and _case_progress_log_relevant(line):
+                    progress_render_sequence += 1
+                    relevant_progress_log = True
+            active_execution["render_sequence"] = progress_render_sequence
+            log_lines = active_execution.setdefault("log_lines", [])
+
+            if new_log_lines:
                 display = "\n".join(log_lines[-_LOG_DISPLAY_LINES:])
                 log_placeholder.code(display, language="text", height=_LOG_DISPLAY_HEIGHT)
-                if show_case_progress and _case_progress_log_relevant(msg):
-                    progress_render_sequence += 1
-                    _render_case_progress(
-                        progress_placeholder,
-                        selected_cases=run_selected_cases,
-                        log_lines=log_lines,
-                        platforms=progress_platforms,
-                        default_platform=progress_default_platform,
-                        execution_started_at=execution_started_at,
-                        running=thread.is_alive(),
-                        render_sequence=progress_render_sequence,
-                        platform_case_ids=run_platform_case_ids,
-                    )
-            except queue.Empty:
-                _refresh_execution_status(task_status_container, thread=thread)
-                if not thread.is_alive():
-                    break
-                idle_seconds = int(time.time() - last_log_time)
-                if idle_seconds >= _LOG_IDLE_WARNING_SECONDS and not idle_warning_shown:
-                    status_placeholder.warning(
-                        f"⏳ 后台仍在执行，但已 {idle_seconds} 秒没有新日志。"
-                        "如果 APP/CDP 或系统弹窗卡住，请到本机窗口检查当前状态。"
-                    )
-                    idle_warning_shown = True
-    finally:
-        # Streamlit 右上角 Stop/页面重跑会中断本脚本；同步取消后台任务。
-        if not received_sentinel and thread.is_alive():
-            request_ui_task_stop(stop_event)
+            if relevant_progress_log:
+                _render_case_progress(
+                    progress_placeholder,
+                    selected_cases=run_selected_cases,
+                    log_lines=log_lines,
+                    platforms=progress_platforms,
+                    default_platform=progress_default_platform,
+                    execution_started_at=execution_started_at,
+                    running=True,
+                    render_sequence=progress_render_sequence,
+                    platform_case_ids=run_platform_case_ids,
+                )
+
+            idle_seconds = int(
+                time.time() - float(active_execution.get("last_log_time") or execution_started_at)
+            )
+            if stop_event.is_set():
+                status_placeholder.warning(
+                    "⏹️ 已发送停止请求，正在等待当前执行进程退出；"
+                    "优雅中断超时后会自动强制终止。"
+                )
+            elif idle_seconds >= _LOG_IDLE_WARNING_SECONDS:
+                status_placeholder.warning(
+                    f"⏳ 后台仍在执行，但已 {idle_seconds} 秒没有新日志。"
+                    "如果 APP/CDP 或系统弹窗卡住，请到本机窗口检查当前状态。"
+                )
+            elif health_clicked:
+                status_placeholder.info("⏳ 正在检查远程节点...")
+            elif code_status_clicked:
+                status_placeholder.info("⏳ 正在检查远端代码...")
+            elif code_sync_clicked:
+                status_placeholder.info("⏳ 正在同步远端代码...")
+            else:
+                status_placeholder.info("⏳ 正在执行...（可切换菜单，后台任务会继续运行）")
+
+            # 保持当前页面脚本和侧栏 widget 稳定，只更新占位区；菜单导航或
+            # 点击停止按钮会让 Streamlit 中断本轮脚本。这里没有 finally 取消，
+            # 因而切页只停止渲染，显式停止按钮则在下一轮脚本设置 stop_event。
+            time.sleep(0.5)
+            runtime_running = execution_runtime_running(active_execution)
+
+    # 后台线程已结束时再排空一次尾部消息，确保最终总结和哨兵不丢失。
+    trailing_log_lines = drain_execution_runtime(active_execution)
+    for line in trailing_log_lines:
+        if show_case_progress and _case_progress_log_relevant(line):
+            progress_render_sequence += 1
+    active_execution["render_sequence"] = progress_render_sequence
+    log_lines = active_execution.setdefault("log_lines", [])
     _refresh_execution_status(task_status_container)
     if show_case_progress:
         progress_render_sequence += 1
@@ -1778,7 +1873,15 @@ if run_clicked or retry_requested or health_clicked or code_status_clicked or co
             "render_sequence": progress_render_sequence,
             "component_key": final_component_key,
             "execution_context": run_context,
+            "stopped": stop_event.is_set(),
         }
+
+    # 最终结果已经落盘到页面状态；释放活动 runtime，允许启动下一项任务。
+    st.session_state.pop(ACTIVE_EXECUTION_SESSION_KEY, None)
+    if stop_event.is_set():
+        # The Run button above was rendered while this runtime still existed.
+        # Re-render this same page after releasing it so the button is enabled.
+        st.rerun()
 
     # ═══════════════════════════════════════════════════════════════
     # 结果解析与展示

@@ -713,7 +713,11 @@ def _run_streaming_subprocess(
 
     reader = threading.Thread(target=read_output, name="ui-local-output-reader", daemon=True)
     reader.start()
-    _set_cancel_callback(stop_event, lambda: _signal_process_interrupt(process))
+    stop_process_once = _make_process_stop_callback(process)
+    # UI 点击停止时直接执行完整的“优雅中断 -> 超时强制终止”链路。
+    # 旧实现这里只发送 CTRL_BREAK，依赖输出轮询稍后升级终止；页面已经
+    # 隐藏停止按钮时，子进程仍可能继续执行下一条用例。
+    _set_cancel_callback(stop_event, stop_process_once)
 
     output_finished = False
     stop_handled = False
@@ -721,7 +725,7 @@ def _run_streaming_subprocess(
         if stop_event.is_set() and process.poll() is None and not stop_handled:
             stop_handled = True
             log_queue.put("收到停止请求，正在终止本机用例执行...")
-            _stop_process_tree(process)
+            stop_process_once()
         try:
             line = output_queue.get(timeout=0.1)
         except queue.Empty:
@@ -756,6 +760,26 @@ def _signal_process_interrupt(process: subprocess.Popen) -> None:
         pass
 
 
+def _make_process_stop_callback(
+    process: subprocess.Popen,
+    *,
+    graceful_timeout: float = 2.0,
+) -> Callable[[], None]:
+    """Return a thread-safe callback that fully stops the child process once."""
+    stop_lock = threading.Lock()
+    stop_started = False
+
+    def stop_process_once() -> None:
+        nonlocal stop_started
+        with stop_lock:
+            if stop_started:
+                return
+            stop_started = True
+        _stop_process_tree(process, graceful_timeout=graceful_timeout)
+
+    return stop_process_once
+
+
 def _stop_process_tree(process: subprocess.Popen, graceful_timeout: float = 5.0) -> None:
     _signal_process_interrupt(process)
     try:
@@ -786,6 +810,10 @@ def _stop_process_tree(process: subprocess.Popen, graceful_timeout: float = 5.0)
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def run_remote_cli(

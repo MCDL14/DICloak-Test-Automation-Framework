@@ -39,6 +39,7 @@ def default_account_groups(base_config: dict[str, Any] | None = None) -> dict[st
                 "member_id": "",
             },
             "member_api_token": "",
+            "http_api_key": "",
         }
         for index, slot in enumerate(ACCOUNT_GROUP_SLOTS, start=1)
     }
@@ -69,6 +70,7 @@ def default_account_groups(base_config: dict[str, Any] | None = None) -> dict[st
                 "member_id": internal.get("member_id", api_data.get("internal_member_id", "")),
             },
             "member_api_token": api_data.get("token", ""),
+            "http_api_key": account.get("http_api_key", ""),
         },
         slot="group_1",
     )
@@ -162,6 +164,7 @@ def normalize_account_group(group: dict[str, Any], *, slot: str = "") -> dict[st
             "member_id": str(internal_member.get("member_id", "") or "").strip(),
         },
         "member_api_token": str(group.get("member_api_token", "") or "").strip(),
+        "http_api_key": str(group.get("http_api_key", "") or "").strip(),
     }
 
 
@@ -179,6 +182,7 @@ def account_group_missing_fields(
     require_member_ids: bool = False,
     require_member_api: bool = False,
     require_case_external: bool = False,
+    require_http_api: bool = False,
 ) -> list[str]:
     normalized = normalize_account_group(group)
     automation_account = normalized["automation_account"]
@@ -216,6 +220,8 @@ def account_group_missing_fields(
                 ("成员 Open API token", normalized["member_api_token"]),
             ]
         )
+    if require_http_api:
+        required.append(("Http API 密钥", normalized["http_api_key"]))
     return [label for label, value in required if not str(value or "").strip()]
 
 
@@ -273,6 +279,7 @@ def runtime_account_profile(group: dict[str, Any]) -> dict[str, Any]:
         "case_external_member": deepcopy(normalized["case_external_member"]),
         "internal_member": deepcopy(normalized["internal_member"]),
         "member_api_token": normalized["member_api_token"],
+        "http_api_key": normalized["http_api_key"],
     }
 
 
@@ -310,6 +317,7 @@ def apply_runtime_account_profile(
             "username": automation_account["username"],
             "password": automation_account["password"],
             "team_name": automation_account["team_name"],
+            "http_api_key": normalized["http_api_key"],
         }
     )
     merged["account"] = account

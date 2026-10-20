@@ -18,6 +18,7 @@ from core.account_groups import (
     account_group_missing_fields,
     apply_runtime_account_profile,
     concurrent_account_group_conflicts,
+    default_account_groups,
     load_account_groups,
     runtime_account_profile,
     save_account_groups,
@@ -51,6 +52,7 @@ def _sample_group(name: str, suffix: str) -> dict:
             "member_id": f"internal-id-{suffix}",
         },
         "member_api_token": f"api-token-{suffix}",
+        "http_api_key": f"synthetic-http-api-key-{suffix}",
     }
 
 
@@ -83,6 +85,8 @@ class AccountGroupTests(unittest.TestCase):
                 loaded["group_2"]["case_external_member"]["name"],
                 "case-external-member-2",
             )
+            self.assertEqual(loaded["group_1"]["http_api_key"], "synthetic-http-api-key-1")
+            self.assertEqual(loaded["group_2"]["http_api_key"], "synthetic-http-api-key-2")
 
     def test_runtime_profile_overrides_login_and_member_api_data(self) -> None:
         profile = runtime_account_profile(_sample_group("macOS", "2"))
@@ -91,6 +95,8 @@ class AccountGroupTests(unittest.TestCase):
 
         self.assertEqual(merged["account"]["username"], "external-2@example.com")
         self.assertEqual(merged["account"]["team_name"], "team-2")
+        self.assertEqual(profile["http_api_key"], "synthetic-http-api-key-2")
+        self.assertEqual(merged["account"]["http_api_key"], "synthetic-http-api-key-2")
         api_data = merged["test_data"]["api_member_edit"]
         self.assertEqual(api_data["external_member_id"], "external-id-2")
         self.assertEqual(api_data["internal_member"]["member_id"], "internal-id-2")
@@ -123,6 +129,78 @@ class AccountGroupTests(unittest.TestCase):
             self.assertEqual(first["account"]["username"], "external-1@example.com")
             self.assertEqual(second["test_data"]["api_member_edit"]["internal_member"]["username"], "INTERNAL1")
             self.assertEqual(first["_account_group_name"], "Windows")
+            self.assertEqual(first["account"]["http_api_key"], "synthetic-http-api-key-1")
+            self.assertEqual(second["account"]["http_api_key"], "synthetic-http-api-key-1")
+
+    def test_http_api_key_migrates_only_to_first_default_group(self) -> None:
+        groups = default_account_groups({"account": {"http_api_key": "  synthetic-base-http-key  "}})
+
+        self.assertEqual(groups["group_1"]["http_api_key"], "synthetic-base-http-key")
+        self.assertEqual(groups["group_2"]["http_api_key"], "")
+
+    def test_legacy_groups_do_not_inherit_another_groups_http_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "account_groups.yaml"
+            groups = {
+                "group_1": _sample_group("Windows", "1"),
+                "group_2": _sample_group("macOS", "2"),
+            }
+            del groups["group_2"]["http_api_key"]
+            path.write_text(yaml.safe_dump({"groups": groups}), encoding="utf-8")
+
+            loaded = load_account_groups(path, base_config={"account": {"http_api_key": "synthetic-base-key"}})
+            first = apply_runtime_account_profile(DEFAULT_CONFIG, runtime_account_profile(loaded["group_1"]))
+            second = apply_runtime_account_profile(first, runtime_account_profile(loaded["group_2"]))
+
+        self.assertEqual(first["account"]["http_api_key"], "synthetic-http-api-key-1")
+        self.assertEqual(loaded["group_2"]["http_api_key"], "")
+        self.assertEqual(second["account"]["http_api_key"], "")
+        self.assertEqual(first["account"]["http_api_key"], "synthetic-http-api-key-1")
+
+    def test_http_api_validation_is_optional_and_independent_of_member_api(self) -> None:
+        incomplete = _sample_group("HTTP API only", "1")
+        incomplete["http_api_key"] = " "
+        incomplete["internal_member"] = {}
+        incomplete["automation_account"]["member_id"] = ""
+        incomplete["member_api_token"] = ""
+
+        self.assertEqual(account_group_missing_fields(incomplete), [])
+        self.assertEqual(account_group_missing_fields(incomplete, require_http_api=True), ["Http API 密钥"])
+        incomplete["http_api_key"] = "synthetic-replacement-key"
+        self.assertEqual(account_group_missing_fields(incomplete, require_http_api=True), [])
+
+    def test_account_group_ui_masks_and_saves_http_api_keys(self) -> None:
+        from streamlit.testing.v1 import AppTest
+
+        groups = {
+            "group_1": _sample_group("Windows", "1"),
+            "group_2": _sample_group("macOS", "2"),
+        }
+        page_path = Path(__file__).resolve().parents[2] / "ui" / "pages" / "03_账号组.py"
+        with (
+            patch("core.config.load_config", return_value=DEFAULT_CONFIG),
+            patch("core.account_groups.load_account_groups", return_value=groups),
+            patch("core.account_groups.save_account_groups") as save,
+        ):
+            app = AppTest.from_file(str(page_path)).run(timeout=20)
+            self.assertEqual(len(app.exception), 0)
+            for slot in ("group_1", "group_2"):
+                field = app.text_input(key=f"{slot}_http_api_key")
+                self.assertEqual(field.label, "Http API 密钥")
+                enum = field.proto.DESCRIPTOR.fields_by_name["type"].enum_type
+                self.assertEqual(enum.values_by_number[field.proto.type].name, "PASSWORD")
+            app.text_input(key="group_1_http_api_key").input("  synthetic-edited-http-key  ")
+            app.button[0].click().run(timeout=20)
+
+            self.assertEqual(len(app.exception), 0)
+            self.assertEqual(save.call_args.args[1]["group_1"]["http_api_key"], "synthetic-edited-http-key")
+            self.assertEqual(save.call_args.args[1]["group_2"]["http_api_key"], "synthetic-http-api-key-2")
+            app.toggle[0].set_value(True).run(timeout=20)
+
+            self.assertEqual(len(app.exception), 0)
+            field = app.text_input(key="group_1_http_api_key")
+            enum = field.proto.DESCRIPTOR.fields_by_name["type"].enum_type
+            self.assertEqual(enum.values_by_number[field.proto.type].name, "DEFAULT")
 
     def test_required_fields_expand_for_member_api_cases(self) -> None:
         incomplete = _sample_group("Incomplete", "1")
@@ -180,6 +258,7 @@ class AccountGroupTests(unittest.TestCase):
             "legacy-main@example.com",
         )
         self.assertEqual(profile["internal_member"]["username"], "LEGACY001")
+        self.assertEqual(profile["http_api_key"], "")
         self.assertEqual(
             profile["case_external_member"],
             {
@@ -239,6 +318,7 @@ class AccountGroupTests(unittest.TestCase):
         self.assertIn("--account-profile /tmp/dicloak/config/.ui_account_profile.yaml", command)
         self.assertNotIn("password", command)
         self.assertNotIn("api-token", command)
+        self.assertNotIn("synthetic-http-api-key", command)
 
     def test_remote_profile_is_staged_and_removed(self) -> None:
         host = RemoteHost(
@@ -268,6 +348,7 @@ class AccountGroupTests(unittest.TestCase):
         self.assertIn("--account-profile /tmp/profile.yaml", result.command)
         self.assertNotIn("external-password-2", result.command)
         self.assertNotIn("api-token-2", result.command)
+        self.assertNotIn("synthetic-http-api-key-2", result.command)
 
     def test_remote_profile_permission_failure_removes_partial_file(self) -> None:
         host = RemoteHost(
@@ -302,6 +383,9 @@ class AccountGroupTests(unittest.TestCase):
             profile_arg = command[command.index("--account-profile") + 1]
             path = Path(profile_arg)
             self.assertTrue(path.exists())
+            staged_profile = yaml.safe_load(path.read_text(encoding="utf-8"))
+            self.assertEqual(staged_profile["http_api_key"], "synthetic-http-api-key-1")
+            self.assertNotIn("synthetic-http-api-key-1", " ".join(command))
             captured_path.append(path)
             return 0
 

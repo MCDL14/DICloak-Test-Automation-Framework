@@ -9,7 +9,7 @@ from typing import Iterable, Mapping
 
 ENVIRONMENT_CREATE_API_URL = "https://gin-server.dicloak.com/gin/v1/env"
 ENVIRONMENT_BATCH_DELETE_API_URL = "https://gin-server.dicloak.com/gin/v1/env/batch"
-ENVIRONMENT_LIST_API_URL = "https://gin-server.dicloak.com/gin/v1/env/list"
+ENVIRONMENT_LIST_API_URL = "https://gin-server.dicloak.com/gin/v1/api/request/env"
 ENVIRONMENT_CREATE_REQUEST_TIMEOUT_SECONDS = 30
 ENVIRONMENT_CREATE_REQUEST_ATTEMPTS = 3
 ENVIRONMENT_CREATE_PAYLOAD_TEMPLATE_PATH = (
@@ -32,7 +32,8 @@ class EnvironmentCreateApiClient:
     """Create, list, and delete environments through the APP-authenticated API.
 
     The current token is read and used only inside the APP page context. It is
-    never returned to Python or included in log messages.
+    never returned to Python or included in log messages. List queries additionally
+    use the Http API key from the selected runtime account group.
     """
 
     def __init__(
@@ -43,12 +44,19 @@ class EnvironmentCreateApiClient:
         attempts: int = ENVIRONMENT_CREATE_REQUEST_ATTEMPTS,
         payload_template_path: Path | str = ENVIRONMENT_CREATE_PAYLOAD_TEMPLATE_PATH,
         device_id: str | None = None,
+        http_api_key: str | None = None,
     ) -> None:
         self.cdp = cdp_driver
         self.timeout_seconds = _positive_int(timeout_seconds, "timeout_seconds")
         self.attempts = _positive_int(attempts, "attempts")
         self.payload_template_path = Path(payload_template_path)
         self.device_id = str(device_id or "").strip()
+        config = getattr(cdp_driver, "config", None)
+        account = config.get("account", {}) if isinstance(config, Mapping) else {}
+        configured_key = account.get("http_api_key", "") if isinstance(account, Mapping) else ""
+        self.http_api_key = str(
+            (http_api_key if http_api_key is not None else configured_key) or ""
+        ).strip()
         self.logger = getattr(cdp_driver, "logger", None)
         self.last_created_environment_id = ""
         self.created_environment_ids: list[str] = []
@@ -145,12 +153,14 @@ class EnvironmentCreateApiClient:
         *,
         page_size: int = 10,
         page_no: int = 1,
-        env_tag_list_type: str = "CONTAIN",
-        order_by: str = "ENV_SERIAL_NUM",
-        sort: str = "DESC",
-        detail: bool = True,
+        env_tag_list_type: str | None = None,
+        order_by: str | None = None,
+        sort: str | None = None,
+        detail: bool | None = None,
         value: str | None = None,
     ) -> dict[str, object]:
+        if not self.http_api_key:
+            raise EnvironmentCreateRequestError("请在账号组配置中填写 Http API 密钥")
         payload = build_environment_list_payload(
             page_size=page_size,
             page_no=page_no,
@@ -162,7 +172,7 @@ class EnvironmentCreateApiClient:
         )
         identity = self.identity()
         return self._request_with_retry(
-            method="POST",
+            method="GET",
             api_url=ENVIRONMENT_LIST_API_URL,
             operation="list",
             identity=identity,
@@ -231,7 +241,11 @@ class EnvironmentCreateApiClient:
                 )
                 return response
             except Exception as exc:
-                last_error = exc
+                # Keep credentials out of logs and the chained traceback, even
+                # when a server or transport error echoes the request header.
+                last_error = EnvironmentCreateRequestError(
+                    self._redact_sensitive_text(str(exc))
+                )
                 self._log(
                     "warning",
                     "Environment %s API failed: attempt=%s/%s elapsed=%.2fs error=%s",
@@ -239,7 +253,7 @@ class EnvironmentCreateApiClient:
                     attempt,
                     self.attempts,
                     time.monotonic() - started,
-                    exc,
+                    last_error,
                 )
                 if attempt < self.attempts:
                     time.sleep(attempt)
@@ -257,7 +271,7 @@ class EnvironmentCreateApiClient:
     ) -> dict[str, object]:
         result = self.cdp.evaluate_with_args(
             """
-            async ({ method, version, deviceId, payload, timeoutMs, apiUrl }) => {
+            async ({ method, version, deviceId, httpKey, payload, timeoutMs, apiUrl }) => {
                 let state = {};
                 try {
                     state = JSON.parse(localStorage.getItem("basic:state") || "{}");
@@ -277,15 +291,24 @@ class EnvironmentCreateApiClient:
                         "x-version": version,
                     };
                     if (deviceId) headers["x-device-id"] = deviceId;
-                    const response = await fetch(apiUrl, {
+                    if (httpKey) headers["X-HTTP-KEY"] = httpKey;
+                    const url = new URL(apiUrl);
+                    const options = {
                         method,
                         headers,
-                        body: JSON.stringify(payload),
                         signal: controller.signal,
                         mode: "cors",
                         credentials: "omit",
                         referrerPolicy: "strict-origin-when-cross-origin",
-                    });
+                    };
+                    if (method.toUpperCase() === "GET") {
+                        for (const [name, value] of Object.entries(payload)) {
+                            url.searchParams.set(name, String(value));
+                        }
+                    } else {
+                        options.body = JSON.stringify(payload);
+                    }
+                    const response = await fetch(url.toString(), options);
                     return {
                         status: Number(response.status || 0),
                         response_body: await response.text(),
@@ -306,6 +329,7 @@ class EnvironmentCreateApiClient:
                 "method": method,
                 "version": identity.app_version,
                 "deviceId": self.device_id,
+                "httpKey": self.http_api_key if api_url == ENVIRONMENT_LIST_API_URL else "",
                 "payload": payload,
                 "timeoutMs": self.timeout_seconds * 1000,
                 "apiUrl": api_url,
@@ -314,8 +338,11 @@ class EnvironmentCreateApiClient:
         if not isinstance(result, dict):
             raise EnvironmentCreateRequestError("environment API request did not return an object")
         if result.get("error"):
-            raise EnvironmentCreateRequestError(str(result.get("error")))
+            raise EnvironmentCreateRequestError(self._redact_sensitive_text(str(result.get("error"))))
         return result
+
+    def _redact_sensitive_text(self, text: str) -> str:
+        return text.replace(self.http_api_key, "<redacted>") if self.http_api_key else text
 
     def _log(self, level: str, message: str, *args: object) -> None:
         if self.logger is not None:
@@ -393,25 +420,27 @@ def build_environment_list_payload(
     *,
     page_size: int = 10,
     page_no: int = 1,
-    env_tag_list_type: str = "CONTAIN",
-    order_by: str = "ENV_SERIAL_NUM",
-    sort: str = "DESC",
-    detail: bool = True,
+    env_tag_list_type: str | None = None,
+    order_by: str | None = None,
+    sort: str | None = None,
+    detail: bool | None = None,
     value: str | None = None,
 ) -> dict[str, object]:
-    if not isinstance(detail, bool):
+    if detail is not None and not isinstance(detail, bool):
         raise ValueError("environment list detail must be a boolean")
     payload: dict[str, object] = {
         "page_size": _positive_int(page_size, "environment list page_size"),
         "page_no": _positive_int(page_no, "environment list page_no"),
-        "env_tag_list_type": _non_empty_string(
-            env_tag_list_type,
-            "environment list env_tag_list_type",
-        ),
-        "order_by": _non_empty_string(order_by, "environment list order_by"),
-        "sort": _non_empty_string(sort, "environment list sort"),
-        "detail": detail,
     }
+    for label, field_value in (
+        ("env_tag_list_type", env_tag_list_type),
+        ("order_by", order_by),
+        ("sort", sort),
+    ):
+        if field_value is not None:
+            payload[label] = _non_empty_string(field_value, f"environment list {label}")
+    if detail is not None:
+        payload["detail"] = detail
     clean_value = str(value or "").strip()
     if clean_value:
         payload["value"] = clean_value

@@ -108,6 +108,9 @@ _MEMBER_API_CASE_MARKERS = (
     ".test_14_api_disable_internal_member.",
     ".test_15_api_disuse_internal_member.",
 )
+_HTTP_API_CASE_MARKERS = (
+    ".test_29_new_environment_cookie_persistence.",
+)
 _INTERNAL_ACCOUNT_CASE_MARKERS = (
     ".test_08_filter_member_login_account_email.",
     ".test_11_no_edit_permission_member.",
@@ -350,7 +353,7 @@ def _account_group_options() -> dict[str, str]:
     return result
 
 
-def _selected_account_requirements(case_ids: list[str]) -> tuple[bool, bool, bool, bool]:
+def _selected_account_requirements(case_ids: list[str]) -> tuple[bool, bool, bool, bool, bool]:
     require_member_api = any(
         marker in case_id
         for case_id in case_ids
@@ -371,7 +374,12 @@ def _selected_account_requirements(case_ids: list[str]) -> tuple[bool, bool, boo
         for case_id in case_ids
         for marker in _CASE_EXTERNAL_MEMBER_CASE_MARKERS
     )
-    return require_internal, require_member_ids, require_member_api, require_case_external
+    require_http_api = any(
+        marker in case_id
+        for case_id in case_ids
+        for marker in _HTTP_API_CASE_MARKERS
+    )
+    return require_internal, require_member_ids, require_member_api, require_case_external, require_http_api
 
 # 按模块分组
 by_module: dict[str, list[dict]] = defaultdict(list)
@@ -867,6 +875,7 @@ selected_count = len(selected_ids)
     require_member_ids,
     require_member_api,
     require_case_external,
+    require_http_api,
 ) = _selected_account_requirements(selected_ids)
 account_group_options = _account_group_options()
 account_group_labels = list(account_group_options)
@@ -1010,6 +1019,7 @@ with st.sidebar:
         require_member_ids=require_member_ids,
         require_member_api=require_member_api,
         require_case_external=require_case_external,
+        require_http_api=require_http_api,
     )
     remote_account_missing = account_group_missing_fields(
         account_groups[remote_account_group_slot],
@@ -1017,6 +1027,7 @@ with st.sidebar:
         require_member_ids=require_member_ids,
         require_member_api=require_member_api,
         require_case_external=require_case_external,
+        require_http_api=require_http_api,
     )
 
     st.divider()

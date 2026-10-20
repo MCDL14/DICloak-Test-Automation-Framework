@@ -40,7 +40,7 @@ except (ConfigError, AccountGroupError) as exc:
     st.stop()
 
 show_passwords = st.toggle(
-    "显示密码和 Open API token",
+    "显示密码、Open API token 和 Http API 密钥",
     value=False,
     help="只控制当前页面输入框显示方式，不会把敏感信息写入日志。",
 )
@@ -141,6 +141,14 @@ with st.form("account_groups_form"):
                 help="停用和到期用例调用成员编辑 Open API。不同团队必须使用对应团队的 token。",
             ).strip()
 
+            http_api_key = st.text_input(
+                "Http API 密钥",
+                value=group["http_api_key"],
+                type=secret_input_type,
+                key=f"{slot}_http_api_key",
+                help="供环境列表 Http API 使用；不同账号组请配置各自团队的密钥。",
+            ).strip()
+
             edited_groups[slot] = {
                 "name": group_name,
                 "automation_account": {
@@ -159,6 +167,7 @@ with st.form("account_groups_form"):
                     "member_id": internal_member_id,
                 },
                 "member_api_token": member_api_token,
+                "http_api_key": http_api_key,
             }
 
     saved = st.form_submit_button("保存两个账号组", type="primary", use_container_width=True)

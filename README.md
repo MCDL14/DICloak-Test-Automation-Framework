@@ -217,8 +217,9 @@ UI 支持用例发现、按模块筛选、批量选择、实时日志、执行�
 - 普通 UI 用例使用的外部成员名称和邮箱，与自动化主账号严格区分。
 - 内部成员账号、密码和内部成员 ID。
 - 该团队的成员 Open API token；停用/到期用例跨团队执行时不能共用另一个团队的 token。
+- Http API 密钥；用于环境查询接口的 `X-HTTP-KEY`，每组独立填写，运行“新环境 Cookie 数据同步恢复”前必须配置。
 
-保存位置为 `config/account_groups.yaml`。该文件会记住密码和 token，已加入 `.gitignore`；编辑页面提供“显示密码和 Open API token”开关。仓库只提交不含真实凭据的 `config/account_groups.example.yaml`。
+保存位置为 `config/account_groups.yaml`。该文件会记住密码、token 和 Http API 密钥，已加入 `.gitignore`；编辑页面提供“显示密码、Open API token 和 Http API 密钥”开关。仓库只提交不含真实凭据的 `config/account_groups.example.yaml`。
 
 执行页提供三种位置：
 
@@ -228,7 +229,7 @@ UI 支持用例发现、按模块筛选、批量选择、实时日志、执行�
 
 两个团队还需要准备一致的业务基线数据。当前全量用例会直接使用成员组 `运营组/管理组`、环境组 `未分组/分组二/分组三`、固定成员备注和环境标签等数据；某个团队缺少这些数据时，只会影响依赖该数据的用例，不代表同步执行通道失败。成员创建用例使用按账号组稳定生成的测试邮箱和内部登录账号，避免双端同时创建时发生平台级唯一值冲突。上级经理、外部成员编辑、邮箱筛选和成员导出从账号组的“用例所需外部成员”读取名称/邮箱，不读取自动化主账号及其 ID；成员导出还会监听 `GET /gin/v1/member`，实时获取 `自动化成员1` 和该外部成员的接口记录及真实 ID，再与导出 Excel 的 14 列逐列比较。
 
-执行时只把当前执行端选中的一组写入临时运行配置。Windows 临时文件在子进程结束后删除；macOS 临时文件通过 SFTP 以 `0600` 权限上传，SSH 命令结束后删除。密码和 token 不会拼入命令预览或运行日志。远端代码快照同步强制排除 `account_groups.yaml` 和 `.ui_account_profile_*.yaml`，即使自定义同步规则包含整个 `config/` 也不会上传两组凭据。
+执行时只把当前执行端选中的一组写入临时运行配置。Windows 临时文件在子进程结束后删除；macOS 临时文件通过 SFTP 以 `0600` 权限上传，SSH 命令结束后删除。密码、token 和 Http API 密钥不会拼入命令预览或运行日志。远端代码快照同步强制排除 `account_groups.yaml` 和 `.ui_account_profile_*.yaml`，即使自定义同步规则包含整个 `config/` 也不会上传两组凭据。
 
 ### UI 远程节点执行
 
@@ -425,12 +426,37 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 全局设置页面会在进入后预先安装 `org_config` POST 响应监听。点击“确定”后不再等待“保存成功”提示，而是等待对应团队接口返回、页面 loading 结束并校验 HTTP 200 和业务 `code=0`；异常时最多点击“确定”3 次，每次等待 20 秒。成功响应的完整请求体会作为本次保存期望，再通过 GET 做语义复查。直接 GET/POST 的单次超时为 30 秒，最多尝试 3 次，请求头从当前 APP 获取版本、登录 token 和团队 ID，不发送 `X-Device-Id`，也不把 token 返回到 Python 或写入日志。
 
-框架已提供环境接口创建、列表查询和批量删除能力，并已正式接入 `test_29_new_environment_cookie_persistence.py`。`EnvironmentCreateApiClient` 在当前 APP 页面上下文读取 `basic:state` 登录 token，并从页面标题读取 APP 版本，请求时分别写入 `x-token`、`x-version`；token 不返回 Python、不写日志。真实列表接口还要求 APP 当前请求的 `x-device-id`；正式 P0 通过 Playwright 侦听普通环境列表请求动态取得该值，不读取或传回 token。创建请求使用 `POST https://gin-server.dicloak.com/gin/v1/env`，固定请求体来自 `test_data/environment_create_api_payload.json`；调用方可传 `browser_version_id`、`name` 和可选 `remark`，内核默认 `142`，备注为空时请求体不包含 `remark`。创建成功后仍返回完整响应，同时将精确的 `data.id` 保存到 `last_created_environment_id`，并把本客户端会话内的非重复 ID 记录到 `created_environment_ids`。列表请求使用 `POST https://gin-server.dicloak.com/gin/v1/env/list`，支持参数化 `page_size`、`page_no`、`env_tag_list_type`、`order_by`、`sort`、`detail` 和环境名称筛选字段 `value`；`environment_ids_by_name()` 会从真实响应 `data.list` 中按精确名称提取 ID。批量删除请求使用 `DELETE https://gin-server.dicloak.com/gin/v1/env/batch`，请求体为 `{"ids": [...]}`，删除成功后同步清理客户端保存的对应 ID。三种请求均要求 HTTP 200、JSON 对象和业务 `code=0`。本地 curl 实例含真实 token，已通过 `.gitignore` 排除。
+用例 finally 只 GET 检查本用例实际影响的配置或位；主流程已经恢复成功时跳过重复 POST，仍有差异时把当前 GET 数据与固定基准合并成完整 POST 请求体，只回填本用例影响的块或位，再 GET 复查。原有保存前后复选框、开关、下拉值和意外联动 UI 断言继续保留，因此接口恢复不会替代功能流程本身的页面校验。
+
+### 环境接口与 Http API 密钥
+
+`EnvironmentCreateApiClient` 已提供环境创建、列表查询和批量删除能力，并正式接入 `test_29_new_environment_cookie_persistence.py`（新环境 Cookie 数据同步恢复）。当前接口主机为 `https://gin-server.dicloak.com`：
+
+| 能力 | 方法与路径 | 参数位置与说明 |
+| --- | --- | --- |
+| 创建环境 | `POST /gin/v1/env` | JSON 请求体；模板为 `test_data/environment_create_api_payload.json`，支持 `browser_version_id`（默认 `142`）、`name` 和可选 `remark` |
+| 查询环境 | `GET /gin/v1/api/request/env` | URL 查询参数 `page_no/page_size/value`，不发送请求体；仅此接口新增 `X-HTTP-KEY` |
+| 批量删除 | `DELETE /gin/v1/env/batch` | JSON 请求体 `{"ids": [...]}`；方法、路径及鉴权方式保持不变 |
+
+鉴权与配置来源：
+
+- `x-token`：继续读取当前 APP 页面 `localStorage["basic:state"]` 中的登录 token，不新增 `X-API-KEY`，也不复制请求示例中的固定 token 或 Cookie。token 不返回 Python、不写日志。
+- `x-version`：从 APP 页面标题读取当前版本。正式 Cookie 用例仍监听 APP 自身的 `POST /gin/v1/env/list` 请求以动态取得 `x-device-id`；这是 APP 的原有请求，不是框架查询接口回退。
+- `X-HTTP-KEY`：UI 账号组中的“Http API 密钥”，保存字段为 `groups.group_1.http_api_key` / `groups.group_2.http_api_key`，运行时注入 `account.http_api_key`。客户端默认从该运行配置读取，也支持显式传入 `http_api_key=`；显式空值不会回退取其它配置。它与成员用例的 Open API token 是不同配置项，不可互相替代。
+
+本机、远端分别使用执行页所选账号组的密钥；双端执行时各用各的组。旧账号组配置缺少字段时按空值处理，不借用另一组密钥。选中上述 Cookie 用例时，执行页会提前校验；客户端直接查询而未配置时提示“请在账号组配置中填写 Http API 密钥”。其它用例不会仅因该字段为空而被阻止。填写和保存步骤见 `UI使用文档.md` 第 4.3 节，安全示例见 `config/account_groups.example.yaml`。
+
+列表默认 `page_no=1`、`page_size=10`，仅非空 `value` 才加入名称筛选；`env_tag_list_type/order_by/sort/detail` 等旧选项仍可显式传入，并转为 URL 查询参数。名称中的中文、空格和特殊字符由客户端编码，不应手动拼接 URL。`environment_ids_by_name()` 使用 `value` 查询后再按完整名称精确匹配并去重 ID，默认只查第 1 页、每页 100 条；目前不自动遍历后续页，不能当作全量分页查询。
+
+创建响应的 `data.id` 保存到 `last_created_environment_id` 和去重的 `created_environment_ids`；删除成功后清除客户端记录的对应 ID。三种请求均校验 HTTP 200、JSON 对象和业务 `code=0`。Http 密钥会从错误日志及异常链中脱敏；长期账号配置保存在本机忽略提交的文件中，运行时仅按所选组生成临时配置并在结束后清理，不应把真实值写入文档、测试代码或版本化示例。
+
+以下为调用方式示意，不会自动执行；`cdp_driver` 应已连接登录完成的 APP，并具有当前账号组运行配置：
 
 ```python
 from core.environment_create_api import EnvironmentCreateApiClient
 
 client = EnvironmentCreateApiClient(cdp_driver, device_id=current_app_device_id)
+# 查询时默认读取 cdp_driver.config["account"]["http_api_key"]
 response = client.create_environment(
     name="自动化-接口创建环境",
     browser_version_id="142",
@@ -445,13 +471,15 @@ list_response = client.list_environments(
 delete_response = client.delete_environments([environment_id])
 ```
 
-用例 finally 只 GET 检查本用例实际影响的配置或位；主流程已经恢复成功时跳过重复 POST，仍有差异时把当前 GET 数据与固定基准合并成完整 POST 请求体，只回填本用例影响的块或位，再 GET 复查。原有保存前后复选框、开关、下拉值和意外联动 UI 断言继续保留，因此接口恢复不会替代功能流程本身的页面校验。
+正式 Cookie 用例在创建前用接口检查并清理同名环境；创建后用列表接口确认返回的 ID 存在，再在 APP 搜索并完成打开、关闭与 Cookie 恢复流程；删除后用列表接口确认同名环境已不存在，再清空 APP 筛选，不重复在 APP 搜索验证删除。异常清理同样使用接口。原接口生命周期拷贝用例已删除，目前只维护正式用例。
+
+### 阶段耗时日志
 
 长耗时链路已接入非侵入式阶段耗时日志，运行日志中可按 `PHASE elapsed` / `PHASE failed` 检索环境列表打开、环境创建提交、环境打开、环境关闭、环境删除、全局设置打开、快照采集、快照恢复和保存等待等阶段耗时。阶段日志只记录耗时和上下文，不参与断言、不吞异常，也不改变用例执行流程。
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；P1 完整组件回归为 `Ran 276 tests ... OK`。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；最近记录的完整 P1 组件回归为 2026-10-16 的 `Ran 287 tests ... OK`，不是本次文档更新新增的测试结果。
 
 当前成员分组管理模块已接入 2 条 P0 用例，文件位于 `tests/p0/member_group_management/`：
 

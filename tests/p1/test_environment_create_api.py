@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import traceback
 import unittest
 from unittest import mock
 
@@ -87,10 +88,6 @@ class EnvironmentCreatePayloadTests(unittest.TestCase):
             {
                 "page_size": 10,
                 "page_no": 1,
-                "env_tag_list_type": "CONTAIN",
-                "order_by": "ENV_SERIAL_NUM",
-                "sort": "DESC",
-                "detail": True,
             },
         )
         self.assertNotIn("value", build_environment_list_payload(value="   "))
@@ -122,6 +119,10 @@ class EnvironmentCreatePayloadTests(unittest.TestCase):
             build_environment_list_payload(page_no="invalid")
         with self.assertRaisesRegex(ValueError, "order_by is empty"):
             build_environment_list_payload(order_by=" ")
+        with self.assertRaisesRegex(ValueError, "env_tag_list_type is empty"):
+            build_environment_list_payload(env_tag_list_type=" ")
+        with self.assertRaisesRegex(ValueError, "sort is empty"):
+            build_environment_list_payload(sort=" ")
         with self.assertRaisesRegex(ValueError, "detail must be a boolean"):
             build_environment_list_payload(detail="true")  # type: ignore[arg-type]
 
@@ -129,6 +130,7 @@ class EnvironmentCreatePayloadTests(unittest.TestCase):
 class EnvironmentCreateApiClientTests(unittest.TestCase):
     def setUp(self) -> None:
         self.cdp = mock.MagicMock()
+        self.cdp.config = {}
         self.cdp.evaluate.return_value = {
             "has_token": True,
             "app_version": "2.9.21",
@@ -177,6 +179,7 @@ class EnvironmentCreateApiClientTests(unittest.TestCase):
         self.assertEqual(request_args["apiUrl"], ENVIRONMENT_CREATE_API_URL)
         self.assertEqual(request_args["version"], "2.9.21")
         self.assertEqual(request_args["deviceId"], "current-device-id")
+        self.assertEqual(request_args["httpKey"], "")
         self.assertEqual(request_args["payload"]["browser_version_id"], "142")
         self.assertEqual(request_args["payload"]["name"], "自动化-接口创建环境")
         self.assertNotIn("remark", request_args["payload"])
@@ -230,6 +233,7 @@ class EnvironmentCreateApiClientTests(unittest.TestCase):
         self.assertEqual(request_args["apiUrl"], ENVIRONMENT_BATCH_DELETE_API_URL)
         self.assertEqual(request_args["version"], "2.9.21")
         self.assertEqual(request_args["deviceId"], "current-device-id")
+        self.assertEqual(request_args["httpKey"], "")
         self.assertEqual(
             request_args["payload"],
             {"ids": ["environment-01", "environment-02"]},
@@ -251,13 +255,17 @@ class EnvironmentCreateApiClientTests(unittest.TestCase):
         self.assertEqual(client.created_environment_ids, ["environment-01"])
         self.assertEqual(client.last_created_environment_id, "")
 
-    def test_list_uses_current_identity_post_method_url_and_payload(self) -> None:
+    def test_list_uses_current_identity_get_method_url_query_and_http_key(self) -> None:
         self.cdp.evaluate_with_args.return_value = {
             "status": 200,
             "response_body": '{"code":0,"msg":"成功","data":{"list":[]}}',
             "error": "",
         }
-        client = EnvironmentCreateApiClient(self.cdp, device_id="current-device-id")
+        client = EnvironmentCreateApiClient(
+            self.cdp,
+            device_id="current-device-id",
+            http_api_key=" hapi_unit-test-key ",
+        )
 
         response = client.list_environments(
             page_size=20,
@@ -272,23 +280,175 @@ class EnvironmentCreateApiClientTests(unittest.TestCase):
         self.assertIn('"x-token": token', request_script)
         self.assertIn('"x-version": version', request_script)
         self.assertIn('headers["x-device-id"] = deviceId', request_script)
-        self.assertEqual(request_args["method"], "POST")
+        self.assertEqual(request_args["method"], "GET")
         self.assertEqual(request_args["apiUrl"], ENVIRONMENT_LIST_API_URL)
+        self.assertEqual(
+            ENVIRONMENT_LIST_API_URL,
+            "https://gin-server.dicloak.com/gin/v1/api/request/env",
+        )
         self.assertEqual(request_args["version"], "2.9.21")
         self.assertEqual(request_args["deviceId"], "current-device-id")
+        self.assertEqual(request_args["httpKey"], "hapi_unit-test-key")
+        self.assertNotIn("X-API-KEY", request_script)
         self.assertEqual(
             request_args["payload"],
             {
                 "page_size": 20,
                 "page_no": 2,
-                "env_tag_list_type": "CONTAIN",
-                "order_by": "ENV_SERIAL_NUM",
-                "sort": "DESC",
                 "detail": False,
                 "value": "自动化-筛选环境",
             },
         )
         self.assertNotIn("token", request_args)
+
+    def test_list_reads_http_api_key_from_runtime_account_configuration(self) -> None:
+        self.cdp.config = {
+            "account": {
+                "http_api_key": " hapi_runtime-account-key ",
+                "api_key": "unrelated-open-api-key",
+            }
+        }
+        self.cdp.evaluate_with_args.return_value = {
+            "status": 200,
+            "response_body": '{"code":0,"data":{"list":[]}}',
+            "error": "",
+        }
+
+        EnvironmentCreateApiClient(self.cdp).list_environments(value="142")
+
+        request_args = self.cdp.evaluate_with_args.call_args.args[1]
+        self.assertEqual(request_args["httpKey"], "hapi_runtime-account-key")
+        self.assertEqual(
+            request_args["payload"],
+            {"page_no": 1, "page_size": 10, "value": "142"},
+        )
+
+    def test_explicit_http_api_key_overrides_configured_key(self) -> None:
+        self.cdp.config = {"account": {"http_api_key": "hapi_configured-key"}}
+        self.cdp.evaluate_with_args.return_value = {
+            "status": 200,
+            "response_body": '{"code":0,"data":{"list":[]}}',
+            "error": "",
+        }
+
+        EnvironmentCreateApiClient(
+            self.cdp, http_api_key="hapi_explicit-key"
+        ).list_environments()
+
+        self.assertEqual(
+            self.cdp.evaluate_with_args.call_args.args[1]["httpKey"],
+            "hapi_explicit-key",
+        )
+
+    def test_missing_http_api_key_only_blocks_list_requests(self) -> None:
+        client = EnvironmentCreateApiClient(self.cdp)
+
+        with self.assertRaisesRegex(
+            EnvironmentCreateRequestError,
+            "请在账号组配置中填写 Http API 密钥",
+        ):
+            client.list_environments()
+        self.cdp.evaluate.assert_not_called()
+        self.cdp.evaluate_with_args.assert_not_called()
+
+        self.cdp.evaluate_with_args.side_effect = [
+            {
+                "status": 200,
+                "response_body": '{"code":0,"data":{"id":"created-id"}}',
+                "error": "",
+            },
+            {"status": 200, "response_body": '{"code":0}', "error": ""},
+        ]
+        client.create_environment(name="自动化-无HTTP密钥创建环境")
+        client.delete_environments("created-id")
+        self.assertEqual(self.cdp.evaluate_with_args.call_count, 2)
+        for call in self.cdp.evaluate_with_args.call_args_list:
+            self.assertEqual(call.args[1]["httpKey"], "")
+
+    def test_explicit_empty_key_does_not_use_configuration_or_other_keys(self) -> None:
+        self.cdp.config = {
+            "account": {
+                "http_api_key": "hapi_configured-key",
+                "api_key": "unrelated-open-api-key",
+                "token": "unrelated-login-token",
+            }
+        }
+        for explicit_key in ("", "   "):
+            with self.subTest(explicit_key=explicit_key):
+                with self.assertRaisesRegex(
+                    EnvironmentCreateRequestError, "Http API 密钥"
+                ):
+                    EnvironmentCreateApiClient(
+                        self.cdp, http_api_key=explicit_key
+                    ).list_environments()
+        self.cdp.config = {"account": {"api_key": "unrelated-open-api-key"}}
+        with self.assertRaisesRegex(EnvironmentCreateRequestError, "Http API 密钥"):
+            EnvironmentCreateApiClient(self.cdp).list_environments()
+        self.cdp.evaluate_with_args.assert_not_called()
+
+    def test_non_mapping_runtime_configuration_does_not_produce_a_mock_key(self) -> None:
+        for config in (
+            None,
+            [],
+            mock.MagicMock(),
+            {"account": None},
+            {"account": mock.MagicMock()},
+        ):
+            with self.subTest(config_type=type(config).__name__):
+                self.cdp.config = config
+                with self.assertRaisesRegex(
+                    EnvironmentCreateRequestError, "Http API 密钥"
+                ):
+                    EnvironmentCreateApiClient(self.cdp).list_environments()
+        self.cdp.evaluate_with_args.assert_not_called()
+
+    def test_list_failure_redacts_http_key_from_logs_and_exception_chain(self) -> None:
+        secret = "hapi_fake-secret-for-redaction"
+        failures = (
+            RuntimeError(f"transport failed while forwarding {secret}"),
+            {"status": 0, "response_body": "", "error": f"fetch failed: {secret}"},
+            {
+                "status": 200,
+                "response_body": json.dumps({"code": 1, "msg": f"denied: {secret}"}),
+                "error": "",
+            },
+        )
+        for failure in failures:
+            with self.subTest(failure_type=type(failure).__name__):
+                self.cdp.logger.reset_mock()
+                self.cdp.evaluate_with_args.side_effect = None
+                if isinstance(failure, Exception):
+                    self.cdp.evaluate_with_args.side_effect = failure
+                else:
+                    self.cdp.evaluate_with_args.return_value = failure
+                client = EnvironmentCreateApiClient(
+                    self.cdp, http_api_key=secret, attempts=1
+                )
+                try:
+                    client.list_environments()
+                except EnvironmentCreateRequestError as exc:
+                    error_text = "".join(traceback.format_exception(exc))
+                else:
+                    self.fail("list request should fail")
+                self.assertNotIn(secret, error_text)
+                self.assertIn("<redacted>", error_text)
+                warning = self.cdp.logger.warning.call_args
+                rendered_warning = warning.args[0] % warning.args[1:]
+                self.assertNotIn(secret, rendered_warning)
+                self.assertIn("<redacted>", rendered_warning)
+
+    def test_successful_list_logs_do_not_include_http_api_key(self) -> None:
+        secret = "hapi_fake-secret-for-success-log"
+        self.cdp.evaluate_with_args.return_value = {
+            "status": 200,
+            "response_body": '{"code":0,"data":{"list":[]}}',
+            "error": "",
+        }
+
+        EnvironmentCreateApiClient(self.cdp, http_api_key=secret).list_environments()
+
+        self.assertNotIn(secret, str(self.cdp.logger.mock_calls))
+        self.cdp.logger.info.assert_called_once()
 
     def test_environment_ids_by_name_uses_exact_name_and_supported_id_fields(self) -> None:
         self.cdp.evaluate_with_args.return_value = {
@@ -308,7 +468,7 @@ class EnvironmentCreateApiClientTests(unittest.TestCase):
             ),
             "error": "",
         }
-        client = EnvironmentCreateApiClient(self.cdp)
+        client = EnvironmentCreateApiClient(self.cdp, http_api_key="hapi_unit-test-key")
 
         self.assertEqual(
             client.environment_ids_by_name("目标环境"),

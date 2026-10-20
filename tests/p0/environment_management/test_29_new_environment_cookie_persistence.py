@@ -48,6 +48,8 @@ class TestNewEnvironmentCookiePersistence(unittest.TestCase):
         cls.cdp.close()
 
     def test_new_environment_cookie_survives_close_reopen_and_local_cache_deletion(self) -> None:
+        http_api_key = str(self.config.get("account", {}).get("http_api_key") or "").strip()
+        assert_true(bool(http_api_key), "请在账号组配置中填写 Http API 密钥")
         environment_open_timeout = timeout_seconds(self.config, "environment_open_seconds", 90)
         environment_close_timeout = timeout_seconds(self.config, "environment_close_seconds", 90)
         kernel_process_timeout = timeout_seconds(self.config, "kernel_process_seconds", 90)
@@ -88,6 +90,7 @@ class TestNewEnvironmentCookiePersistence(unittest.TestCase):
             environment_api = EnvironmentCreateApiClient(
                 self.cdp,
                 device_id=device_id,
+                http_api_key=http_api_key,
             )
             stale_environment_ids = self._environment_ids_from_api(environment_api)
             if stale_environment_ids:

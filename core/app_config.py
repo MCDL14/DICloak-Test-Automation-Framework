@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ class ResolvedAppConfig:
     process_name: str
     browser_process_name: str
     startup_args: list[str]
+    cdp_auth: dict[str, Any] = field(default_factory=dict)
 
 
 def resolve_app_config(config: dict[str, Any], platform_name: str | None = None) -> ResolvedAppConfig:
@@ -40,6 +41,9 @@ def resolve_app_config(config: dict[str, Any], platform_name: str | None = None)
     else:
         work_dir = Path("")
 
+    auth = app.get("cdp_auth", {})
+    platform_auth = platform_app.get("cdp_auth", {})
+    auth = {**(auth if isinstance(auth, dict) else {}), **(platform_auth if isinstance(platform_auth, dict) else {})}
     return ResolvedAppConfig(
         platform_name=platform_key,
         exe_path=exe_path,
@@ -49,6 +53,7 @@ def resolve_app_config(config: dict[str, Any], platform_name: str | None = None)
             platform_app.get("browser_process_name", app.get("browser_process_name", _default_browser_process_name(platform_key)))
         ),
         startup_args=[str(arg) for arg in platform_app.get("startup_args", app.get("startup_args", []))],
+        cdp_auth=auth,
     )
 
 

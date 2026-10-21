@@ -8,6 +8,11 @@ __pycache__/
 venv/
 env/
 
+# APP CDP 签发私钥仅部署在仓库外，防止误提交密钥文件。
+*.[pP][eE][mM]
+*.[kK][eE][yY]
+*.cdp-auth.local.yaml
+
 config/config.yaml
 config/test_data.yaml
 config/remote_hosts.yaml

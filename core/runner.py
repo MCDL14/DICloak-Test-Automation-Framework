@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import sys
 import time
 import unittest
@@ -13,7 +14,7 @@ from core.case_module import get_test_case_module, normalize_case_module, suppor
 from core.cdp_driver import CDPConnectionError, CDPDriver
 from core.circuit_breaker import BreakerName, CircuitBreakerRegistry
 from core.feishu import FeishuNotifier
-from core.precheck import EnvironmentPrechecker
+from core.precheck import EnvironmentPrechecker, is_cdp_port_open, is_local_cdp_host
 from core.result import AutomationTextRunner, RunResult
 from core.runtime_services import (
     RuntimeServiceError,
@@ -30,6 +31,37 @@ class ExitCode:
     USER_INTERRUPTED = 130
 
 
+_SENSITIVE_STARTUP_ERROR = re.compile(
+    r"--(?:dicloak-debug-token|private-key)(?:[=\s]|$)"
+    r"|[\"']?(?:token|x[-_]token|(?:access|refresh|debug)[-_]token|x[-_]http[-_]key|"
+    r"http_api_key|api[-_]key|authorization|password|private[-_]key(?:[-_]path)?)[\"']?\s*[:=]"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r"|[A-Za-z0-9_-]{30,}\.[A-Za-z0-9_-]{40,}",
+    re.IGNORECASE,
+)
+
+
+def _safe_startup_failure_detail(exc: AppStartupError | CDPConnectionError | OSError) -> str:
+    """Keep diagnostics useful without logging subprocess commands or credentials."""
+    if isinstance(exc, OSError):
+        # OSError may embed argv, file contents, or credential paths. Do not echo
+        # its message or filename, even when notification is disabled.
+        errno_detail = f"，系统错误码 {exc.errno}" if isinstance(exc.errno, int) else ""
+        return (
+            f"APP 启动或 CDP 连接发生系统错误（{type(exc).__name__}{errno_detail}），"
+            "请检查可执行文件、工作目录、文件权限与端口状态；原始系统错误内容已隐藏"
+        )
+    message = str(exc).strip()
+    if _SENSITIVE_STARTUP_ERROR.search(message):
+        return (
+            f"{type(exc).__name__}：错误信息包含启动凭证或其他敏感参数，已隐藏；"
+            "请检查凭证签发配置、APP 启动权限与 CDP 端口状态"
+        )
+    # Keep a single bounded log record; never emit an exception chain/traceback.
+    message = " ".join(message.split())[:1200] or "未提供错误详情"
+    return f"{type(exc).__name__}：{message}"
+
+
 class AutomationRunner:
     PRIORITY_TEST_MODULES = (
         "tests.p0.environment_management.test_01_kernel_integrity",
@@ -41,9 +73,20 @@ class AutomationRunner:
         self.notifier = FeishuNotifier(config, logger)
         self.breakers = CircuitBreakerRegistry()
 
-    def run_precheck_only(self) -> int:
-        result = EnvironmentPrechecker(self.config, self.logger).run()
+    def run_precheck_only(self, *, attach_existing_app: bool = False) -> int:
+        reuse_existing_app = self._reuse_existing_app(attach_existing_app)
+        result = EnvironmentPrechecker(self.config, self.logger).run(attach_existing_app=reuse_existing_app)
         return ExitCode.SUCCESS if result.passed else ExitCode.CONFIG_OR_PRECHECK_ERROR
+
+    def _reuse_existing_app(self, requested: bool) -> bool:
+        if not requested:
+            return False
+        available = is_cdp_port_open(self.config)
+        if available:
+            self.logger.info("Attach existing APP: configured CDP port is listening; reusing APP without signing or restarting")
+        else:
+            self.logger.warning("连接已打开 APP：未发现配置的 CDP 端口，将先检查签发配置，再重新启动 APP；预检模式不会实际重启")
+        return available
 
     def run(
         self,
@@ -53,8 +96,10 @@ class AutomationRunner:
         case: str | list[str] | tuple[str, ...] | None = None,
         attach_existing_app: bool = False,
     ) -> int:
+        # Decide once per run. A later CDP attach error must not kill a user APP.
+        reuse_existing_app = self._reuse_existing_app(attach_existing_app)
         if self.config["run"].get("precheck_before_run", True):
-            precheck = EnvironmentPrechecker(self.config, self.logger).run()
+            precheck = EnvironmentPrechecker(self.config, self.logger).run(attach_existing_app=reuse_existing_app)
             if not precheck.passed:
                 self.notifier.send_failure(
                     "Dicloak 自动化环境预检失败",
@@ -94,10 +139,16 @@ class AutomationRunner:
         app_started = False
         try:
             try:
-                if attach_existing_app:
-                    self.logger.info("Attach existing APP mode enabled; skipping APP startup and shutdown")
+                if reuse_existing_app:
+                    self.logger.info("Attach existing APP mode enabled; CDP port found, skipping APP startup and shutdown")
                 else:
-                    app_started = app_manager.launch_fresh()
+                    if attach_existing_app:
+                        if not is_local_cdp_host(self.config):
+                            raise AppStartupError("CDP 端口未监听且配置不是本机地址，不能通过关闭本机 APP 恢复远端端口")
+                        # Fresh credentials are prepared before forcing the old APP closed.
+                        app_started = app_manager.launch_fresh(force_close_existing=True)
+                    else:
+                        app_started = app_manager.launch_fresh()
                     if not app_started:
                         self.notifier.send_failure(
                             "Dicloak APP 进程检测失败",
@@ -108,8 +159,10 @@ class AutomationRunner:
                 cdp_driver.close()
                 self.logger.info("CDP startup check passed and connection released before test execution")
             except (AppStartupError, CDPConnectionError, OSError) as exc:
-                self.breakers.trip(BreakerName.APP_STARTUP, str(exc))
-                self.notifier.send_failure("Dicloak APP 启动或 CDP 连接失败", str(exc))
+                detail = _safe_startup_failure_detail(exc)
+                self.logger.error("Dicloak APP 启动或 CDP 连接失败：%s", detail)
+                self.breakers.trip(BreakerName.APP_STARTUP, detail)
+                self.notifier.send_failure("Dicloak APP 启动或 CDP 连接失败", detail)
                 return ExitCode.APP_OR_CDP_ERROR
 
             try:

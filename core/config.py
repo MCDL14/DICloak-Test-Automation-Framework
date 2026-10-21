@@ -7,6 +7,8 @@ from typing import Any
 
 import yaml
 
+from core.app_cdp_token import DEFAULT_TTL_SECONDS
+
 from core.account_groups import (
     ACCOUNT_PROFILE_ENV,
     AccountGroupError,
@@ -28,9 +30,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "exe_path": "",
         "work_dir": "",
         "startup_args": [
-            "--remote-debugging-port=9222",
+            "--dicloak-debug-port=9222",
             "--remote-allow-origins=*",
         ],
+        "cdp_auth": {
+            "enabled": True,
+            "script_path": "",
+            "private_key_path": "",
+            "private_key_env": "DICLOAK_CDP_PRIVATE_KEY_PATH",
+            "ttl_seconds": DEFAULT_TTL_SECONDS,
+            "timeout_seconds": 10,
+        },
         "process_name": "DICloak.exe",
         "close_existing_before_start": True,
         "process_check_timeout": 30,
@@ -297,6 +307,7 @@ def load_config(path: Path) -> dict[str, Any]:
             merged = apply_runtime_account_profile(merged, profile, profile_file=profile_file)
         except AccountGroupError as exc:
             raise ConfigError(str(exc)) from exc
+    merged = _apply_cdp_auth_local_override(config_path, merged)
     validate_config(merged)
     merged["_config_file"] = str(config_path.resolve())
     test_data_file = str(merged.get("_test_data_file", "")).strip()
@@ -304,6 +315,39 @@ def load_config(path: Path) -> dict[str, Any]:
         merged["_test_data_file"] = str(Path(test_data_file).resolve())
     merged["_project_root"] = str(Path.cwd().resolve())
     return merged
+
+
+def _apply_cdp_auth_local_override(config_path: Path, config: dict[str, Any]) -> dict[str, Any]:
+    """Apply node-local signing paths, never account data or a signing token."""
+    override_path = config_path.with_name(config_path.name + ".cdp-auth.local.yaml")
+    if not override_path.exists():
+        return config
+    loaded = _read_yaml_file(override_path, "CDP node-local override")
+    if set(loaded) - {"private_key_path", "script_path"}:
+        raise ConfigError("CDP 本机覆盖文件只允许 private_key_path 和 script_path，不允许账号、TTL 或其它配置")
+    key_path = loaded.get("private_key_path")
+    script_path = loaded.get("script_path", "")
+    if not isinstance(key_path, str) or not key_path.strip() or not isinstance(script_path, str):
+        raise ConfigError("CDP 本机覆盖文件必须包含非空私钥路径，script_path 必须为字符串")
+    paths = {"private_key_path": key_path.strip(), "script_path": script_path.strip()}
+    app = config.get("app", {})
+    if not isinstance(app, dict) or not isinstance(app.get("cdp_auth", {}), dict):
+        raise ConfigError("app.cdp_auth must be a YAML mapping")
+    app.setdefault("cdp_auth", {}).update(paths)
+    platforms = config.get("platforms", {})
+    if not isinstance(platforms, dict):
+        raise ConfigError("platforms must be a YAML mapping")
+    for platform in platforms.values():
+        if not isinstance(platform, dict):
+            continue
+        platform_app = platform.get("app", platform)
+        if not isinstance(platform_app, dict):
+            continue
+        if not isinstance(platform_app.get("cdp_auth", {}), dict):
+            raise ConfigError("platform app.cdp_auth must be a YAML mapping")
+        platform_app.setdefault("cdp_auth", {}).update(paths)
+    config["_app_cdp_auth_override_file"] = str(override_path.resolve())
+    return config
 
 
 def _read_yaml_file(path: Path, label: str) -> dict[str, Any]:
@@ -372,6 +416,18 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 def validate_config(config: dict[str, Any]) -> None:
     if not isinstance(config["app"].get("startup_args"), list):
         raise ConfigError("app.startup_args must be a list")
+
+    if not isinstance(config["app"].get("cdp_auth", {}), dict):
+        raise ConfigError("app.cdp_auth must be a YAML mapping")
+    platforms = config.get("platforms", {})
+    if not isinstance(platforms, dict):
+        raise ConfigError("platforms must be a YAML mapping")
+    for platform_config in platforms.values():
+        if not isinstance(platform_config, dict):
+            continue
+        platform_app = platform_config.get("app", platform_config)
+        if isinstance(platform_app, dict) and not isinstance(platform_app.get("cdp_auth", {}), dict):
+            raise ConfigError("platform app.cdp_auth must be a YAML mapping")
 
     cdp_port = config["cdp"].get("port")
     if not isinstance(cdp_port, int) or not 1 <= cdp_port <= 65535:

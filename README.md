@@ -40,13 +40,104 @@ python run.py --config config/config.yaml --case test_142_kernel_integrity
 python run.py --precheck
 ```
 
-调试时如果 APP 已经手动打开，并且启动时带了 `--remote-debugging-port=9222 --remote-allow-origins=*`，可以让框架只连接已有 APP，不再关闭、启动或结束 APP：
+调试时可优先连接已打开 APP。框架会先检测配置的 `cdp.host:cdp.port` 是否有 TCP 监听：有监听则只连接，不签发、不关闭或重启 APP；没有监听且 host 为当前执行机器的 loopback／localhost 时，则签发临时凭证，校验成功后关闭当前 APP 并带新参数启动：
 
 ```bash
 python run.py --config config/config.yaml --module test_01_kernel_integrity.py --attach-existing-app
 ```
 
-这个模式只适合本地调试。正式自动化运行仍建议让框架按配置统一管理 APP 生命周期。
+该模式在本机和远端使用同样的检测与回退逻辑：远端 CLI 的“本机”指远端执行机器。正常运行结束仍保留 APP，包括因端口缺失而由框架回退启动的 APP；强制停止可能结束该 APP 的子进程树，不能保证保留。正式自动化运行仍可取消该选项，让框架统一管理 APP 启停。
+
+## APP CDP 临时凭证
+
+新版 DICloak APP 的调试端口参数为 `--dicloak-debug-port`，并要求 `--dicloak-debug-token`。框架默认启用 `app.cdp_auth`，在每次真正启动 APP 前，通过当前 Python 解释器调用凭证生成脚本；不会把固定 token 写入配置，也不会把 APP 的改名参数用于 GinsBrowser。环境浏览器仍使用其原有标准 CDP 参数。
+
+先将私钥部署在项目目录外，并在启动 CLI 或 UI 的同一个终端中指定路径，例如：
+
+```powershell
+$env:DICLOAK_CDP_PRIVATE_KEY_PATH = 'D:/Backup/Downloads/private.pem'
+python run.py --config config/config.yaml --precheck
+```
+
+上面只设置路径，不读取或输出私钥内容。私钥路径也可写入 Git 忽略的本机运行配置：
+
+```yaml
+app:
+  startup_args:
+    - "--dicloak-debug-port=9222"
+    - "--remote-allow-origins=*"
+  cdp_auth:
+    enabled: true
+    script_path: ""       # 留空使用内置 core/app_cdp_token.py
+    private_key_path: ""  # 留空读取 DICLOAK_CDP_PRIVATE_KEY_PATH
+    private_key_env: "DICLOAK_CDP_PRIVATE_KEY_PATH"
+    ttl_seconds: 120
+    timeout_seconds: 10
+cdp:
+  port: 9222
+```
+
+`ttl_seconds` 取值为 `1..86400` 秒，默认 **120 秒（2 分钟）**，内置脚本命令行默认值与配置默认值保持一致；`timeout_seconds` 限制签发脚本执行时间，默认 10 秒。`script_path` 可覆盖为用户维护的兼容脚本，`private_key_env` 可改为本机约定的环境变量名。框架实际调用形式为 `<当前 Python> <脚本> --private-key <私钥路径> --port <cdp.port> --ttl-seconds <TTL>`。旧运行配置如已显式填写 `ttl_seconds: 3600`，须改为 `120` 或删除该项才会采用新默认值。
+
+只有签发及初次结构、端口和时效校验成功，才进入关闭旧 APP 的步骤；签发阶段失败保留原 APP。真正启动前会再次复查时效，若等待关闭期间凭证已临期或过期，则中止新启动并报错，不自动续期或重启。两分钟 TTL 缩短凭证有效窗口，不等同于限制签发次数；当前每次实际启动重新签发，没有增加签发次数限制或凭证缓存复用。
+
+内置脚本离线运行，依赖 `cryptography>=41.0.0`，仅读取已有的 Ed25519 PKCS8 PEM 私钥，不生成、复制或修改私钥，不访问网络。私钥必须与 APP 信任的公钥对应，随意生成一把新私钥不能获得 APP 授权。框架的结构、端口和时效检查不替代 APP 对签名及授权的最终校验；本地签发测试通过也不等于真实 APP 已接受该凭证。
+
+依赖必须安装到实际执行 CLI／远端 Runner 的同一个 Python 环境；本机安装成功不会让 Mac 远端的 `.venv` 自动具备该依赖，代码同步和私钥部署也不会执行 `pip install`。例如远程节点使用项目 `.venv/bin/python` 时，在远端项目根目录执行：
+
+```bash
+.venv/bin/python -m pip install "cryptography>=41.0.0"
+.venv/bin/python -c "import cryptography; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; from cryptography.hazmat.primitives.serialization import load_pem_private_key; print(cryptography.__version__)"
+```
+
+如果节点配置使用其它解释器，将以上 `.venv/bin/python` 换成节点实际配置的那个 Python，不要只运行不确定归属的 `pip`。开启签发鉴权且本次需要启动 APP 时，预检会用当前解释器检查 `cryptography` 序列化与 Ed25519 模块可导入，内置和自定义兼容签发脚本均按此检查；检查不读取真实私钥内容、不执行签发脚本、不生成 token，也不启停 APP。私钥路径和依赖预检 `PASS` 只说明启动前置条件满足，不代表凭证已生成或 APP 已启动；鉴权禁用或复用已有 CDP 监听时跳过该依赖检查。
+
+APP 启动及 CDP 连接阶段异常会独立写入执行日志，不依赖飞书通知是否开启；日志保留脱敏后的错误类型和原因，不输出私钥、token 或签发脚本原始敏感输出。若签发依赖缺失，应先修复该执行端环境；签发失败仍不会为本次启动关闭当前 APP。
+
+2026-10-20 本轮修复验证：Mac 实际执行使用的项目 `.venv` 已安装 `cryptography 50.0.2`，Ed25519 导入通过；随后在同一执行端通过现有配置和框架 helper 完成一次真实签发及结构／时效校验，确认端口 `9222`、TTL `120` 秒，token 未打印或保存。确认远端没有活动 `run.py` 后，已通过标准同步流程发布新代码及独立部署 CDP 私钥，远端编译检查通过；随后于 15:35 经正式远程执行链路运行预检，结果 `PASS`、退出码 `0`，日志包含新增依赖检查。该次预检不读取私钥内容或签发，真实签发仍只有前述独立验证一次。本轮未启停 APP、未执行业务用例，不能据此认定新版 APP 已接受凭证。启动凭证／日志／私钥部署定向 `Ran 112 tests in 1.620s ... OK`，完整 P1 回归 `Ran 399 tests in 23.270s ... OK`，均无跳过；包含本轮新增的依赖预检 4 条与准备阶段日志 6 条。语法编译及差异检查通过。
+
+开启鉴权时，旧配置中的 APP `--remote-debugging-port` 会归一化为新的端口参数，避免要求用户立即重写全部本机配置；实际端口以 `cdp.port` 为准。运行中生成的凭证只在内存中使用，启动和预检日志会脱敏，不应手工将 token 加入 `startup_args`、截图、飞书或 Git。
+
+两种生命周期的区别如下：
+
+| 模式 | 凭证与 APP 行为 |
+| --- | --- |
+| 框架托管启动 | 每次启动前生成新凭证，校验通过后再关闭旧 APP、启动新 APP；本次运行结束沿用现有托管关闭流程 |
+| `--attach-existing-app`／UI“连接已打开的 APP”：端口有 TCP 监听 | 直接连接；不签发、不检查私钥、不关闭或重启 APP；正常运行结束保留 APP |
+| 同上：配置的本机 loopback／localhost 端口无 TCP 监听 | 先签发并校验，成功后强制关闭旧 APP（不受 `close_existing_before_start: false` 影响）、带凭证启动并继续连接；签发失败保留旧 APP，正常运行结束保留回退启动的 APP |
+
+该回退仅针对本机 loopback／localhost 端口未监听；非本机 host 未连接时直接报错，不关闭本机 APP。端口有监听但不是 CDP 服务，或 Playwright attach 失败时仍报连接错误，不擅自关闭或重启 APP。`--precheck` 只检查条件，绝不签发凭证、关闭或启动 APP；即使启用 attach，本机端口缺失时也须具备回退启动所需的私钥、脚本和 APP 路径。回退启动的 APP 使用独立标准输入输出及进程组，不继承 CLI 的输出管道，避免 CLI 结束后 UI 日志读取仍被 APP 管道占用；这不代表 Windows 强制终止进程树时一定保留该 APP。
+
+目前只在 APP 启动参数传入凭证，不向 CDP HTTP 或 WebSocket 连接擅自增加自定义鉴权，也不按 TTL 自动重启 APP 或续期。凭证过期后 APP 对已建立连接的具体行为仍以产品协议为准。普通代码快照仍不会携带 `.pem`／`.key` 文件，也不会将私钥通过账号组或 Local Auth Lab 状态包传给远端；UI 代码同步现在另设专用私钥部署步骤，见下节。平台覆盖和 macOS/Linux 手动启动方法见 `跨平台运行与开发文档.md`。
+
+### 远程同步 CDP 签发私钥
+
+本机先配置已有私钥的真实路径，例如在忽略提交的 `config/config.yaml` 现有 `app` 节点下合并配置（不要重复创建 `app` 节点）：
+
+```yaml
+app:
+  cdp_auth:
+    private_key_path: "D:/Backup/Downloads/private.pem"
+    ttl_seconds: 120
+```
+
+也可使用启动 UI 的同一终端中的 `DICLOAK_CDP_PRIVATE_KEY_PATH`；若 UI 已在其它进程运行，另开终端设置变量不会自动改变该进程的环境。只有明确配置的这一份私钥会被复制，不扫描下载目录或其它密钥；启用鉴权时，未配置路径、源文件不可读或不是有效私钥都会在任何网络传输及代码快照构建前明确报错，不能凭空生成或猜测私钥。显式配置 `app.cdp_auth.enabled: false` 时跳过私钥部署，不影响普通代码同步。
+
+在 UI 选择正确的远程节点和 SSH 连接后，点击“检查与同步”中的“同步当前代码”，或勾选“远程执行前同步当前代码”。两种入口都会在代码同步流程中通过独立 SFTP 通道部署 CDP 私钥，而不是把它加入代码压缩包。签发脚本仍由远端执行；部署文件本身不签发 token、不关闭或启动 APP。
+
+远程执行及私钥同步均按所选节点的 IP、SSH 端口、用户名和密码／SSH 私钥连接；无需预登记 `known_hosts` 或手动确认指纹，更换 Mac 后更新节点连接配置即可。SSH 使用自动接受主机密钥策略，不加载或写入本机 `known_hosts`；CDP 私钥仅在当前 SSH 会话已连接且认证成功后通过 SFTP 传输。此方式不验证远端主机身份，不能防止连接到冒充节点，因此同步前请确认目标 IP、端口及连接网络正确。
+
+| 远端项目 | 部署位置及用途 |
+| --- | --- |
+| CDP 私钥 | SSH 用户家目录的 `~/.dicloak/cdp-keys/<项目标识哈希>/private.pem`，目录 `0700`、文件 `0600`；先上传临时文件再原子替换，位于 release 目录外，不随旧快照清理删除 |
+| 私钥路径覆盖文件 | 与节点 `config` 路径配对的 `<配置文件名>.cdp-auth.local.yaml`，例如 `config/config.yaml.cdp-auth.local.yaml`；只保存远端私钥绝对路径和使用内置脚本的空 `script_path`，不保存私钥内容或 token |
+| 远端生效配置 | `load_config()` 读取配对覆盖文件，覆盖全局及新旧平台配置中的私钥路径和脚本路径，避免 Windows 路径被 macOS/Linux 沿用；保留原 `enabled`、120 秒 TTL 和签发超时设置 |
+
+路径覆盖文件被 Git 和普通代码快照强制排除，随远端配置保留；私钥也继续被 Git、普通代码包和 `.remote_manifest.json` 排除。即使配置的私钥文件名使用 `.dat`／`.txt` 等其它扩展名，快照构建也会按解析后的真实路径及设备／inode 身份识别并排除该文件与同源符号链接、硬链接别名，避免只靠后缀过滤漏传。远端仍须具备正确的 APP 路径、虚拟环境与 `cryptography` 依赖，部署成功不代表 APP 已接受凭证。若不使用代码同步，也可继续在远端自行安全部署私钥。
+
+2026-10-20 取消主机信任前置限制后的历史验证：私钥部署模块定向 `Ran 39 tests in 1.609s ... OK`、完整 P1 `Ran 389 tests in 23.093s ... OK`，均无跳过。覆盖首次连接、更换 Mac、同 IP 不同主机密钥、非 22 端口、无连接或未认证时拒绝部署、不读取或写入 `known_hosts`，以及非标准扩展名／符号链接／硬链接别名排除、路径覆盖与独立 SFTP 部署等组件行为。当次未读取用户真实私钥、未连接真实 SSH、未向远端上传私钥或操作 APP；该记录早于本轮 Mac 签发依赖修复，不作为新版 APP 实机验收结论。首轮移除前的定向 39 条／完整 389 条及下方 350 条 P1、离线签发记录均为历史验证。
+
+2026-10-20 私钥同步加入前的验证：启动凭证与条件回退定向 `63/63` 通过（首轮 40 条、条件回退新增 23 条），完整 P1 `Ran 350 tests in 23.025s ... OK`，语法编译和差异检查通过。通过框架签发 helper、用户提供的原始外部脚本与仓库外私钥，在省略 TTL 配置时实际离线签发，确认端口 9222、有效期 120 秒；未打印或保存 token。未启停或操作真实 APP、调用生产接口或进行 macOS/Linux 实机验证，因此不能据此宣称新版 APP 已接受凭证或回退重启已实机通过。
 
 ## 本地登录存储模拟站
 
@@ -127,9 +218,10 @@ python run.py --config config/config.yaml --module environment_group_management
 
 `environment_group_management`、`member_management` 是当前 Linux 已验证通过的主链路模块。托管启动模式会自动完成：
 
-- 关闭已有 DICloak 进程。
+- 使用该 Linux 节点本地私钥生成并校验本次启动凭证；失败时保留当前 APP。
+- 校验通过后关闭已有 DICloak 进程。
 - 启动 `/opt/DICloak/dicloak`。
-- 附加 `--remote-debugging-port=9222 --remote-allow-origins=*`。
+- 附加 `--dicloak-debug-port=9222 --dicloak-debug-token=<临时凭证> --remote-allow-origins=*`。
 - 等待 APP 前端 ready。
 - 执行用例。
 - 结束后关闭 DICloak。
@@ -142,7 +234,7 @@ cd /home/dic/dicloak_automation_linux
 python run.py --config config/config.yaml --module environment_group_management --attach-existing-app
 ```
 
-Linux 当前已验证：
+下面是旧版本 APP 的既有 Linux 验证记录，不代表新版 CDP 临时凭证已完成 Linux 实机验证：
 
 - `python run.py --config config/config.yaml --precheck` 通过。
 - `python run.py --config config/config.yaml --module environment_group_management --attach-existing-app` 通过，结果 `total=6 passed=6 failed=0 errors=0 skipped=0 flaky=0`。
@@ -289,7 +381,7 @@ python run.py --config <remote-config> --case <test_id_1> --case <test_id_2>
 
 - “检查远端代码”会比较远端当前 `.remote_manifest.json` 和本地当前工作区快照，避免误跑旧代码。
 - “同步当前代码”会通过 SFTP 发布本地当前工作区到远端新快照目录，包含本地 `config/` 和 `test_data/`，不依赖远端安装 Git。
-- 勾选“远程执行前同步当前代码”后，不再按 level/module/business-module/case 区分是否需要账号站，固定严格按“代码快照 → Local Auth Lab 认证状态 → 远程用例”串行执行；认证状态同步失败时不会继续执行任何远程用例。认证状态使用独立 SFTP 包，不进入 `.remote_manifest.json`，包含 `config/local_auth_lab.yaml`、持久凭据及通过 SQLite backup API 生成的一致性数据库快照。
+- 勾选“远程执行前同步当前代码”后，不再按 level/module/business-module/case 区分是否需要账号站，固定严格按“代码同步（含独立 CDP 私钥部署）→ Local Auth Lab 认证状态 → 远程用例”串行执行；私钥部署或认证状态同步失败时不会继续执行远程用例。CDP 私钥不进入普通代码包或 Local Auth Lab 状态包；认证状态使用独立 SFTP 包，不进入 `.remote_manifest.json`，包含 `config/local_auth_lab.yaml`、持久凭据及通过 SQLite backup API 生成的一致性数据库快照。
 - 认证状态在远端以 `0600` 权限安装，并校验数据库 SHA-256、schema 和非敏感签名密钥指纹；同步时若远端认证站仍在运行会明确失败，避免新快照误复用仍绑定旧 release 数据库的进程。完整密钥、token 和密码不写入同步日志。该链路让 macOS 后端使用与 Windows 相同的签名密钥和 Session 记录，已同步到云端的登录令牌才能在 Mac 浏览器中免登。
 - 2026-08-04 修复 macOS 认证状态同步阶段 `zsh: command not found: python`：独立认证状态安装脚本现在会在远端项目目录内先执行节点 `command_prefix`、再 source `venv_activate`，随后校验 `PYTHON_BIN`；当节点仍配置为 `python` 且系统没有该命令时，会自动回退到 `python3`，仍找不到解释器才以 `PYTHON_BIN_NOT_FOUND` 明确失败。建议 macOS 节点在 `config/remote_hosts.yaml` 中显式配置为 `.venv/bin/python`、`python3` 或 pyenv 的绝对解释器路径。
 - 同步会让远端使用当前本地运行配置和测试数据；仅在本地快照缺少某个 `config/*.yaml` 时才保留远端旧配置。远程连接配置、连接缓存、账号组凭据、运行时账号临时文件和运行产物始终排除，远端 `.venv` 会保留。
@@ -479,7 +571,7 @@ delete_response = client.delete_environments([environment_id])
 
 ## 当前状态
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条；最近记录的完整 P1 组件回归为 2026-10-16 的 `Ran 287 tests ... OK`，不是本次文档更新新增的测试结果。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条。当前 CDP 适配分支于 2026-10-20 修复 Mac 签发依赖预检及准备阶段日志后，完整 P1 回归为 `Ran 399 tests in 23.270s ... OK`，无跳过；较前轮新增依赖预检 4 条、日志 6 条。Mac 实际执行 `.venv` 已安装 `cryptography 50.0.2` 并通过 Ed25519 导入及一次真实签发，确认端口 9222、TTL 120 秒，token 未打印或保存；新代码与 CDP 私钥已通过标准流程同步，远端编译检查及正式远程预检 `PASS`（退出码 0）。最新能力包含两分钟凭证、attach 条件回退、独立 SFTP 私钥部署、不依赖飞书开关的脱敏启动／连接错误日志；仍按用户要求不强制 known_hosts。此前完整 P1 389／350／327 条与 Windows 离线签发均为历史验证记录。本轮尚未启停 APP 或执行业务用例；依赖导入、签发及预检成功不等同于新版 APP 已接受凭证或 CDP 实机连接验收。
 
 当前成员分组管理模块已接入 2 条 P0 用例，文件位于 `tests/p0/member_group_management/`：
 

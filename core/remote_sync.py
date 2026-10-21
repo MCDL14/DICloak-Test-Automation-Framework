@@ -19,7 +19,9 @@ from typing import Any
 import yaml
 
 from core.config import load_config
+from core.app_cdp_auth import resolve_cdp_private_key_path
 from core.local_auth_lab.state_sync import create_state_bundle
+from core.remote_cdp_auth import deploy_remote_cdp_private_key, prepare_cdp_private_key
 from core.remote_runner import RemoteHost, RemoteRunError, _connect_ssh_client, _sanitize_log_line
 
 
@@ -43,6 +45,10 @@ DEFAULT_INCLUDE_PATTERNS = (
 )
 
 PROTECTED_EXCLUDE_PATTERNS = (
+    # Must not be bypassed by custom include rules or an empty exclude list.
+    "*.[pP][eE][mM]",
+    "*.[kK][eE][yY]",
+    "*.cdp-auth.local.yaml",
     "logs/**",
     "reports/**",
     "screenshots/**",
@@ -191,14 +197,29 @@ def sync_remote_project(
     *,
     project_root: Path | str = ".",
     compile_check: bool = True,
+    local_config_path: Path | str = "config/config.yaml",
 ) -> RemoteSyncResult:
     """Publish the current local workspace to a remote Linux/macOS node as a new release snapshot."""
     if not host.sync_enabled:
         raise RemoteRunError(f"remote sync is disabled for host: {host.name}")
 
     root = Path(project_root).resolve()
+    config_path = Path(local_config_path)
+    if not config_path.is_absolute():
+        config_path = root / config_path
+    # Prepare only the explicitly selected signing key before publishing code.
+    # No directory scan, archive entry, local temporary key or token is created.
+    try:
+        config = load_config(config_path)
+        config["_project_root"] = str(root)
+        key_bytes = prepare_cdp_private_key(config)
+        protected_paths = (resolve_cdp_private_key_path(config),) if key_bytes is not None else ()
+    except Exception:
+        raise RemoteRunError(
+            "本机 CDP 签发私钥未配置或无效，无法同步；请检查本机 app.cdp_auth.private_key_path 或 DICLOAK_CDP_PRIVATE_KEY_PATH。私钥内容不会显示"
+        ) from None
     started_at = time.time()
-    bundle = create_local_sync_bundle(root)
+    bundle = create_local_sync_bundle(root, protected_paths=protected_paths)
     manifest = bundle.manifest
     release_root = remote_release_root(host)
     release_name = _release_name(manifest)
@@ -210,8 +231,13 @@ def sync_remote_project(
     _put(log_queue, f"本地快照：hash={manifest['content_hash']} 文件数={manifest['file_count']}")
     _put(log_queue, f"远程发布目录：{release_dir}")
 
-    client = _connect_ssh_client(host)
+    client = None
     try:
+        client = _connect_ssh_client(host)
+        if key_bytes is not None:
+            deploy_remote_cdp_private_key(client, host, key_bytes, release_dir=release_dir, log_queue=log_queue)
+        else:
+            _put(log_queue, "CDP 签发鉴权已禁用，跳过私钥部署")
         _exec_checked(client, f"mkdir -p {shlex.quote(release_root)}", log_queue)
         _put(log_queue, f"上传快照包：{bundle.archive_path.name} ({bundle.archive_path.stat().st_size} bytes)")
         sftp = client.open_sftp()
@@ -235,7 +261,8 @@ def sync_remote_project(
         )
         parsed = _parse_setup_output(setup_output)
     finally:
-        client.close()
+        if client is not None:
+            client.close()
         try:
             bundle.archive_path.unlink()
         except OSError:
@@ -330,9 +357,11 @@ def sync_remote_local_auth_lab_state(
     )
 
 
-def create_local_sync_bundle(project_root: Path | str = ".") -> LocalSyncBundle:
+def create_local_sync_bundle(
+    project_root: Path | str = ".", *, protected_paths: tuple[Path, ...] = (),
+) -> LocalSyncBundle:
     root = Path(project_root).resolve()
-    manifest, files = build_local_manifest(root)
+    manifest, files = build_local_manifest(root, protected_paths=protected_paths)
     archive_path = _create_archive(root, files, manifest)
     return LocalSyncBundle(
         manifest=manifest,
@@ -341,10 +370,13 @@ def create_local_sync_bundle(project_root: Path | str = ".") -> LocalSyncBundle:
     )
 
 
-def build_local_manifest(project_root: Path | str = ".") -> tuple[dict[str, Any], list[tuple[str, Path]]]:
+def build_local_manifest(
+    project_root: Path | str = ".", *, protected_paths: tuple[Path, ...] = (),
+) -> tuple[dict[str, Any], list[tuple[str, Path]]]:
     root = Path(project_root).resolve()
     include_patterns, exclude_patterns = _load_sync_rules(root)
-    files = _collect_sync_files(root, include_patterns, exclude_patterns)
+    protected_paths = (*protected_paths, *_configured_private_key_paths(root))
+    files = _collect_sync_files(root, include_patterns, exclude_patterns, protected_paths=protected_paths)
     content_hash = _content_hash(files)
     git_info = _git_info(root)
     manifest = {
@@ -394,11 +426,38 @@ def _with_protected_excludes(exclude_patterns: tuple[str, ...]) -> tuple[str, ..
     return tuple(dict.fromkeys(pattern for pattern in combined if pattern))
 
 
+def _configured_private_key_paths(project_root: Path) -> tuple[Path, ...]:
+    """Exclude the selected key regardless of suffix, without reading key bytes."""
+    config_path = project_root / "config" / "config.yaml"
+    if not config_path.is_file():
+        return ()
+    try:
+        config = load_config(config_path)
+        config["_project_root"] = str(project_root)
+        return (resolve_cdp_private_key_path(config),)
+    except Exception:
+        # A malformed config cannot be used for actual sync (validated before
+        # bundle creation), but code-status inspection remains non-mutating.
+        return ()
+
+
 def _collect_sync_files(
     project_root: Path,
     include_patterns: tuple[str, ...],
     exclude_patterns: tuple[str, ...],
+    *,
+    protected_paths: tuple[Path, ...] = (),
 ) -> list[tuple[str, Path]]:
+    protected_resolved: set[Path] = set()
+    protected_ids: set[tuple[int, int]] = set()
+    for protected in protected_paths:
+        protected_resolved.add(protected.resolve())
+        try:
+            info = protected.stat()
+            if info.st_ino:
+                protected_ids.add((info.st_dev, info.st_ino))
+        except OSError:
+            pass
     result: list[tuple[str, Path]] = []
     for path in project_root.rglob("*"):
         if not path.is_file():
@@ -407,6 +466,12 @@ def _collect_sync_files(
         if _matches_any(rel, exclude_patterns):
             continue
         if not _matches_any(rel, include_patterns):
+            continue
+        try:
+            info = path.stat()
+            if path.resolve() in protected_resolved or (info.st_dev, info.st_ino) in protected_ids:
+                continue
+        except OSError:
             continue
         result.append((rel, path))
     result.sort(key=lambda item: item[0])

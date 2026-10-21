@@ -37,7 +37,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--attach-existing-app",
         action="store_true",
-        help="Debug mode: connect to an already running Dicloak APP and skip APP startup/shutdown",
+        help="Reuse an existing CDP listener; if absent, restart the APP with a fresh credential. Keep the APP after execution.",
     )
     return parser.parse_args(argv)
 
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.precheck:
-            exit_code = runner.run_precheck_only()
+            exit_code = runner.run_precheck_only(attach_existing_app=args.attach_existing_app)
         else:
             exit_code = runner.run(
                 level=args.level,

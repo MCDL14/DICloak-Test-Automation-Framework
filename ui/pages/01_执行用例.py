@@ -957,7 +957,7 @@ with st.sidebar:
         attach_existing = st.checkbox(
             "连接已打开的 APP",
             value=True,
-            help="勾选：连接已手动启动的 DICloak APP。\n取消：框架自动启动新 APP。",
+            help="勾选：CDP 端口有监听则直接连接；没有监听则生成 120 秒凭证，关闭并重新启动 APP。\n取消：按托管模式启动 APP。签发失败不会关闭当前 APP。",
         )
         if execution_mode == "本机":
             st.caption("本机模式执行全部已勾选用例。")
@@ -1265,9 +1265,9 @@ if execution_mode in {"远程节点", "本机 + Mac 远程"}:
                     "使用远端已打开 APP",
                     value=False,
                     disabled=remote_scope == "precheck",
-                    help="勾选后给远端 run.py 追加 --attach-existing-app；预检不使用该选项。",
+                    help="远端 CDP 端口有监听则直接连接；没有监听则先签发凭证，再关闭并重新启动远端 APP。预检不启停 APP。",
                 )
-                st.caption("直接连接远端当前运行中的 APP。")
+                st.caption("优先复用远端 APP；CDP 端口未监听时带凭证重新启动。")
             with option_artifact_col:
                 remote_collect_artifacts = st.checkbox(
                     "执行后拉取产物",
@@ -1279,9 +1279,9 @@ if execution_mode in {"远程节点", "本机 + Mac 远程"}:
                 remote_sync_before_run = st.checkbox(
                     "执行前同步当前代码",
                     value=False,
-                    help="执行用例前先发布本地当前工作区到远端快照；默认关闭，避免误同步。",
+                    help="执行前发布当前代码；启用 CDP 鉴权时，经已认证 SSH 会话的独立 SFTP 通道部署本机配置的私钥（不进入代码包）。不要求 known_hosts，也不验证主机身份，请核对目标 IP 和端口。默认关闭。",
                 )
-                st.caption("发布当前工作区后再启动任务。")
+                st.caption("发布代码并独立部署 CDP 私钥，再启动任务。")
 
         with st.container(key="dicloak_remote_tools"):
             with st.expander("检查与同步", expanded=False, icon=":material/sync:"):
@@ -1308,9 +1308,9 @@ if execution_mode in {"远程节点", "本机 + Mac 远程"}:
                         icon=":material/cloud_upload:",
                         use_container_width=True,
                         disabled=not remote_connection_ready,
-                        help="通过 SFTP 发布本地当前工作区到远端新快照，保留远端配置和旧快照。",
+                        help="发布当前代码并保留远端配置、旧快照；启用 CDP 鉴权时经已认证 SSH 会话另外同步明确配置的私钥。不要求 known_hosts，也不验证主机身份，请核对目标 IP 和端口。私钥不进入代码包。",
                     )
-                st.caption("用于执行前排查节点状态或手动发布代码。")
+                st.caption("同步会发布代码，并在 CDP 鉴权启用时独立部署私钥；请核对目标 IP、端口和本机私钥路径。无需 known_hosts 预登记。")
 
         with st.container(key="dicloak_remote_advanced"):
             with st.expander("高级信息", expanded=False, icon=":material/tune:"):

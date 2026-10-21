@@ -293,7 +293,7 @@ def build_remote_command(host: RemoteHost, request: RemoteRunRequest) -> str:
     else:
         raise RemoteConfigError(f"unsupported remote run scope: {scope}")
 
-    if request.attach_existing_app and scope != "precheck":
+    if request.attach_existing_app:
         run_parts.append("--attach-existing-app")
     if request.account_profile_path and scope != "precheck":
         run_parts.extend(["--account-profile", _quote(request.account_profile_path)])
@@ -304,7 +304,7 @@ def build_remote_command(host: RemoteHost, request: RemoteRunRequest) -> str:
 def build_remote_health_check_command(host: RemoteHost) -> str:
     import_code = (
         "import importlib.util;"
-        "mods=['yaml','playwright','psutil','openpyxl'];"
+        "mods=['yaml','playwright','psutil','openpyxl','cryptography'];"
         "missing=[m for m in mods if importlib.util.find_spec(m) is None];"
         "print('missing=' + ','.join(missing) if missing else 'all core modules importable');"
         "raise SystemExit(1 if missing else 0)"
@@ -464,6 +464,8 @@ def _connect_ssh_client(host: RemoteHost) -> Any:
         connect_kwargs["allow_agent"] = True
 
     client = paramiko.SSHClient()
+    # Preserve the original connection behavior for replaceable execution nodes:
+    # accept the configured endpoint without a local known_hosts prerequisite.
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
         client.connect(**connect_kwargs)

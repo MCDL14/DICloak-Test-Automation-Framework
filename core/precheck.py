@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import ipaddress
 import socket
 import sys
 from dataclasses import dataclass, field
@@ -8,6 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from core.app_config import resolve_app_config
+from core.app_cdp_auth import (
+    AppCdpAuthError,
+    auth_enabled,
+    normalized_app_startup_args,
+    redact_app_startup_args,
+    validate_cdp_auth_setup,
+)
 from core.files import batch_import_file, local_extension_file, member_export_file_regex
 
 
@@ -39,10 +47,10 @@ class EnvironmentPrechecker:
         self.config = config
         self.logger = logger
 
-    def run(self) -> PrecheckResult:
+    def run(self, *, attach_existing_app: bool = False) -> PrecheckResult:
         result = PrecheckResult()
         self._check_python(result)
-        self._check_app(result)
+        self._check_app(result, attach_existing_app=attach_existing_app)
         self._check_test_data(result)
         self._check_cdp(result)
         self._check_feishu(result)
@@ -58,7 +66,11 @@ class EnvironmentPrechecker:
             f"current={version.major}.{version.minor}.{version.micro}, expected>=3.10",
         )
 
-    def _check_app(self, result: PrecheckResult) -> None:
+    def _check_app(self, result: PrecheckResult, *, attach_existing_app: bool = False) -> None:
+        # The runner passes True only after confirming a listening CDP port.
+        if attach_existing_app:
+            result.add("APP startup credential check", True, "CDP 端口已存在：复用 APP，跳过启动路径、参数及签发私钥检查")
+            return
         app_config = resolve_app_config(self.config)
         exe_path = app_config.exe_path
         work_dir = app_config.work_dir
@@ -66,16 +78,27 @@ class EnvironmentPrechecker:
 
         result.add("APP exe_path exists", exe_path.is_file(), str(exe_path))
         result.add("APP work_dir exists", work_dir.is_dir(), str(work_dir))
+        try:
+            enabled = auth_enabled(self.config)
+            startup_args = normalized_app_startup_args(self.config, startup_args)
+            validate_cdp_auth_setup(self.config)
+        except AppCdpAuthError as exc:
+            result.add("APP startup credential configuration", False, str(exc))
+            return
+        safe_args = ", ".join(redact_app_startup_args(startup_args))
+        port_flag = "--dicloak-debug-port=" if enabled else "--remote-debugging-port="
         result.add(
-            "APP startup arg remote-debugging-port",
-            any(str(arg).startswith("--remote-debugging-port=") for arg in startup_args),
-            ", ".join(map(str, startup_args)),
+            "APP startup arg " + port_flag[2:-1],
+            any(str(arg).startswith(port_flag) for arg in startup_args),
+            safe_args,
         )
         result.add(
             "APP startup arg remote-allow-origins",
             "--remote-allow-origins=*" in startup_args,
-            ", ".join(map(str, startup_args)),
+            safe_args,
         )
+        if enabled:
+            result.add("APP startup credential configuration", True, "签发脚本、私钥路径与 cryptography 依赖已检查；本次预检未读取私钥或签发凭证，实际签发仅在启动前进行")
 
     def _check_test_data(self, result: PrecheckResult) -> None:
         test_data = self.config["test_data"]
@@ -130,6 +153,24 @@ class EnvironmentPrechecker:
 
 
 def _is_port_open(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(1)
-        return sock.connect_ex((host, port)) == 0
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def is_cdp_port_open(config: dict[str, Any]) -> bool:
+    """Probe the configured TCP listener, not Playwright or APP authentication."""
+    cdp = config.get("cdp", {})
+    return _is_port_open(str(cdp.get("host", "127.0.0.1")), int(cdp.get("port", 9222)))
+
+
+def is_local_cdp_host(config: dict[str, Any]) -> bool:
+    host = str(config.get("cdp", {}).get("host", "127.0.0.1")).strip().lower()
+    if host.rstrip(".") == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False

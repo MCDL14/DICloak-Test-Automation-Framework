@@ -9,10 +9,22 @@ app:
   exe_path: "C:/Program Files/Dicloak/Dicloak.exe"
   # Dicloak APP 的工作目录
   work_dir: "C:/Program Files/Dicloak"
-  # APP 启动参数；CDP 参数必须拆成两个独立参数
+  # APP 启动参数；每项为一个独立参数，凭证由框架启动前动态追加，不要保存固定 token。
   startup_args:
-    - "--remote-debugging-port=9222"
+    - "--dicloak-debug-port=9222"
     - "--remote-allow-origins=*"
+  cdp_auth:
+    # 新版 APP 要求启动凭证。仅旧版 APP 才设 false 并自行提供旧启动参数。
+    enabled: true
+    # 空值使用仓库内 core/app_cdp_token.py；也可指定外部脚本路径。
+    script_path: ""
+    # 本机私钥置于仓库外；远程同步经已认证 SSH 会话的独立 SFTP 部署，不进入代码包。
+    # 不要求 known_hosts 或指纹确认，也不验证主机身份；同步前请核对目标节点 IP、端口。
+    # 优先读取此字段，否则读下方环境变量；远程同步前必须在本机明确配置这一源路径。
+    private_key_path: ""
+    private_key_env: "DICLOAK_CDP_PRIVATE_KEY_PATH"
+    ttl_seconds: 120  # 2 分钟；仅限制启动凭证有效期，不是用例执行时长
+    timeout_seconds: 10
   # Windows 进程名，用于检测、关闭已有 APP
   process_name: "DICloak.exe"
   # 启动前是否结束已有 Dicloak APP 实例；当前使用 taskkill /F /T，避免 APP 退出确认弹窗卡住流程
@@ -46,7 +58,7 @@ platforms:
 cdp:
   # CDP 服务地址
   host: "127.0.0.1"
-  # CDP 服务端口，需要和 startup_args 中 remote-debugging-port 一致
+  # APP 调试端口，也是签发凭证绑定的端口；启用凭证时覆盖启动参数中的旧端口。
   port: 9222
   # 首选 CDP 驱动，当前优先使用 playwright
   driver: "playwright"

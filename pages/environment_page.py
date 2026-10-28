@@ -461,7 +461,7 @@ class EnvironmentPage(BasePage):
     def _submit_active_create_environment_drawer(self, context: str) -> None:
         with self.phase_timing("environment.submit_create_environment", context=context):
             self._close_select_dropdowns()
-            self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
+            self.cdp.click_element_by_script(self._create_environment_submit_button_script())
             state = self._wait_create_environment_submit_state(
                 timeout_seconds=self.CREATE_ENVIRONMENT_SUBMIT_STATE_SECONDS
             )
@@ -472,7 +472,15 @@ class EnvironmentPage(BasePage):
                 return
 
             time.sleep(self.CREATE_ENVIRONMENT_SECOND_SUBMIT_DELAY_SECONDS)
-            self.cdp.click_element_by_script(self._active_overlay_button_script("确定"))
+            # A slow first request can enter loading while the retry delay is
+            # running. Recheck before clicking so one create cannot be sent twice.
+            delayed_state = self._wait_create_environment_submit_state(timeout_seconds=0)
+            if delayed_state == "closed":
+                return
+            if delayed_state == "loading":
+                self._wait_for_overlay_closed()
+                return
+            self.cdp.click_element_by_script(self._create_environment_submit_button_script())
             second_state = self._wait_create_environment_submit_state(
                 timeout_seconds=self.CREATE_ENVIRONMENT_SUBMIT_STATE_SECONDS
             )
@@ -484,7 +492,7 @@ class EnvironmentPage(BasePage):
 
             raise _CreateEnvironmentSubmitNotStarted(
                 "create environment drawer submit did not start loading after second confirm click and drawer stayed open: "
-                f"context={context}; button_state={self._active_overlay_button_state('确定')}"
+                f"context={context}; button_state={self._create_environment_submit_button_state()}"
             )
 
     def _wait_create_environment_submit_state(self, timeout_seconds: int) -> str:
@@ -492,13 +500,13 @@ class EnvironmentPage(BasePage):
         while time.time() < deadline:
             if not self._create_environment_drawer_visible():
                 return "closed"
-            button_state = self._active_overlay_button_state("确定")
+            button_state = self._create_environment_submit_button_state()
             if bool(button_state.get("loading")):
                 return "loading"
             time.sleep(0.2)
         if not self._create_environment_drawer_visible():
             return "closed"
-        button_state = self._active_overlay_button_state("确定")
+        button_state = self._create_environment_submit_button_state()
         return "loading" if bool(button_state.get("loading")) else "idle"
 
     def search_environment(self, name: str) -> None:
@@ -5618,6 +5626,77 @@ class EnvironmentPage(BasePage):
                 }}));
             }}
             return true;
+        }}
+        """
+
+    def _create_environment_submit_button_script(self) -> str:
+        # APP 3.0.6 uses a split control, not an Element Plus footer. The main
+        # action has data-testid=create-env; its preferences arrow is separate.
+        return f"""
+        () => {{
+            const overlaySelector = ".el-drawer, .el-dialog, .el-message-box";
+            const nameInputSelector = {self.locator("environment_name_input")!r};
+            const batchCountSelector = {self.locator("batch_create_count_input")!r};
+            const visible = (el) => {{
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none" && style.visibility !== "hidden"
+                    && Number(style.opacity || "1") > 0.01
+                    && el.getAttribute("aria-hidden") !== "true"
+                    && rect.width > 0 && rect.height > 0;
+            }};
+            const overlays = Array.from(document.querySelectorAll(".el-drawer, .el-dialog"))
+                .filter(visible).reverse();
+            for (const overlay of overlays) {{
+                const owns = (el) => el.closest(overlaySelector) === overlay;
+                const headerText = Array.from(overlay.querySelectorAll(".el-drawer__header, .el-dialog__header"))
+                    .filter(owns).map((el) => (el.innerText || el.textContent || "").trim()).join(" ");
+                const dedicated = Array.from(overlay.querySelectorAll("button[data-testid='create-env']"))
+                    .find((el) => owns(el) && visible(el));
+                const hasCreateInput = Boolean(overlay.querySelector(nameInputSelector)
+                    || overlay.querySelector(batchCountSelector));
+                const createTitle = ["创建环境", "批量创建", "批量创建环境"]
+                    .includes(headerText.replace(/\\s+/g, ""));
+                if (!createTitle && !dedicated
+                    && !(headerText === "" && hasCreateInput)) continue;
+                if (dedicated) return dedicated;
+                const buttons = Array.from(overlay.querySelectorAll("button"))
+                    .filter((el) => owns(el) && visible(el)
+                        && !el.matches("[data-testid='create-env-preferences-toggle'], .el-dropdown__caret-button"));
+                // Older APP builds use a plain “确定” button. Keep this fallback
+                // local to create flows: edit/delete dialogs retain their rules.
+                for (const text of ["创建环境", "确定"]) {{
+                    const button = buttons.find((el) => (el.innerText || el.textContent || "").trim() === text);
+                    if (button) return button;
+                }}
+            }}
+            return null;
+        }}
+        """
+
+    def _create_environment_submit_button_state(self) -> dict:
+        value = self.cdp.evaluate(self._create_environment_submit_button_state_script())
+        return value if isinstance(value, dict) else {}
+
+    def _create_environment_submit_button_state_script(self) -> str:
+        return f"""
+        () => {{
+            const button = ({self._create_environment_submit_button_script()})();
+            if (!button) return {{ visible: false, loading: false, disabled: false }};
+            const ariaDisabled = button.getAttribute("aria-disabled");
+            return {{
+                visible: true,
+                text: (button.innerText || button.textContent || "").trim(),
+                testId: button.getAttribute("data-testid"),
+                loading: button.classList.contains("is-loading")
+                    || button.getAttribute("aria-busy") === "true"
+                    || Boolean(button.querySelector(".is-loading, .el-icon-loading, [class*='loading']")),
+                disabled: Boolean(button.disabled) || ariaDisabled === "true"
+                    || button.classList.contains("is-disabled"),
+                className: String(button.className || ""),
+                ariaDisabled,
+            }};
         }}
         """
 

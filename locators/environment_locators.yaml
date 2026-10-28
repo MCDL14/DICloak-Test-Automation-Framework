@@ -95,9 +95,10 @@ browser_kernel_select:
 browser_kernel_134_option:
   selector: ".el-select__popper .el-select-dropdown__item:has-text('ChromeBrowser 134')"
 
-# 创建环境右侧抽屉里的确认按钮。实际点击时限定在可见 drawer/dialog/message-box 内按文案“确定”查找。
+# 创建环境提交主按钮：新版稳定标识 create-env，右侧 create-env-preferences-toggle 仅用于偏好下拉。
+# 页面对象用创建专用 helper 统一点击/loading 定位，并兼容旧版“确定”；编辑等通用确认不受影响。
 save_button:
-  selector: ".el-drawer button:has-text('确定'), .el-dialog button:has-text('确定')"
+  selector: ".el-drawer button[data-testid='create-env'], .el-dialog button[data-testid='create-env'], .el-drawer button:text-is('创建环境'), .el-dialog button:text-is('创建环境'), .el-drawer button:text-is('确定'), .el-dialog button:text-is('确定')"
 
 # 环境列表右上角筛选输入框。该输入框默认展示，不需要点击放大镜展开。
 search_input:

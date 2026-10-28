@@ -64,21 +64,37 @@ class _SubmitProbe(EnvironmentPage):
         self.cdp = _ClickRecorder()
         self.submit_states = list(submit_states)
         self.closed_wait_count = 0
+        self.submit_state_timeouts: list[int] = []
 
     def _close_select_dropdowns(self) -> None:
         return None
 
-    def _active_overlay_button_script(self, text: str) -> str:
-        return f"button:{text}"
+    def _create_environment_submit_button_script(self) -> str:
+        return "button:create-submit"
 
     def _wait_create_environment_submit_state(self, timeout_seconds: int) -> str:
+        self.submit_state_timeouts.append(timeout_seconds)
         return self.submit_states.pop(0) if self.submit_states else "idle"
 
     def _wait_for_overlay_closed(self) -> None:
         self.closed_wait_count += 1
 
-    def _active_overlay_button_state(self, text: str) -> dict:
-        return {"text": text, "loading": False, "disabled": False}
+    def _create_environment_submit_button_state(self) -> dict:
+        return {"visible": True, "text": "创建环境", "loading": False, "disabled": False}
+
+
+class _SubmitStateProbe(EnvironmentPage):
+    def __init__(self, *, drawer_visible: bool, button_state: dict):
+        self.drawer_visible = drawer_visible
+        self.button_state = dict(button_state)
+        self.state_read_count = 0
+
+    def _create_environment_drawer_visible(self) -> bool:
+        return self.drawer_visible
+
+    def _create_environment_submit_button_state(self) -> dict:
+        self.state_read_count += 1
+        return dict(self.button_state)
 
 
 class _DataSyncOptionsProbe(EnvironmentPage):
@@ -225,21 +241,74 @@ class EnvironmentCreateDrawerRetryTests(unittest.TestCase):
         self.assertEqual(page.table_wait_count, 0)
 
     def test_submit_clicks_confirm_again_when_first_click_stays_idle(self) -> None:
-        page = _SubmitProbe(submit_states=["idle", "loading"])
+        page = _SubmitProbe(submit_states=["idle", "idle", "loading"])
 
         page._submit_active_create_environment_drawer("probe second click")
 
-        self.assertEqual(page.cdp.clicks, ["button:确定", "button:确定"])
+        self.assertEqual(page.cdp.clicks, ["button:create-submit", "button:create-submit"])
         self.assertEqual(page.closed_wait_count, 1)
+        self.assertEqual(page.submit_state_timeouts[1], 0)
 
     def test_submit_raises_when_second_confirm_click_still_stays_idle(self) -> None:
-        page = _SubmitProbe(submit_states=["idle", "idle"])
+        page = _SubmitProbe(submit_states=["idle", "idle", "idle"])
 
         with self.assertRaisesRegex(_CreateEnvironmentSubmitNotStarted, "second confirm click"):
             page._submit_active_create_environment_drawer("probe second click exhausted")
 
-        self.assertEqual(page.cdp.clicks, ["button:确定", "button:确定"])
+        self.assertEqual(page.cdp.clicks, ["button:create-submit", "button:create-submit"])
         self.assertEqual(page.closed_wait_count, 0)
+
+    def test_submit_does_not_click_twice_when_loading_starts_immediately(self) -> None:
+        page = _SubmitProbe(submit_states=["loading"])
+
+        page._submit_active_create_environment_drawer("probe immediate loading")
+
+        self.assertEqual(page.cdp.clicks, ["button:create-submit"])
+        self.assertEqual(page.closed_wait_count, 1)
+
+    def test_submit_does_not_click_twice_when_drawer_closes_immediately(self) -> None:
+        page = _SubmitProbe(submit_states=["closed"])
+
+        page._submit_active_create_environment_drawer("probe immediate close")
+
+        self.assertEqual(page.cdp.clicks, ["button:create-submit"])
+        self.assertEqual(page.closed_wait_count, 0)
+
+    def test_submit_rechecks_delayed_loading_before_second_click(self) -> None:
+        page = _SubmitProbe(submit_states=["idle", "loading"])
+
+        page._submit_active_create_environment_drawer("probe delayed loading")
+
+        self.assertEqual(page.cdp.clicks, ["button:create-submit"])
+        self.assertEqual(page.closed_wait_count, 1)
+        self.assertEqual(page.submit_state_timeouts[1], 0)
+
+    def test_submit_rechecks_delayed_close_before_second_click(self) -> None:
+        page = _SubmitProbe(submit_states=["idle", "closed"])
+
+        page._submit_active_create_environment_drawer("probe delayed close")
+
+        self.assertEqual(page.cdp.clicks, ["button:create-submit"])
+        self.assertEqual(page.closed_wait_count, 0)
+        self.assertEqual(page.submit_state_timeouts[1], 0)
+
+    def test_submit_state_reads_new_create_button_loading(self) -> None:
+        page = _SubmitStateProbe(drawer_visible=True, button_state={"loading": True, "disabled": True})
+
+        self.assertEqual(page._wait_create_environment_submit_state(timeout_seconds=0), "loading")
+        self.assertEqual(page.state_read_count, 1)
+
+    def test_submit_state_closed_does_not_read_a_stale_button(self) -> None:
+        page = _SubmitStateProbe(drawer_visible=False, button_state={"loading": True})
+
+        self.assertEqual(page._wait_create_environment_submit_state(timeout_seconds=0), "closed")
+        self.assertEqual(page.state_read_count, 0)
+
+    def test_submit_state_disabled_without_loading_does_not_mean_started(self) -> None:
+        page = _SubmitStateProbe(drawer_visible=True, button_state={"loading": False, "disabled": True})
+
+        self.assertEqual(page._wait_create_environment_submit_state(timeout_seconds=0), "idle")
+        self.assertEqual(page.state_read_count, 1)
 
     def test_list_loading_wait_retries_by_triggering_search_refresh(self) -> None:
         page = _ListLoadingProbe(wait_results=["timeout", "timeout", "ok"])

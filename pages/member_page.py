@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from core.config import timeout_seconds as config_timeout_seconds
+from core.app_packages import resolve_api_url
 from core.member_export import extract_target_member_records
 from core.ui_driver import UIDriver
 from pages.base_page import BasePage
@@ -1871,6 +1872,10 @@ class MemberPage(BasePage):
         """
 
     def _member_api_records_script(self) -> str:
+        api_url = resolve_api_url(
+            getattr(self, "config", {}),
+            "https://gin-server.dicloak.com/gin/v1/member?page_size=200&page_no=1&not_logged=false&detail=true",
+        )
         return """
         async () => {
             const parseJson = (value) => {
@@ -1883,8 +1888,9 @@ class MemberPage(BasePage):
             const state = parseJson(localStorage.getItem("basic:state"));
             const token = String(state.token || "").trim();
             if (!token) return [];
-            const url = "https://gin-server.dicloak.com/gin/v1/member?page_size=200&page_no=1&not_logged=false&detail=true";
+            const url = __MEMBER_API_URL__;
             const response = await fetch(url, {
+                redirect: __MEMBER_API_REDIRECT__,
                 headers: {
                     "Accept": "application/json, text/plain, */*",
                     "X-TOKEN": token,
@@ -1899,7 +1905,10 @@ class MemberPage(BasePage):
             }
             return [];
         }
-        """
+        """.replace(
+            "__MEMBER_API_REDIRECT__",
+            json.dumps("error" if getattr(self, "config", {}).get("_app_package_kind") == "test" else "follow"),
+        ).replace("__MEMBER_API_URL__", json.dumps(api_url))
 
     def _member_remark_values_in_current_list_script(self) -> str:
         return f"""

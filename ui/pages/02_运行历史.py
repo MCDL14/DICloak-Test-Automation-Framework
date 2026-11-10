@@ -69,6 +69,7 @@ def _parse_log_summary(log_path: Path) -> dict | None:
         info["metadata"] = metadata
         start_metadata = metadata.get("start", {})
         end_metadata = metadata.get("end", {})
+        info["app_package"] = "测试 APP 包" if start_metadata.get("app_package") == "test" else "生产 APP 包"
         if start_metadata.get("source"):
             info["run_source"] = start_metadata.get("source")
         scope_label = run_scope_label(start_metadata)
@@ -170,7 +171,7 @@ def _entry_matches_keyword(entry: dict, keyword: str) -> bool:
         return True
     haystack = " ".join(
         str(entry.get(field, ""))
-        for field in ("name", "time", "source", "path")
+        for field in ("name", "time", "source", "path", "app_package")
     ).lower()
     return keyword.lower() in haystack
 
@@ -277,6 +278,7 @@ for i, entry in enumerate(visible_logs):
     source = entry.get("source", "?")
     run_source = entry.get("run_source", "")
     run_scope = entry.get("run_scope", "")
+    app_package_label = entry.get("app_package", "生产 APP 包 / 旧记录")
 
     # 状态图标
     icon = "✅" if success else ("❌" if success is False else "❓")
@@ -286,7 +288,7 @@ for i, entry in enumerate(visible_logs):
     title = f"{icon} {time_str} — total={total}  passed={passed}  failed={failed}"
     if pass_rate is not None:
         title += f"  ({pass_rate}%)"
-    title += f"  [{source}]"
+    title += f"  [{source}] [{app_package_label}]"
     if run_source or run_scope:
         title += f"  {run_source or '-'}"
         if run_scope:

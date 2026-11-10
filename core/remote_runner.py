@@ -16,6 +16,9 @@ from typing import Any, Iterable
 
 import yaml
 
+from core.app_packages import APP_PROFILE_ENV, runtime_app_profile
+from core.account_groups import ACCOUNT_PROFILE_ENV
+
 
 class RemoteConfigError(Exception):
     """Raised when remote host configuration is missing or invalid."""
@@ -58,6 +61,8 @@ class RemoteRunRequest:
     attach_existing_app: bool = False
     account_profile: dict[str, Any] | None = None
     account_profile_path: str = ""
+    app_profile: dict[str, Any] | None = None
+    app_profile_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -147,16 +152,25 @@ def run_remote_tests(
 
     started_at = time.time()
     staged_profile_path = ""
+    staged_app_profile_path = ""
     try:
         effective_request = request
         if request.account_profile:
             staged_profile_path = _stage_remote_account_profile(host, request.account_profile)
             effective_request = replace(
-                request,
+                effective_request,
                 account_profile=None,
                 account_profile_path=staged_profile_path,
             )
             log_queue.put(f"远程账号组运行配置已就绪：{request.account_profile.get('group_name', '-')}")
+        if request.app_profile is not None:
+            staged_app_profile_path = _stage_remote_app_profile(host, request.app_profile)
+            effective_request = replace(
+                effective_request,
+                app_profile=None,
+                app_profile_path=staged_app_profile_path,
+            )
+            log_queue.put("远程执行 APP 包：测试 APP 包（独立运行目标配置）")
         command = build_remote_command(host, effective_request)
         log_queue.put(f"远程节点：{host.name} ({host.username}@{host.host}:{host.port})")
         log_queue.put(f"远程命令：{command}")
@@ -170,6 +184,8 @@ def run_remote_tests(
             finished_at=finished_at,
         )
     finally:
+        if staged_app_profile_path:
+            _remove_remote_app_profile(host, staged_app_profile_path, log_queue)
         if staged_profile_path:
             _remove_remote_account_profile(host, staged_profile_path, log_queue)
         lock.release()
@@ -180,6 +196,7 @@ def run_remote_health_check(
     log_queue: queue.Queue,
     *,
     stop_event: threading.Event | None = None,
+    app_profile: dict[str, Any] | None = None,
 ) -> RemoteHealthResult:
     lock = _host_lock(host.name)
     if not lock.acquire(blocking=False):
@@ -187,8 +204,14 @@ def run_remote_health_check(
         raise RemoteRunError(f"remote host is busy: {host.name}")
 
     started_at = time.time()
-    command = build_remote_health_check_command(host)
+    staged_app_profile_path = ""
     try:
+        if app_profile is not None:
+            staged_app_profile_path = _stage_remote_app_profile(host, app_profile)
+            command = build_remote_health_check_command(host, app_profile_path=staged_app_profile_path)
+            log_queue.put("远程健康检查目标：测试 APP 包")
+        else:
+            command = build_remote_health_check_command(host)
         log_queue.put(f"远程节点：{host.name} ({host.username}@{host.host}:{host.port})")
         log_queue.put("远程健康检查：开始")
         exit_code = _exec_ssh_command(host, command, log_queue, stop_event=stop_event)
@@ -201,6 +224,8 @@ def run_remote_health_check(
             finished_at=finished_at,
         )
     finally:
+        if staged_app_profile_path:
+            _remove_remote_app_profile(host, staged_app_profile_path, log_queue)
         lock.release()
 
 
@@ -211,10 +236,14 @@ def collect_remote_artifacts(
     *,
     local_root: Path | str = "remote_artifacts",
     remote_dirs: tuple[str, ...] = ("logs", "screenshots", "reports"),
+    package_kind: str = "",
 ) -> RemoteArtifactResult:
     started_at = time.time()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    local_dir = Path(local_root) / _safe_path_name(host.name) / timestamp
+    local_dir = Path(local_root) / _safe_path_name(host.name)
+    if package_kind == "test":
+        local_dir = local_dir / "test-app"
+    local_dir = local_dir / timestamp
     local_dir.mkdir(parents=True, exist_ok=True)
     copied = 0
 
@@ -267,6 +296,7 @@ def build_remote_command(host: RemoteHost, request: RemoteRunRequest) -> str:
         parts.extend([".", _quote(host.venv_activate), "&&"])
 
     run_parts = [
+        "env", "-u", APP_PROFILE_ENV, "-u", ACCOUNT_PROFILE_ENV,
         _quote(host.python),
         "run.py",
         "--config",
@@ -297,11 +327,19 @@ def build_remote_command(host: RemoteHost, request: RemoteRunRequest) -> str:
         run_parts.append("--attach-existing-app")
     if request.account_profile_path and scope != "precheck":
         run_parts.extend(["--account-profile", _quote(request.account_profile_path)])
+    if request.app_profile_path:
+        # Package identity is needed by precheck as well as actual test runs.
+        run_parts.extend(["--app-profile", _quote(request.app_profile_path)])
     parts.extend(run_parts)
     return " ".join(parts)
 
 
-def build_remote_health_check_command(host: RemoteHost) -> str:
+def build_remote_health_check_command(host: RemoteHost, *, app_profile_path: str = "") -> str:
+    profile_setup = (
+        f"import os;os.environ.pop({APP_PROFILE_ENV!r},None);"
+        f"os.environ.pop({ACCOUNT_PROFILE_ENV!r},None);"
+        + (f"os.environ[{APP_PROFILE_ENV!r}]={app_profile_path!r};" if app_profile_path else "")
+    )
     import_code = (
         "import importlib.util;"
         "mods=['yaml','playwright','psutil','openpyxl','cryptography'];"
@@ -310,12 +348,14 @@ def build_remote_health_check_command(host: RemoteHost) -> str:
         "raise SystemExit(1 if missing else 0)"
     )
     config_code = (
+        profile_setup +
         "from pathlib import Path;"
         "from core.config import load_config;"
         f"cfg=load_config(Path({host.config!r}));"
         "print('config loaded; platform=' + str(cfg.get('platform', {}).get('name', 'auto')))"
     )
     app_code = (
+        profile_setup +
         "from pathlib import Path;"
         "from core.config import load_config;"
         "from core.app_config import resolve_app_config;"
@@ -503,6 +543,54 @@ def _stage_remote_account_profile(host: RemoteHost, profile: dict[str, Any]) -> 
     finally:
         client.close()
     return remote_path
+
+
+def _stage_remote_app_profile(host: RemoteHost, profile: dict[str, Any]) -> str:
+    """Stage only a normalized package profile, never a persistent node config."""
+    try:
+        normalized = runtime_app_profile(profile)
+        payload = yaml.safe_dump(normalized, allow_unicode=True, sort_keys=False)
+    except Exception:
+        raise RemoteRunError("测试 APP 包运行配置无效，无法准备远程执行") from None
+    remote_path = _remote_join(host.project_dir, "config", f".ui_app_profile_{uuid.uuid4().hex}.yaml")
+    client = _connect_ssh_client(host)
+    try:
+        sftp = client.open_sftp()
+        try:
+            try:
+                with sftp.open(remote_path, "wx") as remote_file:
+                    # Limit access before writing, not after sending the payload.
+                    sftp.chmod(remote_path, 0o600)
+                    remote_file.write(payload)
+            except Exception:
+                try:
+                    sftp.remove(remote_path)
+                except Exception:
+                    pass
+                raise
+        finally:
+            sftp.close()
+    except Exception:
+        raise RemoteRunError("远程 APP 包运行配置上传失败，请检查 SSH 与文件权限") from None
+    finally:
+        client.close()
+    return remote_path
+
+
+def _remove_remote_app_profile(host: RemoteHost, remote_path: str, log_queue: queue.Queue) -> None:
+    try:
+        client = _connect_ssh_client(host)
+        try:
+            sftp = client.open_sftp()
+            try:
+                sftp.remove(remote_path)
+            finally:
+                sftp.close()
+        finally:
+            client.close()
+        log_queue.put("远程 APP 包临时配置已清理")
+    except Exception:
+        log_queue.put("远程 APP 包临时配置清理失败，请检查节点连接与文件权限")
 
 
 def _remove_remote_account_profile(

@@ -694,7 +694,7 @@ class RemoteCdpSyncPipelineTests(unittest.TestCase):
 
         self.assertEqual(order, ["key", "archive", "switch"])
         connect.assert_called_once_with(self.host)
-        load.assert_called_once_with(self.root.resolve() / "config" / "custom-source.yaml")
+        load.assert_called_once_with(self.root.resolve() / "config" / "custom-source.yaml", ignore_runtime_profiles=True)
         self.assertEqual(deploy.call_args.args[2], self.key_bytes)
         self.assertEqual(
             tuple(Path(path).resolve() for path in bundle.call_args.kwargs["protected_paths"]),
@@ -759,7 +759,7 @@ class RemoteCdpSyncPipelineTests(unittest.TestCase):
         ):
             with self.assertRaises(RemoteRunError):
                 sync_remote_project(self.host, project_root=self.root, local_config_path="config/custom.yaml")
-        load.assert_called_once_with(self.root.resolve() / "config" / "custom.yaml")
+        load.assert_called_once_with(self.root.resolve() / "config" / "custom.yaml", ignore_runtime_profiles=True)
 
     def test_absolute_source_config_is_not_rebased_to_project(self) -> None:
         from core.remote_sync import sync_remote_project
@@ -771,7 +771,7 @@ class RemoteCdpSyncPipelineTests(unittest.TestCase):
         ):
             with self.assertRaises(RemoteRunError):
                 sync_remote_project(self.host, project_root=self.root / "project", local_config_path=config_path)
-        load.assert_called_once_with(config_path)
+        load.assert_called_once_with(config_path, ignore_runtime_profiles=True)
 
     def test_disabled_auth_syncs_code_without_private_key_deployment(self) -> None:
         from core.remote_sync import sync_remote_project

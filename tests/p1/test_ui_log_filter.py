@@ -97,6 +97,15 @@ class UiLogFilterTests(unittest.TestCase):
         self.assertLess(displayed.index("中文失败摘要"), displayed.index("原始失败日志"))
         self.assertIn("TimeoutError: element did not appear", displayed)
 
+    def test_startup_configuration_errors_are_visible_before_a_run_log_exists(self) -> None:
+        for error in ("Config error: invalid APP path", "配置加载失败：测试 APP 路径无效",
+                      "测试 APP 包未选择独立测试账号组，已拒绝复用生产账号"):
+            with self.subTest(error=error):
+                visible = unsuccessful_log_text("已选择 2 条用例，开始执行\n" + error + "\n本机用例执行失败：退出码=2")
+                self.assertIn(error, visible)
+                self.assertIn("退出码=2", visible)
+                self.assertNotIn("已选择 2 条用例", visible)
+
 
 if __name__ == "__main__":
     unittest.main()

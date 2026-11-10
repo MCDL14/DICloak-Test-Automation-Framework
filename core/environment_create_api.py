@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from core.app_packages import resolve_api_url
+
 
 ENVIRONMENT_CREATE_API_URL = "https://gin-server.dicloak.com/gin/v1/env"
 ENVIRONMENT_BATCH_DELETE_API_URL = "https://gin-server.dicloak.com/gin/v1/env/batch"
@@ -47,6 +49,7 @@ class EnvironmentCreateApiClient:
         http_api_key: str | None = None,
     ) -> None:
         self.cdp = cdp_driver
+        self.config = getattr(cdp_driver, "config", None)
         self.timeout_seconds = _positive_int(timeout_seconds, "timeout_seconds")
         self.attempts = _positive_int(attempts, "attempts")
         self.payload_template_path = Path(payload_template_path)
@@ -271,7 +274,7 @@ class EnvironmentCreateApiClient:
     ) -> dict[str, object]:
         result = self.cdp.evaluate_with_args(
             """
-            async ({ method, version, deviceId, httpKey, payload, timeoutMs, apiUrl }) => {
+            async ({ method, version, deviceId, httpKey, payload, timeoutMs, apiUrl, testPackage }) => {
                 let state = {};
                 try {
                     state = JSON.parse(localStorage.getItem("basic:state") || "{}");
@@ -300,6 +303,7 @@ class EnvironmentCreateApiClient:
                         mode: "cors",
                         credentials: "omit",
                         referrerPolicy: "strict-origin-when-cross-origin",
+                        redirect: testPackage ? "error" : "follow",
                     };
                     if (method.toUpperCase() === "GET") {
                         for (const [name, value] of Object.entries(payload)) {
@@ -332,7 +336,8 @@ class EnvironmentCreateApiClient:
                 "httpKey": self.http_api_key if api_url == ENVIRONMENT_LIST_API_URL else "",
                 "payload": payload,
                 "timeoutMs": self.timeout_seconds * 1000,
-                "apiUrl": api_url,
+                "apiUrl": resolve_api_url(self.config, api_url),
+                "testPackage": isinstance(self.config, Mapping) and self.config.get("_app_package_kind") == "test",
             },
         )
         if not isinstance(result, dict):

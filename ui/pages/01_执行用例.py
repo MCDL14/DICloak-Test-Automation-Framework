@@ -46,6 +46,14 @@ from core.account_groups import (
     runtime_account_profile,
 )
 from core.config import ConfigError, load_config
+from core.app_packages import (
+    AppPackageError,
+    TEST_ACCOUNT_GROUPS_PATH,
+    TEST_PACKAGE_SETTINGS_PATH,
+    load_test_package_settings,
+    runtime_app_profile,
+    test_package_missing_fields,
+)
 from core.ui_log_filter import (
     failure_detail_text as _failure_detail_text,
     localized_failure_overview_text as _localized_failure_overview_text,
@@ -338,7 +346,7 @@ except Exception as exc:
     st.stop()
 
 try:
-    _base_config = load_config(_CONFIG_PATH)
+    _base_config = load_config(_CONFIG_PATH, ignore_runtime_profiles=True)
     account_groups = load_account_groups(_ACCOUNT_GROUPS_PATH, base_config=_base_config)
 except (ConfigError, AccountGroupError) as exc:
     st.error(f"账号组配置读取失败：{exc}")
@@ -907,6 +915,12 @@ concurrent_group_conflicts: list[str] = []
 health_clicked = False
 code_status_clicked = False
 code_sync_clicked = False
+is_test_package = False
+package_kind = "production"
+package_missing: list[str] = []
+local_app_profile = None
+remote_app_profile = None
+current_accounts_path = _ACCOUNT_GROUPS_PATH
 
 with st.sidebar:
     st.header("执行状态")
@@ -946,18 +960,49 @@ with st.sidebar:
 
     st.divider()
     st.header("运行位置")
-    execution_mode = st.radio(
+    execution_location = st.radio(
         "执行位置",
-        options=["本机", "远程节点", "本机 + Mac 远程"],
+        options=["本机", "远程节点", "本机 + Mac 远程", "测试 APP 包"],
         horizontal=True,
         help="同步模式会让 Windows 本机和 macOS 远程节点同时执行同一批已勾选用例。",
     )
+    is_test_package = execution_location == "测试 APP 包"
+    package_kind = "test" if is_test_package else "production"
+    execution_mode = execution_location
+    if is_test_package:
+        target_label = st.radio(
+            "测试包运行位置", ["Windows 本机", "Mac 远程", "双端同步"],
+            key="test_package_execution_target", horizontal=True,
+        )
+        execution_mode = {"Windows 本机": "本机", "Mac 远程": "远程节点", "双端同步": "本机 + Mac 远程"}[target_label]
+        try:
+            package_settings = load_test_package_settings(_PROJECT_ROOT / TEST_PACKAGE_SETTINGS_PATH)
+            current_accounts_path = _PROJECT_ROOT / TEST_ACCOUNT_GROUPS_PATH
+            account_groups = load_account_groups(current_accounts_path, package_kind="test")
+            account_group_options = _account_group_options()
+            account_group_labels = list(account_group_options)
+            local_app_profile = runtime_app_profile(package_settings)
+            remote_app_profile = runtime_app_profile(package_settings)
+        except (AppPackageError, AccountGroupError) as exc:
+            st.error(f"测试包配置读取失败：{exc}")
+            st.stop()
+        if execution_mode in {"本机", "本机 + Mac 远程"}:
+            package_missing.extend(test_package_missing_fields(package_settings, "windows"))
+        if execution_mode in {"远程节点", "本机 + Mac 远程"}:
+            package_missing.extend(test_package_missing_fields(package_settings, "macos"))
+        st.warning("当前仅执行测试 APP 包；使用独立测试账号、请求地址和 CDP 端口。")
+        if st.button("配置测试包及两组账号", key="open_test_package_settings"):
+            st.session_state["account_package_scope"] = "测试 APP 包"
+            st.switch_page("pages/03_账号组.py")
+        if package_missing:
+            st.error(f"测试包配置缺少：{'、'.join(dict.fromkeys(package_missing))}。请先到“账号组”页面配置测试包。")
 
     if execution_mode in {"本机", "本机 + Mac 远程"}:
         attach_existing = st.checkbox(
             "连接已打开的 APP",
             value=True,
-            help="勾选：CDP 端口有监听则直接连接；没有监听则生成 120 秒凭证，关闭并重新启动 APP。\n取消：按托管模式启动 APP。签发失败不会关闭当前 APP。",
+            help="勾选：复用 CDP；测试包还会核对监听进程的实际程序路径。没有监听则签发 120 秒凭证并重启所选 APP。测试包不会按名称关闭生产进程。",
+            **({"key": "test_package_local_attach"} if is_test_package else {}),
         )
         if execution_mode == "本机":
             st.caption("本机模式执行全部已勾选用例。")
@@ -968,8 +1013,11 @@ with st.sidebar:
         st.caption("远程模式选择“执行用例”时，会按下方已勾选用例执行。")
 
     st.markdown("**执行账号组**")
-    if not _ACCOUNT_GROUPS_PATH.exists():
-        st.warning("尚未保存账号组；当前组 1 从 config.yaml 临时迁移，组 2 为空。请先到“账号组”页面保存。")
+    if not current_accounts_path.exists():
+        if is_test_package:
+            st.warning("尚未保存测试包账号；两组均为空，不会使用生产账号。请先到“账号组”页面配置测试包。")
+        else:
+            st.warning("尚未保存账号组；当前组 1 从 config.yaml 临时迁移，组 2 为空。请先到“账号组”页面保存。")
 
     if execution_mode == "本机":
         local_group_label = st.selectbox(
@@ -977,6 +1025,7 @@ with st.sidebar:
             options=account_group_labels,
             index=0,
             help="本机子进程只会收到当前选中组的账号数据。",
+            **({"key": "test_package_local_group"} if is_test_package else {}),
         )
         local_account_group_slot = account_group_options[local_group_label]
     elif execution_mode == "远程节点":
@@ -985,6 +1034,7 @@ with st.sidebar:
             options=account_group_labels,
             index=1,
             help="选中组会通过临时配置安全传给远端，执行结束后删除。",
+            **({"key": "test_package_remote_group"} if is_test_package else {}),
         )
         remote_account_group_slot = account_group_options[remote_group_label]
     else:
@@ -992,11 +1042,13 @@ with st.sidebar:
             "Windows 本机账号组",
             options=account_group_labels,
             index=0,
+            **({"key": "test_package_dual_local_group"} if is_test_package else {}),
         )
         remote_group_label = st.selectbox(
             "macOS 远程账号组",
             options=account_group_labels,
             index=1,
+            **({"key": "test_package_dual_remote_group"} if is_test_package else {}),
         )
         local_account_group_slot = account_group_options[local_group_label]
         remote_account_group_slot = account_group_options[remote_group_label]
@@ -1033,8 +1085,8 @@ with st.sidebar:
     st.divider()
     st.caption(f"共 {len(cases)} 条用例 / {len(module_names)} 个模块")
 
-local_account_profile = runtime_account_profile(account_groups[local_account_group_slot])
-remote_account_profile = runtime_account_profile(account_groups[remote_account_group_slot])
+local_account_profile = runtime_account_profile(account_groups[local_account_group_slot], package_kind=package_kind)
+remote_account_profile = runtime_account_profile(account_groups[remote_account_group_slot], package_kind=package_kind)
 
 if execution_mode in {"远程节点", "本机 + Mac 远程"}:
     st.subheader("远程节点执行")
@@ -1044,7 +1096,7 @@ if execution_mode in {"远程节点", "本机 + Mac 远程"}:
     except Exception as exc:
         remote_hosts = []
         st.error(f"远程节点配置读取失败：{exc}")
-    if execution_mode == "本机 + Mac 远程":
+    if execution_mode == "本机 + Mac 远程" or is_test_package:
         remote_hosts = [
             host
             for host in remote_hosts
@@ -1218,7 +1270,7 @@ if execution_mode in {"远程节点", "本机 + Mac 远程"}:
                 st.markdown("**Windows + macOS 同步执行**")
                 st.caption(f"两个执行端将同时运行下方已勾选的 {len(selected_ids)} 条用例。")
         else:
-            mode_key = "remote_run_type_choice"
+            mode_key = "test_package_remote_run_type_choice" if is_test_package else "remote_run_type_choice"
             st.session_state.setdefault(mode_key, "远程预检")
             precheck_col, cases_col = st.columns(2)
             with precheck_col:
@@ -1266,6 +1318,7 @@ if execution_mode in {"远程节点", "本机 + Mac 远程"}:
                     value=False,
                     disabled=remote_scope == "precheck",
                     help="远端 CDP 端口有监听则直接连接；没有监听则先签发凭证，再关闭并重新启动远端 APP。预检不启停 APP。",
+                    **({"key": "test_package_remote_attach"} if is_test_package else {}),
                 )
                 st.caption("优先复用远端 APP；CDP 端口未监听时带凭证重新启动。")
             with option_artifact_col:
@@ -1324,6 +1377,7 @@ if execution_mode in {"远程节点", "本机 + Mac 远程"}:
                             remote_value,
                             attach_existing_app=remote_attach_existing,
                             case_ids=selected_ids if remote_scope == "cases" else None,
+                            **({"app_profile": remote_app_profile} if is_test_package else {}),
                         )
                         st.markdown("**命令预览**")
                         st.code(command_preview, language="bash")
@@ -1413,6 +1467,10 @@ with col_btn:
             or (remote_scope == "cases" and not _remote_selected_cases_supported())
             or (remote_scope == "cases" and bool(remote_account_missing))
         )
+    if package_missing:
+        run_disabled = True
+    if is_test_package:
+        run_label = "[测试包] " + run_label
     if task_status.get("locked") or active_execution is not None:
         run_disabled = True
     run_clicked = st.button(
@@ -1433,6 +1491,9 @@ with col_info:
         st.caption("远程执行会使用下方已勾选用例；显示模块和搜索显示只影响列表可见性。")
 
 current_execution_context = {
+    "package_kind": package_kind,
+    "local_app_profile": local_app_profile,
+    "remote_app_profile": remote_app_profile,
     "execution_mode": execution_mode,
     "attach_existing": attach_existing,
     "local_account_profile": local_account_profile,
@@ -1459,7 +1520,9 @@ if (
 ):
     persisted_title = st.empty()
     persisted_title.markdown(
-        '<div class="dicloak-section-title">最近一次用例结果</div>',
+        '<div class="dicloak-section-title">最近一次用例结果'
+        + (' · 测试 APP 包' if (last_execution_result.get("execution_context") or {}).get("package_kind") == "test" else ' · 生产 APP 包')
+        + '</div>',
         unsafe_allow_html=True,
     )
     if last_execution_result.get("stopped"):
@@ -1579,6 +1642,7 @@ if start_execution_requested or active_execution is not None:
                     "ssh_username": remote_ssh_username,
                     "ssh_password": remote_ssh_password,
                     "stop_event": stop_event,
+                    **({"app_profile": remote_app_profile} if is_test_package else {}),
                 },
                 daemon=True,
             )
@@ -1592,6 +1656,7 @@ if start_execution_requested or active_execution is not None:
                     "ssh_username": remote_ssh_username,
                     "ssh_password": remote_ssh_password,
                     "stop_event": stop_event,
+                    **({"app_profile": remote_app_profile} if is_test_package else {}),
                 },
                 daemon=True,
             )
@@ -1605,6 +1670,7 @@ if start_execution_requested or active_execution is not None:
                     "ssh_username": remote_ssh_username,
                     "ssh_password": remote_ssh_password,
                     "stop_event": stop_event,
+                    **({"app_profile": remote_app_profile} if is_test_package else {}),
                 },
                 daemon=True,
             )
@@ -1628,6 +1694,8 @@ if start_execution_requested or active_execution is not None:
                         "remote_test_ids": remote_retry_ids,
                         "local_attach_existing_app": bool(run_context.get("attach_existing", True)),
                         "local_account_profile": dict(run_context.get("local_account_profile") or {}),
+                        **({"local_app_profile": run_context["local_app_profile"]} if run_context.get("local_app_profile") else {}),
+                        **({"remote_app_profile": run_context["remote_app_profile"]} if run_context.get("remote_app_profile") else {}),
                         **retry_common,
                         "stop_event": stop_event,
                     },
@@ -1640,6 +1708,7 @@ if start_execution_requested or active_execution is not None:
                     kwargs={
                         "attach_existing_app": bool(run_context.get("attach_existing", True)),
                         "account_profile": dict(run_context.get("local_account_profile") or {}),
+                        **({"app_profile": run_context["local_app_profile"]} if run_context.get("local_app_profile") else {}),
                         "stop_event": stop_event,
                     },
                     daemon=True,
@@ -1658,6 +1727,7 @@ if start_execution_requested or active_execution is not None:
                         "ssh_password": retry_common.pop("remote_ssh_password"),
                         "case_ids": remote_retry_ids,
                         "account_profile": retry_common.pop("remote_account_profile"),
+                        **({"app_profile": run_context["remote_app_profile"]} if run_context.get("remote_app_profile") else {}),
                         "stop_event": stop_event,
                     },
                     daemon=True,
@@ -1669,6 +1739,7 @@ if start_execution_requested or active_execution is not None:
                 kwargs={
                     "attach_existing_app": attach_existing,
                     "account_profile": local_account_profile,
+                    **({"app_profile": local_app_profile} if is_test_package else {}),
                     "stop_event": stop_event,
                 },
                 daemon=True,
@@ -1680,6 +1751,7 @@ if start_execution_requested or active_execution is not None:
                 kwargs={
                     "local_attach_existing_app": attach_existing,
                     "local_account_profile": local_account_profile,
+                    **({"local_app_profile": local_app_profile, "remote_app_profile": remote_app_profile} if is_test_package else {}),
                     "remote_host_name": remote_host_name,
                     "remote_attach_existing_app": remote_attach_existing,
                     "remote_collect_artifacts": remote_collect_artifacts,
@@ -1707,6 +1779,7 @@ if start_execution_requested or active_execution is not None:
                     "ssh_password": remote_ssh_password,
                     "case_ids": selected_ids if remote_scope == "cases" else None,
                     "account_profile": remote_account_profile if remote_scope == "cases" else None,
+                    **({"app_profile": remote_app_profile} if is_test_package else {}),
                     "stop_event": stop_event,
                 },
                 daemon=True,

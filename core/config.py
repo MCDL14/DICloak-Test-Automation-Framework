@@ -8,6 +8,12 @@ from typing import Any
 import yaml
 
 from core.app_cdp_token import DEFAULT_TTL_SECONDS
+from core.app_packages import (
+    APP_PROFILE_ENV,
+    AppPackageError,
+    apply_runtime_app_profile,
+    load_runtime_app_profile,
+)
 
 from core.account_groups import (
     ACCOUNT_PROFILE_ENV,
@@ -48,6 +54,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "shutdown_timeout": 20,
     },
     "platforms": {},
+    "api": {"base_url": ""},
     "cdp": {
         "host": "127.0.0.1",
         "port": 9222,
@@ -285,7 +292,7 @@ REQUIRED_SECTIONS = (
 )
 
 
-def load_config(path: Path) -> dict[str, Any]:
+def load_config(path: Path, *, ignore_runtime_profiles: bool = False) -> dict[str, Any]:
     config_path = path.expanduser()
     if not config_path.exists():
         raise ConfigError(f"config file does not exist: {config_path}")
@@ -300,7 +307,7 @@ def load_config(path: Path) -> dict[str, Any]:
     validate_required_sections(loaded)
     loaded = _merge_external_test_data(config_path, loaded)
     merged = deep_merge(DEFAULT_CONFIG, loaded)
-    profile_file = str(os.environ.get(ACCOUNT_PROFILE_ENV, "") or "").strip()
+    profile_file = "" if ignore_runtime_profiles else str(os.environ.get(ACCOUNT_PROFILE_ENV, "") or "").strip()
     if profile_file:
         try:
             profile = load_runtime_account_profile(profile_file)
@@ -308,6 +315,13 @@ def load_config(path: Path) -> dict[str, Any]:
         except AccountGroupError as exc:
             raise ConfigError(str(exc)) from exc
     merged = _apply_cdp_auth_local_override(config_path, merged)
+    app_profile_file = "" if ignore_runtime_profiles else str(os.environ.get(APP_PROFILE_ENV, "") or "").strip()
+    if app_profile_file:
+        try:
+            app_profile = load_runtime_app_profile(app_profile_file)
+            merged = apply_runtime_app_profile(merged, app_profile, profile_file=app_profile_file)
+        except AppPackageError as exc:
+            raise ConfigError(str(exc)) from exc
     validate_config(merged)
     merged["_config_file"] = str(config_path.resolve())
     test_data_file = str(merged.get("_test_data_file", "")).strip()

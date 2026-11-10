@@ -59,7 +59,10 @@ PROTECTED_EXCLUDE_PATTERNS = (
     "config/remote_sync.yaml",
     "config/remote_connection_cache.yaml",
     "config/account_groups.yaml",
+    "config/account_groups.test.yaml",
+    "config/test_app_package.yaml",
     "config/.ui_account_profile_*.yaml",
+    "config/.ui_app_profile_*.yaml",
 )
 
 DEFAULT_EXCLUDE_PATTERNS = (
@@ -210,7 +213,7 @@ def sync_remote_project(
     # Prepare only the explicitly selected signing key before publishing code.
     # No directory scan, archive entry, local temporary key or token is created.
     try:
-        config = load_config(config_path)
+        config = load_config(config_path, ignore_runtime_profiles=True)
         config["_project_root"] = str(root)
         key_bytes = prepare_cdp_private_key(config)
         protected_paths = (resolve_cdp_private_key_path(config),) if key_bytes is not None else ()
@@ -594,7 +597,7 @@ if [ "$OLD_EXISTS" = "1" ] && [ -d "$OLD_REAL/config" ]; then
     [ -f "$cfg" ] || continue
     base=$(basename "$cfg")
     case "$base" in
-      *.example.yaml|remote_hosts.yaml|remote_sync.yaml|remote_connection_cache.yaml|account_groups.yaml) continue ;;
+      *.example.yaml|remote_hosts.yaml|remote_sync.yaml|remote_connection_cache.yaml|account_groups.yaml|account_groups.test.yaml|test_app_package.yaml|.ui_account_profile_*.yaml|.ui_app_profile_*.yaml) continue ;;
     esac
     if [ -f "$RELEASE_DIR/config/$base" ]; then
       continue

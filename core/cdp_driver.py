@@ -40,6 +40,7 @@ class CDPDriver:
         return f"http://{cdp.get('host', '127.0.0.1')}:{cdp.get('port', 9222)}"
 
     def list_targets(self) -> list[CDPTarget]:
+        self._verify_app_package_target()
         url = f"{self.endpoint}/json"
         try:
             with urllib.request.urlopen(url, timeout=5) as response:
@@ -60,6 +61,7 @@ class CDPDriver:
         return targets
 
     def connect(self) -> None:
+        self._verify_app_package_target()
         driver = str(self.config["cdp"].get("driver", "playwright")).lower()
         fallback = str(self.config["cdp"].get("fallback_driver", "")).lower()
         try:
@@ -73,6 +75,7 @@ class CDPDriver:
                 )
             else:
                 raise CDPConnectionError(f"unsupported CDP driver: {driver}")
+            self._verify_app_package_target()
         except Exception as exc:
             self.logger.error("Primary CDP driver failed: %s", exc)
             self.close()
@@ -86,10 +89,12 @@ class CDPDriver:
                     ) from exc
                 if fallback == "playwright":
                     self.connect_playwright()
+                    self._verify_app_package_target()
                     return
             raise
 
     def connect_playwright(self) -> None:
+        self._verify_app_package_target()
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
@@ -99,6 +104,7 @@ class CDPDriver:
         deadline = time.time() + connect_timeout
         last_error: Exception | None = None
         while time.time() < deadline:
+            self._verify_app_package_target()
             try:
                 self.playwright = sync_playwright().start()
                 remaining_ms = max(1000, int((deadline - time.time()) * 1000))
@@ -106,10 +112,14 @@ class CDPDriver:
                     self.endpoint,
                     timeout=remaining_ms,
                 )
+                self._verify_app_package_target()
                 context = self.browser.contexts[0] if self.browser.contexts else self.browser.new_context()
                 self.page = self._select_default_page(context.pages) if context.pages else context.new_page()
                 self.logger.info("Connected to APP through Playwright CDP: %s", self.endpoint)
                 return
+            except CDPConnectionError:
+                self._disconnect_unverified_target()
+                raise
             except Exception as exc:
                 last_error = exc
                 self.close()
@@ -121,6 +131,7 @@ class CDPDriver:
         )
 
     def connect_websocket(self) -> None:
+        self._verify_app_package_target()
         try:
             import websocket
         except ImportError as exc:
@@ -130,8 +141,45 @@ class CDPDriver:
         target = next((item for item in targets if item.websocket_url), None)
         if not target:
             raise CDPConnectionError("no websocket CDP target was found")
+        self._verify_app_package_target()
         self.websocket = websocket.create_connection(target.websocket_url, timeout=5)
+        try:
+            self._verify_app_package_target()
+        except CDPConnectionError:
+            self._disconnect_unverified_target()
+            raise
         self.logger.info("Connected to APP through raw WebSocket CDP: %s", target.websocket_url)
+
+    def _verify_app_package_target(self) -> None:
+        # Every P0 case creates a new driver after load_config(); therefore the
+        # isolation guard belongs here as well as in the top-level runner.
+        from core.app import AppStartupError, assert_test_app_cdp_target, is_test_app_package
+
+        if not is_test_app_package(self.config):
+            return
+        try:
+            assert_test_app_cdp_target(self.config, require_listening=True)
+        except AppStartupError as exc:
+            self._disconnect_unverified_target()
+            raise CDPConnectionError(str(exc)) from None
+
+    def _disconnect_unverified_target(self) -> None:
+        # Do not issue Browser.close against a target whose identity changed
+        # during attach. Stop only this automation transport / WebSocket.
+        if self.websocket:
+            try:
+                self.websocket.close()
+            except Exception:
+                pass
+        if self.playwright:
+            try:
+                self.playwright.stop()
+            except Exception:
+                pass
+        self.playwright = None
+        self.browser = None
+        self.page = None
+        self.websocket = None
 
     def select_page(
         self,

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from core.account_groups import ACCOUNT_PROFILE_ENV
+from core.app_packages import APP_PROFILE_ENV
 from core.config import ConfigError, load_config
 from core.logger import setup_logger
 from core.run_metadata import cli_run_start_fields, log_run_end, log_run_start
@@ -19,6 +20,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--account-profile",
         default="",
         help="Path to a temporary runtime account profile selected by the UI",
+    )
+    parser.add_argument(
+        "--app-profile", default="",
+        help="Path to a temporary test-APP package profile selected by the UI",
     )
     parser.add_argument("--level", default=None, help="Case level, for example P0 or P1")
     parser.add_argument("--module", default=None, help="Run cases from one module")
@@ -47,10 +52,15 @@ def main(argv: list[str] | None = None) -> int:
     run_source = _run_source_from_environment()
     if args.account_profile:
         os.environ[ACCOUNT_PROFILE_ENV] = str(Path(args.account_profile).expanduser().resolve())
+    if args.app_profile:
+        os.environ[APP_PROFILE_ENV] = str(Path(args.app_profile).expanduser().resolve())
     try:
         config = load_config(Path(args.config))
     except ConfigError as exc:
-        print(f"Config error: {exc}")
+        print(f"[ERROR] 配置加载失败（Config error）：{exc}")
+        return ExitCode.CONFIG_OR_PRECHECK_ERROR
+    if config.get("_test_package_account_profile_missing") and not args.precheck:
+        print("[ERROR] 测试 APP 包未选择独立测试账号组，已拒绝复用生产账号；请在 UI 配置并选择测试包账号组")
         return ExitCode.CONFIG_OR_PRECHECK_ERROR
 
     logger = setup_logger(config, reset=True)
@@ -59,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     start_fields["source"] = run_source
     if config.get("_account_group_name"):
         start_fields["account_group"] = str(config["_account_group_name"])
+    if config.get("_app_package_kind"):
+        start_fields["app_package"] = str(config["_app_package_kind"])
     log_run_start(logger, **start_fields)
 
     try:

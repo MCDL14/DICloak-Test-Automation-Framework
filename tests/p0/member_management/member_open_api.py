@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 import requests
 
 from core.config import timeout_seconds
+from core.app_packages import resolve_api_url
 
 
 API_TOKEN_ENV = "DICLOAK_API_MEMBER_EDIT_TOKEN"
@@ -65,7 +66,8 @@ class MemberEditApiClient:
 
     def _load_api_config(self) -> MemberEditApiConfig:
         data = api_member_edit_data(self.config)
-        base_url = str(data.get("base_url") or DEFAULT_BASE_URL).strip()
+        base_url = resolve_api_url(self.config, str(data.get("base_url") or DEFAULT_BASE_URL).strip())
+        is_test_package = self.config.get("_app_package_kind") == "test"
         profile_selected = bool(self.config.get("_account_profile_file"))
         token = str(
             (data.get("token") if profile_selected else os.environ.get(API_TOKEN_ENV))
@@ -80,6 +82,11 @@ class MemberEditApiClient:
             or os.environ.get(API_MEMBER_ID_ENV)
             or DEFAULT_EXTERNAL_MEMBER_ID
         ).strip()
+        if is_test_package:
+            # Test-package credentials must come from its explicit account data,
+            # never production environment variables or historical member IDs.
+            token = str(data.get("token") or "").strip()
+            member_id = str(data.get("external_member_id") or "").strip()
         status_retry = _nested_mapping(data, "status_retry")
         status_retry_times = self._positive_int(
             status_retry.get("times", data.get("status_retry_times")),
@@ -119,7 +126,10 @@ class MemberEditApiClient:
         last_error: requests.RequestException | None = None
         for attempt in range(1, max_attempts + 1):
             try:
-                response = requests.get(url, timeout=timeout)
+                if self.config.get("_app_package_kind") == "test":
+                    response = requests.get(url, timeout=timeout, allow_redirects=False)
+                else:
+                    response = requests.get(url, timeout=timeout)
             except requests.RequestException as exc:
                 last_error = exc
                 if attempt < max_attempts:
@@ -159,23 +169,31 @@ def api_member_edit_value(config: dict, key: str, default: str) -> str:
 
 
 def external_member_id(config: dict) -> str:
+    if config.get("_app_package_kind") == "test":
+        return str(api_member_edit_data(config).get("external_member_id") or "").strip()
     return api_member_edit_value(config, "external_member_id", DEFAULT_EXTERNAL_MEMBER_ID)
 
 
 def internal_member_id(config: dict) -> str:
     data = api_member_edit_data(config)
+    if config.get("_app_package_kind") == "test":
+        return str(_nested_mapping(data, "internal_member").get("member_id") or "").strip()
     value = _nested_mapping(data, "internal_member").get("member_id", data.get("internal_member_id", DEFAULT_INTERNAL_MEMBER_ID))
     return str(value if value is not None else DEFAULT_INTERNAL_MEMBER_ID).strip()
 
 
 def internal_member_username(config: dict) -> str:
     data = api_member_edit_data(config)
+    if config.get("_app_package_kind") == "test":
+        return str(_nested_mapping(data, "internal_member").get("username") or "").strip()
     value = _nested_mapping(data, "internal_member").get("username", data.get("internal_username", DEFAULT_INTERNAL_USERNAME))
     return str(value if value is not None else DEFAULT_INTERNAL_USERNAME).strip()
 
 
 def internal_member_password(config: dict) -> str:
     data = api_member_edit_data(config)
+    if config.get("_app_package_kind") == "test":
+        return str(_nested_mapping(data, "internal_member").get("password") or "")
     value = _nested_mapping(data, "internal_member").get("password", data.get("internal_password", DEFAULT_INTERNAL_PASSWORD))
     return str(value if value is not None else DEFAULT_INTERNAL_PASSWORD)
 

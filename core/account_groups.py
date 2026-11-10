@@ -19,10 +19,15 @@ class AccountGroupError(Exception):
     """Raised when local account-group data is invalid."""
 
 
-def default_account_groups(base_config: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+def default_account_groups(
+    base_config: dict[str, Any] | None = None, *, package_kind: str = "production"
+) -> dict[str, dict[str, Any]]:
+    if package_kind not in {"production", "test"}:
+        raise AccountGroupError("账号配置范围必须是 production 或 test")
+    test_package = package_kind == "test"
     groups = {
         slot: {
-            "name": f"自动化账号组 {index}",
+            "name": f"测试包账号组 {index}" if test_package else f"自动化账号组 {index}",
             "automation_account": {
                 "username": "",
                 "password": "",
@@ -30,8 +35,8 @@ def default_account_groups(base_config: dict[str, Any] | None = None) -> dict[st
                 "member_id": "",
             },
             "case_external_member": {
-                "name": DEFAULT_CASE_EXTERNAL_MEMBER_NAME,
-                "email": DEFAULT_CASE_EXTERNAL_MEMBER_EMAIL,
+                "name": "" if test_package else DEFAULT_CASE_EXTERNAL_MEMBER_NAME,
+                "email": "" if test_package else DEFAULT_CASE_EXTERNAL_MEMBER_EMAIL,
             },
             "internal_member": {
                 "username": "",
@@ -43,7 +48,9 @@ def default_account_groups(base_config: dict[str, Any] | None = None) -> dict[st
         }
         for index, slot in enumerate(ACCOUNT_GROUP_SLOTS, start=1)
     }
-    if not base_config:
+    # Test packages never migrate production credentials, even if a caller
+    # accidentally passes the production base configuration.
+    if test_package or not base_config:
         return groups
 
     account = _mapping(base_config.get("account"))
@@ -81,9 +88,10 @@ def load_account_groups(
     path: Path | str,
     *,
     base_config: dict[str, Any] | None = None,
+    package_kind: str = "production",
 ) -> dict[str, dict[str, Any]]:
     config_path = Path(path)
-    defaults = default_account_groups(base_config)
+    defaults = default_account_groups(base_config, package_kind=package_kind)
     if not config_path.exists():
         return defaults
     try:
@@ -103,13 +111,15 @@ def load_account_groups(
         raw_group = raw_groups.get(slot, defaults[slot])
         if not isinstance(raw_group, dict):
             raise AccountGroupError(f"账号组 {slot} 必须是对象")
-        result[slot] = normalize_account_group(raw_group, slot=slot)
+        result[slot] = normalize_account_group(raw_group, slot=slot, package_kind=package_kind)
     return result
 
 
-def save_account_groups(path: Path | str, groups: dict[str, Any]) -> None:
+def save_account_groups(
+    path: Path | str, groups: dict[str, Any], *, package_kind: str = "production"
+) -> None:
     normalized = {
-        slot: normalize_account_group(_mapping(groups.get(slot)), slot=slot)
+        slot: normalize_account_group(_mapping(groups.get(slot)), slot=slot, package_kind=package_kind)
         for slot in ACCOUNT_GROUP_SLOTS
     }
     config_path = Path(path)
@@ -128,7 +138,12 @@ def save_account_groups(path: Path | str, groups: dict[str, Any]) -> None:
         raise AccountGroupError(f"账号组配置保存失败：{config_path}: {exc}") from exc
 
 
-def normalize_account_group(group: dict[str, Any], *, slot: str = "") -> dict[str, Any]:
+def normalize_account_group(
+    group: dict[str, Any], *, slot: str = "", package_kind: str = "production"
+) -> dict[str, Any]:
+    if package_kind not in {"production", "test"}:
+        raise AccountGroupError("账号配置范围必须是 production 或 test")
+    test_package = package_kind == "test"
     automation_account = _mapping(group.get("automation_account")) or _mapping(group.get("external"))
     case_external_member = (
         _mapping(group.get("case_external_member"))
@@ -138,14 +153,15 @@ def normalize_account_group(group: dict[str, Any], *, slot: str = "") -> dict[st
     case_external_name = (
         case_external_member.get("name")
         if "name" in case_external_member
-        else DEFAULT_CASE_EXTERNAL_MEMBER_NAME
+        else ("" if test_package else DEFAULT_CASE_EXTERNAL_MEMBER_NAME)
     )
     case_external_email = (
         case_external_member.get("email")
         if "email" in case_external_member
-        else DEFAULT_CASE_EXTERNAL_MEMBER_EMAIL
+        else ("" if test_package else DEFAULT_CASE_EXTERNAL_MEMBER_EMAIL)
     )
-    fallback_name = f"自动化账号组 {ACCOUNT_GROUP_SLOTS.index(slot) + 1}" if slot in ACCOUNT_GROUP_SLOTS else "自动化账号组"
+    prefix = "测试包账号组" if test_package else "自动化账号组"
+    fallback_name = f"{prefix} {ACCOUNT_GROUP_SLOTS.index(slot) + 1}" if slot in ACCOUNT_GROUP_SLOTS else prefix
     return {
         "name": str(group.get("name", "") or group.get("group_name", "") or fallback_name).strip() or fallback_name,
         "automation_account": {
@@ -265,14 +281,21 @@ def account_group_test_suffix(config: dict[str, Any], *, digits: int = 6) -> str
             str(account.get("username", "") or "").strip(),
         )
     )
+    if config.get("_app_package_kind") == "test":
+        identity = "test|" + identity
     digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()
     modulus = 10 ** max(1, int(digits))
     return f"{int(digest[:12], 16) % modulus:0{max(1, int(digits))}d}"
 
 
-def runtime_account_profile(group: dict[str, Any]) -> dict[str, Any]:
+def runtime_account_profile(
+    group: dict[str, Any], *, package_kind: str | None = None
+) -> dict[str, Any]:
+    kind = package_kind or str(group.get("package_kind") or "production")
+    if kind not in {"production", "test"}:
+        raise AccountGroupError("运行账号配置范围必须是 production 或 test")
     normalized = normalize_account_group(group)
-    return {
+    profile = {
         "version": 1,
         "group_name": normalized["name"],
         "automation_account": deepcopy(normalized["automation_account"]),
@@ -281,6 +304,9 @@ def runtime_account_profile(group: dict[str, Any]) -> dict[str, Any]:
         "member_api_token": normalized["member_api_token"],
         "http_api_key": normalized["http_api_key"],
     }
+    if kind == "test":
+        profile["package_kind"] = "test"
+    return profile
 
 
 def load_runtime_account_profile(path: Path | str) -> dict[str, Any]:
@@ -331,10 +357,18 @@ def apply_runtime_account_profile(
             "internal_member": deepcopy(internal_member),
         }
     )
+    if normalized.get("package_kind") == "test":
+        # Older production configurations may carry this alias. An explicitly
+        # empty test ID must stay empty rather than falling back to that value.
+        api_data["member_id"] = automation_account["member_id"]
     test_data["api_member_edit"] = api_data
     test_data["case_external_member"] = deepcopy(case_external_member)
     merged["test_data"] = test_data
     merged["_account_group_name"] = normalized["group_name"]
+    if normalized.get("package_kind") == "test":
+        merged["_account_package_kind"] = "test"
+    else:
+        merged.pop("_account_package_kind", None)
     if profile_file:
         merged["_account_profile_file"] = str(Path(profile_file).expanduser().resolve())
     return merged

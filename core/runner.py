@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from core.app import AppManager, AppStartupError
+from core.app import AppManager, AppStartupError, assert_test_app_cdp_target, wait_for_test_app_cdp_target
 from core.case_module import get_test_case_module, normalize_case_module, supported_case_modules_text
 from core.cdp_driver import CDPConnectionError, CDPDriver
 from core.circuit_breaker import BreakerName, CircuitBreakerRegistry
@@ -74,14 +74,20 @@ class AutomationRunner:
         self.breakers = CircuitBreakerRegistry()
 
     def run_precheck_only(self, *, attach_existing_app: bool = False) -> int:
-        reuse_existing_app = self._reuse_existing_app(attach_existing_app)
+        try:
+            reuse_existing_app = self._reuse_existing_app(attach_existing_app)
+        except AppStartupError as exc:
+            self.logger.error("APP 包目标预检失败：%s", _safe_startup_failure_detail(exc))
+            return ExitCode.CONFIG_OR_PRECHECK_ERROR
         result = EnvironmentPrechecker(self.config, self.logger).run(attach_existing_app=reuse_existing_app)
         return ExitCode.SUCCESS if result.passed else ExitCode.CONFIG_OR_PRECHECK_ERROR
 
     def _reuse_existing_app(self, requested: bool) -> bool:
         if not requested:
+            assert_test_app_cdp_target(self.config)
             return False
         available = is_cdp_port_open(self.config)
+        assert_test_app_cdp_target(self.config, listening=available)
         if available:
             self.logger.info("Attach existing APP: configured CDP port is listening; reusing APP without signing or restarting")
         else:
@@ -97,7 +103,14 @@ class AutomationRunner:
         attach_existing_app: bool = False,
     ) -> int:
         # Decide once per run. A later CDP attach error must not kill a user APP.
-        reuse_existing_app = self._reuse_existing_app(attach_existing_app)
+        try:
+            reuse_existing_app = self._reuse_existing_app(attach_existing_app)
+        except AppStartupError as exc:
+            detail = _safe_startup_failure_detail(exc)
+            self.logger.error("APP 包目标校验失败：%s", detail)
+            self.breakers.trip(BreakerName.APP_STARTUP, detail)
+            self.notifier.send_failure("APP 包目标校验失败", detail)
+            return ExitCode.APP_OR_CDP_ERROR
         if self.config["run"].get("precheck_before_run", True):
             precheck = EnvironmentPrechecker(self.config, self.logger).run(attach_existing_app=reuse_existing_app)
             if not precheck.passed:
@@ -154,7 +167,9 @@ class AutomationRunner:
                             "Dicloak APP 进程检测失败",
                             "启动后 30 秒内未检测到 APP 进程，将继续尝试 CDP 连接。",
                         )
+                wait_for_test_app_cdp_target(self.config)
                 cdp_driver.connect()
+                assert_test_app_cdp_target(self.config)
                 cdp_driver.wait_for_app_ready()
                 cdp_driver.close()
                 self.logger.info("CDP startup check passed and connection released before test execution")

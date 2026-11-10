@@ -32,6 +32,8 @@ from typing import Any, Callable
 import yaml
 
 from core.app import AppManager
+from core.app_packages import APP_PROFILE_ENV, apply_runtime_app_profile, runtime_app_profile
+from core.account_groups import ACCOUNT_PROFILE_ENV
 from core.case_display import case_display_name
 from core.case_module import get_test_case_module
 from core.config import ConfigError, load_config
@@ -217,7 +219,7 @@ def _release_run_lock() -> None:
 def _build_config() -> dict[str, Any]:
     """加载项目配置，异常时抛出 RuntimeError."""
     try:
-        return load_config(CONFIG_PATH)
+        return load_config(CONFIG_PATH, ignore_runtime_profiles=True)
     except ConfigError as exc:
         raise RuntimeError(f"配置加载失败: {exc}") from exc
 
@@ -452,6 +454,7 @@ def preview_remote_command(
     *,
     attach_existing_app: bool = False,
     case_ids: list[str] | tuple[str, ...] | None = None,
+    app_profile: dict[str, Any] | None = None,
 ) -> str:
     """返回远程执行命令预览，供 UI 展示；不会连接 SSH 或读取密码."""
     host = _remote_host_by_name(host_name)
@@ -462,7 +465,13 @@ def preview_remote_command(
         value=value,
         values=tuple(case_ids or ()),
         attach_existing_app=attach_existing_app,
+        app_profile_path=(
+            host.project_dir.rstrip("/") + "/config/.ui_app_profile_<run-id>.yaml"
+            if app_profile is not None else ""
+        ),
     )
+    if app_profile is not None:
+        runtime_app_profile(app_profile)
     return build_remote_command(host, request)
 
 
@@ -575,6 +584,7 @@ def run_selected_tests(
     *,
     attach_existing_app: bool = True,
     account_profile: dict[str, Any] | None = None,
+    app_profile: dict[str, Any] | None = None,
     stop_event: threading.Event | None = None,
 ) -> None:
     """Run selected cases in a cancellable CLI child process for the Streamlit UI."""
@@ -594,6 +604,7 @@ def run_selected_tests(
             attach_existing_app=attach_existing_app,
             account_profile=account_profile,
             stop_event=active_stop_event,
+            **({"app_profile": app_profile} if app_profile is not None else {}),
         )
     except Exception as exc:
         log_queue.put(f"执行器内部异常：{exc}")
@@ -610,6 +621,7 @@ def _run_selected_tests_unlocked(
     attach_existing_app: bool,
     account_profile: dict[str, Any] | None,
     stop_event: threading.Event,
+    app_profile: dict[str, Any] | None = None,
 ) -> int:
     if stop_event.is_set():
         log_queue.put("本机用例执行已停止（尚未启动）")
@@ -619,6 +631,8 @@ def _run_selected_tests_unlocked(
         return 0
 
     profile_path: Path | None = None
+    app_profile_path: Path | None = None
+    effective_app_profile = runtime_app_profile(app_profile) if app_profile is not None else None
     try:
         command = [
             sys.executable,
@@ -631,6 +645,10 @@ def _run_selected_tests_unlocked(
             profile_path = _write_local_account_profile(account_profile)
             command.extend(["--account-profile", str(profile_path)])
             log_queue.put(f"本机账号组：{account_profile.get('group_name', '-')}")
+        if effective_app_profile is not None:
+            app_profile_path = _write_local_app_profile(effective_app_profile)
+            command.extend(["--app-profile", str(app_profile_path)])
+            log_queue.put("本机执行 APP 包：测试 APP 包（独立账号和运行目标）")
         for test_id in test_ids:
             command.extend(["--case", test_id])
         if attach_existing_app:
@@ -644,12 +662,21 @@ def _run_selected_tests_unlocked(
         )
         if stop_event.is_set():
             if not attach_existing_app:
-                _close_managed_app_after_cancel(log_queue)
+                _close_managed_app_after_cancel(
+                    log_queue,
+                    **({"app_profile": effective_app_profile} if effective_app_profile is not None else {}),
+                )
             log_queue.put("本机用例执行已停止")
         elif exit_code != 0:
             log_queue.put(f"本机用例执行失败：退出码={exit_code}")
         return exit_code
     finally:
+        if app_profile_path is not None:
+            try:
+                app_profile_path.unlink(missing_ok=True)
+                log_queue.put("本机 APP 包临时配置已清理")
+            except OSError:
+                log_queue.put("本机 APP 包临时配置清理失败，请检查文件权限")
         if profile_path is not None:
             try:
                 profile_path.unlink(missing_ok=True)
@@ -671,6 +698,21 @@ def _write_local_account_profile(profile: dict[str, Any]) -> Path:
         raise
 
 
+def _write_local_app_profile(profile: dict[str, Any]) -> Path:
+    """Create one short-lived package profile; do not modify production config."""
+    normalized = runtime_app_profile(profile)
+    profile_path = CONFIG_PATH.parent / f".ui_app_profile_{uuid.uuid4().hex}.yaml"
+    try:
+        with profile_path.open("x", encoding="utf-8") as file_obj:
+            if os.name != "nt":
+                profile_path.chmod(0o600)
+            yaml.safe_dump(normalized, file_obj, allow_unicode=True, sort_keys=False)
+        return profile_path
+    except Exception:
+        profile_path.unlink(missing_ok=True)
+        raise
+
+
 def _run_streaming_subprocess(
     command: list[str],
     log_queue: queue.Queue,
@@ -679,6 +721,12 @@ def _run_streaming_subprocess(
     cwd: Path,
 ) -> int:
     output_queue: queue.Queue[str | None] = queue.Queue()
+    child_environment = dict(os.environ)
+    # UI selection is authoritative. A profile exported in the terminal that
+    # started Streamlit must not silently redirect a later production run.
+    child_environment.pop(APP_PROFILE_ENV, None)
+    child_environment.pop(ACCOUNT_PROFILE_ENV, None)
+    child_environment.update(PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DICLOAK_RUN_SOURCE="UI_LOCAL")
     popen_kwargs: dict[str, Any] = {
         "cwd": str(cwd),
         "stdout": subprocess.PIPE,
@@ -687,11 +735,7 @@ def _run_streaming_subprocess(
         "encoding": "utf-8",
         "errors": "replace",
         "bufsize": 1,
-        "env": {
-            **os.environ,
-            "PYTHONUNBUFFERED": "1",
-            "DICLOAK_RUN_SOURCE": "UI_LOCAL",
-        },
+        "env": child_environment,
     }
     if os.name == "nt":
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -739,9 +783,13 @@ def _run_streaming_subprocess(
     return int(process.returncode or 0)
 
 
-def _close_managed_app_after_cancel(log_queue: queue.Queue) -> None:
+def _close_managed_app_after_cancel(
+    log_queue: queue.Queue, *, app_profile: dict[str, Any] | None = None,
+) -> None:
     try:
         config = _build_config()
+        if app_profile is not None:
+            config = apply_runtime_app_profile(config, app_profile)
         logger = logging.getLogger("dicloak_automation.ui.cancel")
         AppManager(config, logger).close()
     except Exception as exc:
@@ -831,6 +879,7 @@ def run_remote_cli(
     ssh_password: str = "",
     case_ids: list[str] | None = None,
     account_profile: dict[str, Any] | None = None,
+    app_profile: dict[str, Any] | None = None,
     stop_event: threading.Event | None = None,
 ) -> None:
     """后台通过 SSH 在远程节点执行 run.py，并把远程日志推送到 UI."""
@@ -859,6 +908,7 @@ def run_remote_cli(
             case_ids=case_ids,
             account_profile=account_profile,
             stop_event=active_stop_event,
+            **({"app_profile": app_profile} if app_profile is not None else {}),
         )
     except RemoteRunCancelled:
         log_queue.put("远程用例执行已停止")
@@ -887,6 +937,7 @@ def _run_remote_cli_unlocked(
     case_ids: list[str] | None,
     account_profile: dict[str, Any] | None,
     stop_event: threading.Event,
+    app_profile: dict[str, Any] | None = None,
 ) -> int:
     if stop_event.is_set():
         log_queue.put("远程用例执行已停止（尚未启动）")
@@ -912,13 +963,17 @@ def _run_remote_cli_unlocked(
         values=tuple(case_ids or ()),
         attach_existing_app=attach_existing_app,
         account_profile=account_profile,
+        app_profile=runtime_app_profile(app_profile) if app_profile is not None else None,
     )
     result = run_remote_tests(host, request, log_queue, stop_event=stop_event)
     duration = round(result.finished_at - result.started_at, 2)
     log_queue.put(f"远程执行完成 → 节点={result.host_name} 退出码={result.exit_code} 耗时={duration}s")
     if collect_artifacts:
         try:
-            artifact_result = collect_remote_artifacts(host, result.started_at, log_queue)
+            artifact_result = collect_remote_artifacts(
+                host, result.started_at, log_queue,
+                **({"package_kind": "test"} if app_profile is not None else {}),
+            )
             log_queue.put(
                 "远程产物归档 → "
                 f"文件数={artifact_result.files_copied} "
@@ -957,6 +1012,8 @@ def run_local_and_remote(
     remote_ssh_username: str,
     remote_ssh_password: str,
     remote_account_profile: dict[str, Any],
+    local_app_profile: dict[str, Any] | None = None,
+    remote_app_profile: dict[str, Any] | None = None,
     stop_event: threading.Event | None = None,
 ) -> None:
     active_stop_event = _acquire_run_lock(
@@ -982,6 +1039,7 @@ def run_local_and_remote(
                 attach_existing_app=local_attach_existing_app,
                 account_profile=local_account_profile,
                 stop_event=active_stop_event,
+                **({"app_profile": local_app_profile} if local_app_profile is not None else {}),
             )
         except Exception as exc:
             errors.append(("Windows", exc))
@@ -1004,6 +1062,7 @@ def run_local_and_remote(
                 case_ids=remote_ids,
                 account_profile=remote_account_profile,
                 stop_event=active_stop_event,
+                **({"app_profile": remote_app_profile} if remote_app_profile is not None else {}),
             )
         except RemoteRunCancelled:
             remote_log.put("远程用例执行已停止")
@@ -1043,6 +1102,7 @@ def check_remote_code(
     ssh_port: int | None = None,
     ssh_username: str = "",
     ssh_password: str = "",
+    app_profile: dict[str, Any] | None = None,
     stop_event: threading.Event | None = None,
 ) -> None:
     """后台检查远端当前代码快照是否和本地工作区一致."""
@@ -1056,6 +1116,9 @@ def check_remote_code(
         return
 
     try:
+        if app_profile is not None:
+            runtime_app_profile(app_profile)
+            log_queue.put("远程代码检查来源：测试 APP 包入口（不修改生产配置）")
         host = _remote_host_by_name(
             host_name,
             ssh_host=ssh_host,
@@ -1084,6 +1147,7 @@ def sync_remote_code(
     ssh_port: int | None = None,
     ssh_username: str = "",
     ssh_password: str = "",
+    app_profile: dict[str, Any] | None = None,
     stop_event: threading.Event | None = None,
 ) -> None:
     """后台把本地当前工作区同步为远端新的可回退快照."""
@@ -1097,6 +1161,9 @@ def sync_remote_code(
         return
 
     try:
+        if app_profile is not None:
+            runtime_app_profile(app_profile)
+            log_queue.put("远程代码同步来源：测试 APP 包入口；测试目标仅在执行时临时下发")
         host = _remote_host_by_name(
             host_name,
             ssh_host=ssh_host,
@@ -1125,6 +1192,7 @@ def check_remote_host(
     ssh_port: int | None = None,
     ssh_username: str = "",
     ssh_password: str = "",
+    app_profile: dict[str, Any] | None = None,
     stop_event: threading.Event | None = None,
 ) -> None:
     """后台通过 SSH 检查远程节点是否具备执行自动化的基础条件."""
@@ -1149,7 +1217,10 @@ def check_remote_host(
             log_queue.put(f"远程节点不存在或未启用：{host_name}")
             return
 
-        result = run_remote_health_check(host, log_queue, stop_event=active_stop_event)
+        result = run_remote_health_check(
+            host, log_queue, stop_event=active_stop_event,
+            **({"app_profile": app_profile} if app_profile is not None else {}),
+        )
         duration = round(result.finished_at - result.started_at, 2)
         log_queue.put(f"远程健康检查结束 → 节点={result.host_name} 退出码={result.exit_code} 耗时={duration}s")
         if result.exit_code != 0:

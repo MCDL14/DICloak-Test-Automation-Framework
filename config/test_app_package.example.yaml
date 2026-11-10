@@ -1,0 +1,7 @@
+# 示例，不会自动启用测试执行。请在 UI 的“账号组 → 测试 APP 包”中配置并保存。
+# 实际文件 config/test_app_package.yaml、独立两组账号及临时 profile 均不进入 Git/代码快照。
+windows_exe_path: ""  # 无默认值；必须填写测试包 .exe 绝对路径，不能回退生产包。
+macos_app_name: DICloak2  # 可选 DICloak / DICloak2；内层执行文件从 Info.plist 读取。
+api_base_url: http://gin-server-test.dicloak.com  # 测试服务端根地址，可在 UI 修改。
+cdp_port: 9223  # 与生产包区分；仍需核对监听进程路径，不能仅凭端口判断。
+# 沿用执行端现有 CDP 私钥签发配置与 120 秒凭证规则，不在此保存私钥或 token。

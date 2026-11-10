@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass
 from typing import Mapping
 
+from core.app_packages import resolve_api_url
+
 
 ORG_CONFIG_API_BASE = "https://gin-server.dicloak.net/gin/v1/organization"
 ORG_CONFIG_REQUEST_TIMEOUT_SECONDS = 30
@@ -133,7 +135,7 @@ class OrgConfigApiClient:
     ) -> dict[str, object]:
         result = self.cdp.evaluate_with_args(
             """
-            async ({ method, orgId, version, payload, timeoutMs, apiBase }) => {
+            async ({ method, orgId, version, payload, timeoutMs, apiBase, testPackage }) => {
                 let state = {};
                 try {
                     state = JSON.parse(localStorage.getItem("basic:state") || "{}");
@@ -151,7 +153,8 @@ class OrgConfigApiClient:
                         "X-Lang": "zh_CN",
                         "X-Platform": "APP",
                     };
-                    const options = { method, headers, signal: controller.signal };
+                    const options = { method, headers, signal: controller.signal,
+                        redirect: testPackage ? "error" : "follow" };
                     if (method === "POST") {
                         headers["Content-Type"] = "application/json";
                         options.body = JSON.stringify(payload || {});
@@ -180,7 +183,9 @@ class OrgConfigApiClient:
                 "version": identity.app_version,
                 "payload": payload,
                 "timeoutMs": self.timeout_seconds * 1000,
-                "apiBase": ORG_CONFIG_API_BASE,
+                "apiBase": resolve_api_url(getattr(self.cdp, "config", None), ORG_CONFIG_API_BASE),
+                "testPackage": isinstance(getattr(self.cdp, "config", None), Mapping)
+                    and self.cdp.config.get("_app_package_kind") == "test",
             },
         )
         if not isinstance(result, dict):

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.app import AppStartupError, assert_test_app_cdp_target, is_test_app_package
 from core.app_config import resolve_app_config
 from core.app_cdp_auth import (
     AppCdpAuthError,
@@ -68,7 +69,8 @@ class EnvironmentPrechecker:
 
     def _check_app(self, result: PrecheckResult, *, attach_existing_app: bool = False) -> None:
         # The runner passes True only after confirming a listening CDP port.
-        if attach_existing_app:
+        test_package = is_test_app_package(self.config)
+        if attach_existing_app and not test_package:
             result.add("APP startup credential check", True, "CDP 端口已存在：复用 APP，跳过启动路径、参数及签发私钥检查")
             return
         app_config = resolve_app_config(self.config)
@@ -78,8 +80,20 @@ class EnvironmentPrechecker:
 
         result.add("APP exe_path exists", exe_path.is_file(), str(exe_path))
         result.add("APP work_dir exists", work_dir.is_dir(), str(work_dir))
+        if test_package:
+            try:
+                assert_test_app_cdp_target(self.config, require_listening=attach_existing_app)
+            except AppStartupError as exc:
+                result.add("Test APP CDP target identity", False, str(exc))
+                return
+            result.add("Test APP CDP target identity", True, "测试包路径与独立 CDP 端口身份检查通过；未启停 APP")
+            if attach_existing_app:
+                result.add("APP startup credential check", True, "已确认 CDP 监听属于选定测试包；复用 APP，不读取私钥或签发")
+                return
         try:
             enabled = auth_enabled(self.config)
+            if test_package and not enabled:
+                raise AppCdpAuthError("测试 APP 包托管启动必须开启 CDP 凭证签发配置，不能沿用未鉴权的生产启动参数")
             startup_args = normalized_app_startup_args(self.config, startup_args)
             validate_cdp_auth_setup(self.config)
         except AppCdpAuthError as exc:
@@ -136,6 +150,12 @@ class EnvironmentPrechecker:
         host = cdp.get("host", "127.0.0.1")
         port = int(cdp.get("port", 9222))
         occupied = _is_port_open(host, port)
+        if is_test_app_package(self.config):
+            try:
+                assert_test_app_cdp_target(self.config, listening=occupied)
+            except AppStartupError as exc:
+                result.add("CDP port target identity", False, str(exc))
+                return
         result.add("CDP port status checked", True, f"{host}:{port} occupied={occupied}")
 
     def _check_feishu(self, result: PrecheckResult) -> None:

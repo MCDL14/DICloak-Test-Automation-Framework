@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import base64
 import json
+import math
+import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -11,6 +14,122 @@ from typing import Any
 
 class KernelCDPSessionError(RuntimeError):
     pass
+
+
+class _NoKernelCdpRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def close_kernel_browser(
+    port: int,
+    timeout_seconds: float = 20,
+    *,
+    app_cdp_port: int,
+) -> None:
+    """Request graceful shutdown of a PID-resolved kernel, without closing the APP.
+
+    The caller must obtain ``port`` from its captured kernel PID, then wait for
+    that PID to stop and the APP row to return to its openable state. A browser
+    can disconnect before returning the command acknowledgement during shutdown.
+    """
+    for value in (port, app_cdp_port):
+        if type(value) is not int or not 1 <= value <= 65535:
+            raise ValueError("内核与 APP CDP 端口必须是有效的整数端口")
+    if port == app_cdp_port:
+        raise KernelCDPSessionError("内核 CDP 端口与 APP 相同，已拒绝发送 Browser.close")
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+    ):
+        raise ValueError("浏览器正常退出超时时间必须为正数")
+
+    deadline = time.monotonic() + timeout_seconds
+    endpoint = f"http://127.0.0.1:{port}/json/version"
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _NoKernelCdpRedirects(),
+    )
+    try:
+        with opener.open(endpoint, timeout=min(timeout_seconds, 5)) as response:
+            raw = response.read(65537)
+        if len(raw) > 65536:
+            raise ValueError("oversized version response")
+        payload = json.loads(raw.decode("utf-8"))
+        websocket_url = payload.get("webSocketDebuggerUrl") if isinstance(payload, dict) else None
+        parsed = urllib.parse.urlsplit(websocket_url) if isinstance(websocket_url, str) else None
+        if (
+            parsed is None
+            or parsed.scheme != "ws"
+            or parsed.hostname not in {"127.0.0.1", "localhost"}
+            or parsed.port != port
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or not re.fullmatch(r"/devtools/browser/[A-Za-z0-9._-]+", parsed.path)
+        ):
+            raise ValueError("unexpected browser websocket endpoint")
+    except Exception as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            exc.close()
+        raise KernelCDPSessionError("无法读取或确认该内核的浏览器级 CDP 地址") from exc
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise KernelCDPSessionError("等待浏览器正常退出超时，尚未发送 Browser.close")
+    try:
+        import websocket
+    except ImportError as exc:
+        raise KernelCDPSessionError("浏览器正常退出需要 websocket-client 依赖") from exc
+
+    ws = None
+    try:
+        try:
+            ws = websocket.create_connection(
+                websocket_url,
+                timeout=min(remaining, 5),
+                suppress_origin=True,
+                http_no_proxy=["127.0.0.1", "localhost"],
+            )
+            ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+        except Exception as exc:
+            raise KernelCDPSessionError("向内核发送 Browser.close 失败") from exc
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise KernelCDPSessionError("等待 Browser.close 响应超时")
+            ws.settimeout(remaining)
+            try:
+                raw_message = ws.recv()
+            except (websocket.WebSocketConnectionClosedException, ConnectionResetError, EOFError):
+                return
+            except Exception as exc:
+                raise KernelCDPSessionError("等待 Browser.close 响应失败") from exc
+            if raw_message in ("", b""):
+                return
+            try:
+                message = json.loads(raw_message)
+            except (TypeError, ValueError) as exc:
+                raise KernelCDPSessionError("Browser.close 返回了无效的 CDP 响应") from exc
+            if not isinstance(message, dict):
+                raise KernelCDPSessionError("Browser.close 返回了无效的 CDP 响应")
+            if message.get("id") != 1:
+                continue
+            if "error" in message:
+                raise KernelCDPSessionError("内核拒绝执行 Browser.close")
+            if not isinstance(message.get("result"), dict):
+                raise KernelCDPSessionError("Browser.close 响应缺少执行结果")
+            return
+    finally:
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
 
 
 class KernelCDPSession:

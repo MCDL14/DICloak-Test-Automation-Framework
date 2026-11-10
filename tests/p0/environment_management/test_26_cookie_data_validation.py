@@ -11,7 +11,7 @@ from core.environment_cache import (
     delete_numeric_environment_cache_dirs,
     numeric_environment_cache_dirs,
 )
-from core.kernel_cdp_session import KernelCDPSession
+from core.kernel_cdp_session import KernelCDPSession, close_kernel_browser
 from core.kernel_process import resolve_kernel_runtime
 from core.logger import setup_logger
 from core.process import wait_for_pid_running, wait_for_pid_stopped
@@ -203,6 +203,7 @@ class TestCookieDataValidation(unittest.TestCase):
         stage: str,
     ) -> str:
         kernel_pid = 0
+        kernel_cdp_port = 0
         status = ""
         try:
             kernel_pid = environment_page.open_environment_and_capture_pid(ENVIRONMENT_NAME)
@@ -222,6 +223,7 @@ class TestCookieDataValidation(unittest.TestCase):
                 probe_timeout_seconds=kernel_cdp_probe_timeout,
                 http_timeout_seconds=http_probe_timeout,
             )
+            kernel_cdp_port = kernel_runtime.cdp_port
             with KernelCDPSession(
                 kernel_runtime.cdp_port,
                 timeout_seconds=max(kernel_cdp_timeout, 20),
@@ -242,6 +244,7 @@ class TestCookieDataValidation(unittest.TestCase):
                 environment_close_timeout=environment_close_timeout,
                 kernel_process_timeout=kernel_process_timeout,
                 kernel_pid=kernel_pid,
+                kernel_cdp_port=kernel_cdp_port,
             )
 
         assert_equal(
@@ -258,12 +261,22 @@ class TestCookieDataValidation(unittest.TestCase):
         environment_close_timeout: int,
         kernel_process_timeout: int,
         kernel_pid: int = 0,
+        kernel_cdp_port: int = 0,
     ) -> None:
         if not environment_page.environment_visible_in_current_list(ENVIRONMENT_NAME):
             return
         if environment_page.environment_action_text(ENVIRONMENT_NAME) != "关闭":
             return
-        environment_page.click_environment_action(ENVIRONMENT_NAME, "关闭")
+        if kernel_pid and kernel_cdp_port:
+            self.logger.info("通过 Browser.close 正常关闭环境: name=%s pid=%s", ENVIRONMENT_NAME, kernel_pid)
+            close_kernel_browser(
+                kernel_cdp_port,
+                timeout_seconds=environment_close_timeout,
+                app_cdp_port=int(self.config["cdp"].get("port", 9222)),
+            )
+        else:
+            # 未能解析内核 CDP 时，仍通过 APP 清理异常或上次遗留的环境。
+            environment_page.click_environment_action(ENVIRONMENT_NAME, "关闭")
         if kernel_pid:
             assert_true(
                 wait_for_pid_stopped(kernel_pid, timeout_seconds=kernel_process_timeout),

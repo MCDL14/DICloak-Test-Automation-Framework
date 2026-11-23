@@ -72,8 +72,8 @@ test_data:
     # 批量创建数量
     create_count: 5
 
-  # 批量创建 134 内核环境用例数据
-  environment_batch_create_134_kernel:
+  # 批量创建 142 内核环境用例数据；旧 134 配置键会兼容迁移批量数量。
+  environment_batch_create_142_kernel:
     # 批量创建数量
     create_count: 3
 

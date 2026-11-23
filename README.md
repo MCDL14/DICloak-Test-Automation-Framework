@@ -24,10 +24,10 @@ python run.py --config config/config.yaml --module environment_group_management
 python run.py --config config/config.yaml --module member_group_management
 python run.py --config config/config.yaml --module proxy_management
 python run.py --config config/config.yaml --module test_02_group_containing_environment.py --attach-existing-app
-python run.py --config config/config.yaml --module test_01_kernel_integrity.py
-python run.py --config config/config.yaml --module p0/environment_management/test_01_kernel_integrity.py
-python run.py --config config/config.yaml --module tests/p0/environment_management/test_01_kernel_integrity.py
-python run.py --config config/config.yaml --case test_142_kernel_integrity
+python run.py --config config/config.yaml --module test_01_download_142_kernel.py
+python run.py --config config/config.yaml --module p0/environment_management/test_01_download_152_kernel.py
+python run.py --config config/config.yaml --module tests/p0/environment_management/test_04_create_142_kernel_environment.py
+python run.py --config config/config.yaml --case test_download_152_kernel_and_verify_environment
 ```
 
 `--business-module` 用于按业务模块运行用例；当前支持：环境管理、代理管理、扩展管理、环境分组管理、成员分组管理、成员管理、全局设置。
@@ -43,7 +43,7 @@ python run.py --precheck
 调试时可优先连接已打开 APP。框架会先检测配置的 `cdp.host:cdp.port` 是否有 TCP 监听：有监听则只连接，不签发、不关闭或重启 APP；没有监听且 host 为当前执行机器的 loopback／localhost 时，则签发临时凭证，校验成功后关闭当前 APP 并带新参数启动：
 
 ```bash
-python run.py --config config/config.yaml --module test_01_kernel_integrity.py --attach-existing-app
+python run.py --config config/config.yaml --module test_01_download_142_kernel.py --attach-existing-app
 ```
 
 该模式在本机和远端使用同样的检测与回退逻辑：远端 CLI 的“本机”指远端执行机器。正常运行结束仍保留 APP，包括因端口缺失而由框架回退启动的 APP；强制停止可能结束该 APP 的子进程树，不能保证保留。正式自动化运行仍可取消该选项，让框架统一管理 APP 启停。
@@ -200,7 +200,7 @@ Session TTL 当前固定为 `15552000` 秒（180 天）。配置变化不会修�
 
 默认 `origin_mode=localhost` 使用 `*.dicloak.localhost`。Chromium/GinsBrowser 会将这些地址识别为本地主机并隐式绕过代理，因此 Windows、macOS、Linux 均不需要修改 hosts，也不依赖系统 DNS 或代理 Fake-IP 的解析结果。服务仍只监听 `127.0.0.1:18080`。
 
-2026-08-03 Windows 实机验证已完成：固定端口 `18080` 下，控制首页和三个模拟站均可直接通过 `*.dicloak.localhost` 打开，用户人工确认页面正常；验证过程没有修改 hosts、系统 DNS、系统代理或 DICloak APP 配置。Google Chrome 151 + 原生 CDP 三站冒烟也已通过，覆盖“注册后不自动登录、登录后目标存储存在令牌、服务端撤销后被动掉登并清除令牌”。macOS 和 Linux 当前完成了跨平台实现与配置设计，尚未记录对应平台实机结论。
+2026-08-03 Windows 实机验证已完成：固定端口 `18080` 下，控制首页和三个模拟站均可直接通过 `*.dicloak.localhost` 打开，用户人工确认页面正常；验证过程没有修改 hosts、系统 DNS、系统代理或 DICloak APP 配置。Google Chrome 151 + 原生 CDP 三站冒烟也已通过，覆盖“注册后不自动登录、登录后目标存储存在令牌、服务端撤销后被动掉登并清除令牌”。该历史轮未覆盖 macOS、Linux 实机；后续 Linux 的数据保存与恢复验证见下文“最近验证记录”。
 
 如果产品侧明确过滤 `.localhost` 浏览器数据，可以切换到 `origin_mode=custom_domains` 并配置自定义域名。只有该兼容模式需要让所有域名在运行节点解析到回环地址，例如：
 
@@ -311,7 +311,7 @@ Mac 当前已验证：
 - `python run.py --config config/config.macos.yaml --level P0` 通过，结果 `total=59 passed=58 failed=0 errors=0 skipped=1 flaky=1`。
 - UI 远程节点模式已完成“同步当前代码”后执行 `P0 全量` 验证，结果 `total=59 passed=57 failed=0 errors=1 skipped=1 flaky=0`；唯一错误为代理创建弹窗确认后未关闭，保留为 Mac 远端代理业务/环境问题继续排查。
 
-以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 Windows 本地 P0 为 100 条，最新状态见“最近验证记录”。
+以上 Mac 远端 P0 数量为 2026-06 历史快照；当前 `tests/p0` 可发现 101 条用例，最新验证范围见“最近验证记录”。
 
 Mac 当前跳过项：
 
@@ -562,7 +562,7 @@ Local Auth Lab 相关登录用例统一复用 `config/test_data.yaml` 中的 `te
 
 | 能力 | 方法与路径 | 参数位置与说明 |
 | --- | --- | --- |
-| 创建环境 | `POST /gin/v1/env` | JSON 请求体；模板为 `test_data/environment_create_api_payload.json`，支持 `browser_version_id`（默认 `142`）、`name` 和可选 `remark` |
+| 创建环境 | `POST /gin/v1/env` | JSON 请求体；模板为 `test_data/environment_create_api_payload.json`，支持 `browser_version_id`（默认 `152`）、`name` 和可选 `remark` |
 | 查询环境 | `GET /gin/v1/api/request/env` | URL 查询参数 `page_no/page_size/value`，不发送请求体；仅此接口新增 `X-HTTP-KEY` |
 | 批量删除 | `DELETE /gin/v1/env/batch` | JSON 请求体 `{"ids": [...]}`；方法、路径及鉴权方式保持不变 |
 
@@ -587,7 +587,7 @@ client = EnvironmentCreateApiClient(cdp_driver, device_id=current_app_device_id)
 # 查询时默认读取 cdp_driver.config["account"]["http_api_key"]
 response = client.create_environment(
     name="自动化-接口创建环境",
-    browser_version_id="142",
+    browser_version_id="152",
     remark="自动化-环境备注",  # 不需要备注时省略
 )
 environment_id = client.last_created_environment_id  # 来自响应 data.id
@@ -607,26 +607,32 @@ delete_response = client.delete_environments([environment_id])
 
 ## 当前状态
 
+2026-11-23 Linux 定向验证已覆盖 Local Storage 正常关闭与扩展卡片菜单修复：账号组 2 的 Local Storage 三条用例全部通过，9 次正常关闭均使用 `Browser.close`；“添加扩展市场扩展并删除”单跑通过，主动触发详情气泡后的编辑菜单与扩展市场 Tab 交互烟测也通过。2026-11-10 已完成 Linux 142／152 内核真实下载和显式 142 创建验证。这些定向结果不代表 Windows、macOS 或 P0 全量已经完成本轮回归，具体范围及耗时见下文“最近验证记录”。
+
 2026-10-28 新增测试 APP 包专用回归入口：支持 Windows 本机、Mac 远程与双端同步，独立两组空白测试账号、UI 可配 Windows 路径／测试 API 根地址／Mac 包名／CDP 端口，运行 profile 贯穿用例重复加载配置、预检、取消、重试及远端下发；启停和 CDP 按测试程序路径与监听 PID 隔离。完整 P1 `Ran 534 tests in 31.785s ... OK`、无跳过，较先前 423 项新增 111 项；包括隔离配置及 12 项 Streamlit AppTest 模拟交互，不是实际 APP 验收。严格语法编译与差异检查通过；Windows 路径仍为空、测试账号待用户填写，本轮未读取真实账号／私钥、未启停真实 APP、未连接 SSH、未运行业务或推送。
 
 2026-10-23 创建环境提交按钮兼容：APP 3.0.6 的单环境创建主按钮由“确定”改为绿色分体按钮中的“创建环境”，稳定标识为 `data-testid="create-env"`；右侧箭头 `data-testid="create-env-preferences-toggle"` 的作用是“选择要保存的偏好”，不是提交入口。创建专用定位优先使用主按钮稳定标识，旧版回退到当前可见抽屉内的“创建环境”／“确定”；批量创建仍兼容当前“确定”按钮。抽屉标题仅精确匹配“创建环境”／“批量创建”／“批量创建环境”，不以子串误匹配“创建环境分组”等其它业务。首次点击、必要时的补点及 loading 状态检查均读取同一提交主按钮，继续保留默认分组回显、提交启动、抽屉关闭与列表 loading 等保护；补点等待结束后先复查状态，已 loading 或关闭时不再重复点击。此兼容只调整创建提交，不改变编辑等其它弹窗的通用“确定”定位。
 
 2026-10-23 历史验证：创建重试／隔离 DOM 定向 36/36（19＋17，最终以 `-W error` 运行通过），完整 P1 `Ran 423 tests in 26.320s ... OK`，均无跳过，较前轮净增 24 条；包含环境分组创建标题不误匹配的保护，`python -W error` 语法编译通过。用户授权使用临时凭证重启本机 APP 后，真实 CDP 定位并点击 `create-env` 主按钮，观察到 `loading=true`、`disabled=true` 和 `is-loading`，随后抽屉关闭且唯一临时环境出现在列表；捕获创建 `POST /gin/v1/env` 恰好 1 次，HTTP 200、业务 `code=0` 并返回 `data.id`。仅按本次已知 ID 调用删除接口清理，HTTP 200、业务 `code=0`，再以唯一名称在 APP 搜索确认空结果，最后恢复原空筛选并点击搜索刷新；APP 保持打开。批量创建只真实读取及解析“确定”按钮，未实际批量提交；旧版“确定”兼容由隔离 DOM 回归覆盖，不作为旧 APP 实机结论。未修改编辑或批量导入逻辑。
 
-框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 100 条 P0 用例：环境管理 43 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条。CDP 适配已包含两分钟凭证、attach 条件回退、独立 SFTP 私钥部署、不依赖飞书开关的脱敏启动／连接错误日志；仍按用户要求不强制 known_hosts。2026-10-20 Mac 依赖修复的历史验证为完整 P1 `Ran 399 tests in 23.270s ... OK`，无跳过，较前轮新增依赖预检 4 条、日志 6 条；Mac 实际执行 `.venv` 安装 `cryptography 50.0.2` 后通过 Ed25519 导入及一次真实签发，确认端口 9222、TTL 120 秒，token 未打印或保存，新代码与 CDP 私钥通过标准流程同步，远端编译及正式预检 `PASS`（退出码 0）。该历史验证轮未启停 APP 或执行业务用例，不能替代新版 APP 接受凭证及 CDP 实机连接验收；此前完整 P1 389／350／327 条与 Windows 离线签发也保留为历史记录。
+框架基础能力已经搭建到可以加载配置、执行环境预检、发现用例、启动 APP、连接 CDP、发送飞书通知和统计执行结果。当前 `tests/p0` 可发现 101 条 P0 用例：环境管理 44 条、全局设置 22 条、扩展管理 8 条、环境分组管理 6 条、成员分组管理 2 条、成员管理 15 条、代理管理 4 条。CDP 适配已包含两分钟凭证、attach 条件回退、独立 SFTP 私钥部署、不依赖飞书开关的脱敏启动／连接错误日志；仍按用户要求不强制 known_hosts。2026-10-20 Mac 依赖修复的历史验证为完整 P1 `Ran 399 tests in 23.270s ... OK`，无跳过，较前轮新增依赖预检 4 条、日志 6 条；Mac 实际执行 `.venv` 安装 `cryptography 50.0.2` 后通过 Ed25519 导入及一次真实签发，确认端口 9222、TTL 120 秒，token 未打印或保存，新代码与 CDP 私钥通过标准流程同步，远端编译及正式预检 `PASS`（退出码 0）。该历史验证轮未启停 APP 或执行业务用例，不能替代新版 APP 接受凭证及 CDP 实机连接验收；此前完整 P1 389／350／327 条与 Windows 离线签发也保留为历史记录。
 
 当前成员分组管理模块已接入 2 条 P0 用例，文件位于 `tests/p0/member_group_management/`：
 
 - `test_01_create_member_group.py`：创建成员分组，校验名称和备注后删除。
 - `test_02_edit_member_group_name.py`：读取列表首行名称、备注和创建时间，等待编辑弹窗异步数据及权限树 loading 稳定后修改名称为 `自动化-编辑成员分组名称`；保存后按“备注 + 创建时间”唯一回找并断言名称、备注和创建时间，再按同一稳定身份还原原名称。主流程异常时也会在 `finally` 中幂等尝试还原，避免污染共享团队数据。
 
-当前环境管理模块已接入 43 条 P0 用例，文件位于 `tests/p0/environment_management/`：
+当前环境管理模块已接入 44 条 P0 用例，文件位于 `tests/p0/environment_management/`：
 
-- `test_01_kernel_integrity.py`：按独立阶段校验 142 内核首次启动、缓存拷贝、缓存启动路径、134 内核下载和 134 环境启动；中间阶段失败会记录原因并继续执行后续阶段，最后统一汇总断言，避免 134 下载被前置断言阻断。
+Cookie 与 Local Storage 数据用例在正常打开并解析内核后，均通过该内核的浏览器级 CDP 调用 `Browser.close`，随后等待内核 PID 退出及 APP 操作按钮恢复为“打开”。Local Storage 的 5 条专属用例与包含它的 8 条混合数据用例使用相同关闭方式。`Browser.close` 失败直接报错；未取得内核 PID 或 CDP 端口的异常、历史残留清理保留 APP 关闭兜底。登录后的原有等待时间、同步配置及数据恢复断言不变。
+
+- `test_01_download_142_kernel.py`：个人设置中先刷新下载记录，逐个删除已识别的全部 142 完整版本；每次删除后重新刷新，记录实际删除的版本号，仅对这些版本校验本地缓存已消失。未执行删除时跳过删除断言；APP 未识别的损坏缓存保留，不计入本次删除断言。重新下载后按本次完整版本号定位并断言实际内核文件存在，再创建明确选择 142 的环境、打开校验实际版本、关闭并删除临时环境。
+- `test_01_download_152_kernel.py`：按相同流程下载并验证 152 内核；两条下载用例被选中时按 142、152 顺序优先执行。APP 包不再假定自带内核，旧 `test_01_kernel_integrity.py` 已整段注释，保留为历史参考，不参与用例发现。
+- 环境创建接口的 `browser_version_id` 默认值为 `152`；显式 142 创建用例继续选择并核验 142。原 134 单环境、批量创建用例已迁移到下方的 142 文件与测试 ID，历史验证记录中的 134 命令保留为当时的执行证据，不是当前运行入口。
 - `test_02_create_default_environment.py`
 - `test_03_batch_create_environments.py`
-- `test_04_create_134_kernel_environment.py`
-- `test_05_batch_create_134_kernel_environments.py`
+- `test_04_create_142_kernel_environment.py`：显式选择 142 内核，创建、打开并校验版本后关闭删除。
+- `test_05_batch_create_142_kernel_environments.py`：批量创建明确使用 142 内核的环境，并逐个校验实际版本后清理。
 - `test_06_batch_import_environments.py`：上传项目内 xlsx 后提交批量导入，校验 3 行全部成功、列表中环境存在并删除。提交时精确读取批量导入抽屉、确定按钮 loading 和导入结果弹窗：第一次点击后抽屉仍开且按钮保持 idle 时，观察 3 秒并额外等待 2 秒，补点前再次检查状态，仅在仍未启动时第二次点击；两次均未启动才关闭并重新打开抽屉、重新上传文件，最多重开 2 次。
 - `test_07_edit_environment_name.py`
 - `test_08_edit_fixed_open_url.py`
@@ -650,7 +656,7 @@ delete_response = client.delete_environments([environment_id])
 - `test_26_cookie_data_validation.py`：先执行 `data_sync_config` 接口基准检查，再回到环境管理页并通过全局设置统一入口进入页面；入口等待 `#/setting` 页面可见、“正在加载中...”文案与 loading 遮罩消失、数据同步区域呈现且复选框状态稳定，再检查页面至少有 3 个复选框处于已勾选状态，并安装当前团队配置 POST 监听。不满足时会先重新进入环境管理页，再进入全局设置，最多重新进入 2 次；重试两次后仍不足 3 个时直接以断言异常结束当前用例。随后确保“数据设置 → 数据同步 → Cookie”已勾选，精确搜索并三次打开预置环境 `Cookie数据校验`；每次通过内核 CDP 访问 `http://cookie.dicloak.localhost:18080`、读取登录状态、关闭环境并校验按钮恢复为“打开”。第二次校验后读取 APP 基础设置中的环境缓存目录，只删除其直接子级中名称为 19 位纯数字、且不是链接或重解析点的目录，确认删除完成后第三次打开环境，断言 Cookie 登录状态仍为“已登录”。该用例显式声明 `local_auth_lab` 运行时依赖，结束阶段只在实际写入后检查和恢复数据同步影响位。
 - `test_27_local_storage_data_validation.py`：复用同一全局设置加载保护，确保“数据设置 → 数据同步 → Local Storage”已勾选；未勾选时只允许该项从未勾选变为已勾选，检测到其他复选框同时变化会在保存前失败。随后精确搜索并三次打开预置环境 `Local Storage数据校验`，通过内核 CDP 访问 `http://localstorage.dicloak.localhost:18080` 并读取登录状态；每次关闭环境并校验按钮恢复为“打开”，前两次分别断言“已登录”，中间保留 3 秒业务等待。第二次后安全删除缓存根目录直接子级中的 19 位纯数字普通目录并确认无残留，第三次打开后再次断言云端恢复的 Local Storage 登录状态为“已登录”。该用例显式声明 `local_auth_lab` 运行时依赖；2026-08-03 三用例串行真实回归中一次通过。
 - `test_28_indexeddb_data_validation.py`：确保“数据设置 → 数据同步 → IndexedDB”已勾选；未勾选时只允许 `IndexedDB` 一个复选框变化，保存后重新进入页面确认持久状态。随后精确搜索并三次打开预置环境 `IndexedDB数据校验`，通过内核 CDP 访问 `http://indexeddb.dicloak.localhost:18080` 并读取登录状态；每次关闭环境、等待内核停止并确认按钮恢复为“打开”，前两次状态任一次不是“已登录”即结束当前用例，第一次和第二次之间保留 3 秒业务等待。第二次后读取基础设置中的缓存目录，安全删除直接子级中的 19 位纯数字普通目录并确认无残留，第三次打开后断言 IndexedDB 登录状态仍为“已登录”。该用例显式声明 `local_auth_lab` 运行时依赖；2026-08-03 三用例串行真实回归中一次通过。
-- `test_29_new_environment_cookie_persistence.py`：正式“新环境 Cookie 数据同步恢复”用例。确保 Cookie 数据同步已勾选后，从 APP 正常环境列表请求取得当前 `x-device-id`，通过环境列表接口按精确名称查询并清理同名残留；再用创建接口以 `browser_version_id=142` 创建 `自动化-新环境Cookie持续保持`，保存响应 `data.id`，并由列表接口确认名称和 ID 均已出现。随后回到 APP 搜索该环境，完成首次登录、普通重开、删除本地缓存后三次 Cookie 恢复验证。结束时通过批量删除接口删除保存的环境 ID，列表接口确认同名环境不存在后只清空 APP 筛选；异常路径仅在环境尚未删除时进入 APP 尝试关闭，再按接口查询到的 ID 幂等清理。该用例保留原测试 ID 和中文展示名，并接入 `data_sync_config` 接口前置检查及按影响位恢复。
+- `test_29_new_environment_cookie_persistence.py`：正式“新环境 Cookie 数据同步恢复”用例。确保 Cookie 数据同步已勾选后，从 APP 正常环境列表请求取得当前 `x-device-id`，通过环境列表接口按精确名称查询并清理同名残留；再用创建接口以 `browser_version_id=152` 创建 `自动化-新环境Cookie持续保持`，保存响应 `data.id`，并由列表接口确认名称和 ID 均已出现。随后回到 APP 搜索该环境，完成首次登录、普通重开、删除本地缓存后三次 Cookie 恢复验证。结束时通过批量删除接口删除保存的环境 ID，列表接口确认同名环境不存在后只清空 APP 筛选；异常路径仅在环境尚未删除时进入 APP 尝试关闭，再按接口查询到的 ID 幂等清理。该用例保留原测试 ID 和中文展示名，并接入 `data_sync_config` 接口前置检查及按影响位恢复。
 - `test_30_new_environment_local_storage_persistence.py`：确保 Local Storage 数据同步已勾选后，清理可能由异常中断留下的同名环境，并沿用原有 `create_environment()` 创建默认配置环境 `自动化-新环境Local Storage持续保持`；不额外选择环境分组，不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://localstorage.dicloak.localhost:18080`，使用本地测试数据中的 `MCDL005` 登录，等待 2 秒后读取状态；每次均先关闭环境、等待内核退出并确认按钮恢复为“打开”，再断言账号和状态。等待 3 秒后二次验证，随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录并确认无残留，第三次打开验证 Local Storage 云端恢复，最后删除环境并确认不存在。该用例已接入 `data_sync_config` 接口前置检查和按影响位恢复。
 - `test_31_new_environment_indexeddb_persistence.py`：确保 IndexedDB 数据同步已勾选后，清理可能由异常中断留下的同名环境，并沿用原有 `create_environment()` 创建默认配置环境 `自动化-新环境IndexedDB持续保持`；不额外选择环境分组，不修改代理、内核或指纹配置。创建成功后首次打开并访问 `http://indexeddb.dicloak.localhost:18080`，使用本地测试数据中的 `MCDL006` 登录，等待 2 秒后读取状态；每次均先关闭环境、等待内核退出并确认按钮恢复为“打开”，再断言账号和状态。等待 3 秒后二次验证，随后安全删除 APP 缓存根目录中的 19 位纯数字直接子目录并确认无残留，第三次打开验证 IndexedDB 云端恢复，最后删除环境并确认不存在。该用例已接入 `data_sync_config` 接口前置检查和按影响位恢复。
 - `test_32_individual_environment_cookie_sync.py`：创建环境 `自动化-环境单独设置-cookie同步` 时展开“高级设置”，将“数据同步”从“全局设置”切换为“自定义”，并把已知同步项精确调整为仅勾选 `Cookie`。创建成功后首次打开环境访问 `http://cookie.dicloak.localhost:18080`，复用 `local_auth_lab_login.cookie` 本地测试账号 `MCDL004` 登录并等待 2 秒读取状态；关闭环境并校验操作按钮恢复为“打开”后断言 `MCDL004 / 已登录`。等待 3 秒后二次打开验证 Cookie 仍保持登录；随后进入个人设置基础设置读取 APP 环境缓存目录，只删除名称为 19 位纯数字的直接子目录并确认无残留；第三次打开环境验证删除本地缓存后 Cookie 云端恢复仍为 `MCDL004 / 已登录`。最后删除该环境并确认列表中不存在；异常流程也会尝试关闭和清理同名环境。2026-08-17 Windows 真实单跑通过：`total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`。
@@ -755,6 +761,8 @@ delete_response = client.delete_environments([environment_id])
 
 当前已新增扩展管理模块 8 条 P0 用例，文件位于 `tests/p0/extension_management/`：
 
+扩展卡片的编辑、删除操作会先移开鼠标并等待详情气泡消失，再直接悬浮标题右侧的更多图标。操作项按该图标的 `aria-controls` 关联到目标卡片的菜单，确认菜单已展开且不在离场动画中再点击；不悬浮整张卡片，也不在全页按“删除／编辑”查找任意菜单。该流程用于兼容 Linux 上描述气泡遮挡更多图标、菜单在点击前隐藏的问题，并由三端共用。
+
 - `test_01_create_local_extension.py`：创建本地上传扩展，进入扩展管理页点击“添加扩展”，添加方式切换为“安装包”，先填写 `test_data.local_extension.extension_name` 指定的扩展名称，再上传 `test_data.local_extension.package_path/package_name` 指向的 zip 安装包，扩展分组确保为“未分组”；保存后校验扩展卡片存在、名称正确、提供方为“本地扩展”，随后通过卡片右上角更多菜单删除并校验删除成功。由于 Electron 真实文件选择器返回的 `File.path` 是上传校验关键字段，自动化会在临时 ASCII zip 副本上通过浏览器 file chooser 注入文件，并在页面上下文补齐原始项目 zip 路径；安装包模式识别兼容新版 `accept=".zip,application/zip"` 输入和“将 ZIP 文件拖到此处，或点击上传”的上传区域，上传完成等待兼容弹窗展示完整路径、原始 zip 文件名或临时 ASCII zip 文件名，保存后清理临时文件。
 - `test_02_add_market_extension.py`：添加扩展市场里的扩展，进入扩展管理后切换“扩展市场”，按 `test_data.extension_market.extension_name` 搜索，按 `test_data.extension_market.extension_description` 精确匹配搜索结果卡片并点击“添加”；添加弹窗会等待扩展名称和默认分组“未分组”异步回填完成后再确认，随后切回“添加扩展”列表，断言同一扩展卡片同时包含目标名称和描述，最后通过卡片右上角更多菜单删除并校验删除成功。用例开始和 finally 清理均会显式切回“添加扩展”TAB，避免误操作扩展市场搜索结果卡片。
 - `test_03_create_google_extension_and_enable.py`：创建 Chrome 应用商店扩展并同时启用，读取 `test_data.google_extension.extension_url/name/description/environment_name`，在“添加扩展”弹窗中保持“Chrome 应用商店”方式，填写扩展 URL，等待扩展分组回填或选择“未分组”，勾选“同时启用该扩展，在自动同步到对应环境”后保存；扩展列表按名称和描述断言，提供方期望为“谷歌商店”，提供方断言失败会记录为延迟断言并继续执行；随后进入环境管理搜索并打开“自动化扩展启用验证”，通过内核 CDP 访问 `chrome://extensions/`，递归读取 Chrome 扩展页 Shadow DOM 文本，断言目标扩展名称和描述存在，失败同样延迟到关闭环境、清空筛选和删除扩展后统一抛出。
@@ -766,6 +774,10 @@ delete_response = client.delete_environments([environment_id])
 
 最近验证记录：
 
+- `python -m unittest discover -s tests/p1 -p "test_*.py"`：2026-11-23 最终完整 P1 结果为 `Ran 605 tests in 47.822s ... OK (skipped=1)`，即 604 项通过、1 项跳过。唯一跳过项为既有的 `tests.p1.test_remote_cdp_auth.RemoteCdpSidecarTests.test_explicit_protected_non_pem_key_symlink_alias_is_excluded`，原因是当前沙箱的 Windows 符号链接创建权限；随后在允许创建符号链接的环境单独补跑该项，结果为 `Ran 1 test in 0.011s ... OK`。两轮合计完成全部 605 项验证，完整套件的原始统计仍为 604 项通过、1 项跳过。
+- 2026-11-23 Linux Local Storage 正常退出回归：使用账号组 2 执行 `test_30_new_environment_local_storage_persistence.py`、`test_33_individual_environment_local_storage_sync.py`、`test_38_individual_environment_disable_local_storage_sync.py`，结果为 `total=3 passed=3 failed=0 errors=0 skipped=0 flaky=0`，用例事件耗时依次为 `77.28s`、`66.56s`、`62.44s`。三条用例合计 9 次正常关闭均调用 `Browser.close` 并等待内核退出和 APP 操作按钮恢复；前两条在关闭重开及删除本地缓存后保持 `MCDL005 / 已登录`，关闭 Local Storage 同步的第三条在未删缓存重开时保持登录、删缓存后为 `未登录`，符合原断言。登录等待和数据恢复预期未放宽，临时环境按用例流程清理。
+- `python run.py --config config/config.yaml --module test_02_add_market_extension.py --attach-existing-app`：2026-11-23 在 Linux、账号组 2 下真实单跑通过，结果为 `total=1 passed=1 failed=0 errors=0 skipped=0 flaky=0`，用例事件耗时 `16.81s`。原失败点是进入扩展市场前删除旧“网页元素隐藏器”时，卡片描述气泡覆盖更多图标，菜单随错误点击进入离场动画；修复后通过精确更多触发器及关联菜单完成前置清理、市场添加、名称和描述断言、最终删除。另在主动触发描述气泡的条件下，真实编辑菜单打开及扩展市场 Tab 切换烟测通过；该烟测不作为“编辑扩展所属分组”完整业务用例的通过结论。菜单交互实现见 `pages/extension_page.py`，DOM 回归见 `tests/p1/test_extension_card_actions.py`。
+- 2026-11-10 Linux 内核下载与创建验证：`test_01_download_142_kernel.py` 和 `test_01_download_152_kernel.py` 均完成已识别旧版本删除、重新下载、完整版本文件检查及临时环境实际版本核验，下载版本分别为 `142.1.12`、`152.1.2`，用例耗时分别为 `77.30s`、`66.76s`。同日迁移后的 `test_04_create_142_kernel_environment.py` 与 `test_05_batch_create_142_kernel_environments.py` 真实通过，耗时分别为 `27.07s`、`36.17s`，单环境及批量三个环境的内核版本均为 `142.0.7444.273`。当轮 P0 发现为 101 条，其中环境管理 44 条；旧完整性检查保持整段注释。以上是真实业务验证，不以预检或组件测试代替。
 - 批量导入环境结果等待与异常清理：2026-09-30 根据 APP 3.0.4 失败现场确认，导入结果表格会先创建完整行数、再异步把结果列从 `--` 更新为“成功/失败”；旧逻辑仅按行数返回，导致第 4 行仍为占位符时提前断言，且断言发生在关闭弹窗之前。现改为等待全部预期行进入终态；`finally` 无条件清理导入结果弹窗和残留抽屉，关闭按钮处于切换动画或抛出 Playwright 点击异常时用 `Escape` 兜底；两类弹层独立清理，一个失败也必须继续处理另一个。随后按导入尝试状态删除测试环境并清空筛选。新增 5 条 P1，定向 `9/9`、完整 P1 `267/267`、Python 编译和静态差异检查通过；本次未重新运行真实 P0，未操作用户当前 APP。
 - UI 菜单切换执行恢复与稳定停止：2026-10-09 将活动线程、日志队列、累计日志和进度序号保存为 Streamlit 会话级 runtime；执行期间切换到“运行历史”或“账号组”不再触发任务取消，返回“执行用例”后继续展示实时进度，离开期间完成的任务也会补读尾部日志并正常展示最终结果。后续取消每 0.75 秒自动整页重跑，改为在同一页面脚本中只更新日志、状态和进度占位区，修复停止按钮闪烁及点击丢失；显式停止会稳定设置共享停止事件并调用本机、远端或双端原取消回调。新增 5 条 P1，定向 `22/22`、完整 P1 `272/272`、Python 编译和 Streamlit AppTest 页面加载通过；本次未运行真实 P0，未操作用户当前 APP。
 - UI 停止确认实际退出：2026-10-09 现场确认按钮消失后仍有 `run.py` 子进程继续执行，已按精确 PID 终止并确认 UI 锁释放、Streamlit 与原 DICloak APP 保持运行。本机停止回调现直接执行“优雅中断 → 2 秒超时后强制终止精确进程树 → 再次等待确认”的完整链路，按钮线程和日志轮询线程通过一次性回调避免重复竞争；停止期间显示专用的等待退出提示。新增 1 条 P1，定向 `23/23`、完整 P1 `273/273`、Python 编译和 Streamlit AppTest 页面加载通过。

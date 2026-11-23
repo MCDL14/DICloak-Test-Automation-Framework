@@ -15,11 +15,11 @@ from pages.login_page import LoginPage
 
 
 CASE_MODULE = "环境管理"
-KERNEL_134_LABEL = "ChromeBrowser 134"
-KERNEL_134_PREFIX = "134"
+KERNEL_142_LABEL = "ChromeBrowser 142"
+KERNEL_142_PREFIX = "142"
 
 
-class TestBatchCreate134KernelEnvironments(unittest.TestCase):
+class TestBatchCreate142KernelEnvironments(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.config = load_config(Path("config/config.yaml"))
@@ -32,10 +32,10 @@ class TestBatchCreate134KernelEnvironments(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.cdp.close()
 
-    def test_batch_create_open_verify_close_delete_134_kernel_environments(self) -> None:
-        data = self.config["test_data"]["environment_batch_create_134_kernel"]
-        name_prefix = test_prefix(self.config, "batch-create-134")
-        name_cleanup_prefix = cleanup_prefix(self.config, "batch-create-134")
+    def test_batch_create_open_verify_close_delete_142_kernel_environments(self) -> None:
+        data = self.config["test_data"]["environment_batch_create_142_kernel"]
+        name_prefix = test_prefix(self.config, "batch-create-142")
+        name_cleanup_prefix = cleanup_prefix(self.config, "batch-create-142")
         create_count = int(data.get("create_count", 3))
         environment_open_timeout = timeout_seconds(self.config, "environment_open_seconds", 90)
         environment_close_timeout = timeout_seconds(self.config, "environment_close_seconds", 90)
@@ -63,7 +63,7 @@ class TestBatchCreate134KernelEnvironments(unittest.TestCase):
             environment_page.delete_environments_by_prefix_from_current_list(name_cleanup_prefix)
             environment_page.wait_no_environment_by_prefix_in_current_list(name_cleanup_prefix)
 
-            environment_page.batch_create_environments_with_kernel(name_prefix, create_count, KERNEL_134_LABEL)
+            environment_page.batch_create_environments_with_kernel(name_prefix, create_count, KERNEL_142_LABEL)
             environment_page.search_environment_without_assert(name_prefix)
             created_names = environment_page.wait_environment_count_by_prefix_in_current_list(
                 name_prefix,
@@ -72,7 +72,7 @@ class TestBatchCreate134KernelEnvironments(unittest.TestCase):
             assert_equal(
                 len(created_names),
                 create_count,
-                f"batch created 134 kernel environment count is incorrect: names={created_names}",
+                f"batch created 142 kernel environment count is incorrect: names={created_names}",
             )
 
             environment_page.select_environments(created_names)
@@ -115,8 +115,8 @@ class TestBatchCreate134KernelEnvironments(unittest.TestCase):
                 if not kernel_version:
                     kernel_version = kernel_version_from_command_line(kernel_runtime.command_line)
                 assert_true(
-                    kernel_version.startswith(KERNEL_134_PREFIX),
-                    f"kernel version should start with {KERNEL_134_PREFIX}: name={name}, actual={kernel_version}",
+                    kernel_version.startswith(KERNEL_142_PREFIX),
+                    f"kernel version should start with {KERNEL_142_PREFIX}: name={name}, actual={kernel_version}",
                 )
 
             environment_page.select_environments(created_names)
@@ -144,7 +144,7 @@ class TestBatchCreate134KernelEnvironments(unittest.TestCase):
             environment_page.search_environment_without_assert(name_prefix)
             assert_true(
                 not environment_page.environment_names_by_prefix_in_current_list(name_prefix),
-                f"batch created 134 kernel environments were not deleted: prefix={name_prefix}",
+                f"batch created 142 kernel environments were not deleted: prefix={name_prefix}",
             )
             created_names = []
         finally:

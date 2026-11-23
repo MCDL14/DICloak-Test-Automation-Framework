@@ -152,9 +152,7 @@ class ExtensionPage(BasePage):
         self._wait_for_extension_list_not_loading(timeout_seconds=30)
 
     def open_extension_edit_dialog(self, name: str) -> None:
-        self.cdp.hover_element_by_script(self._extension_card_script(name))
-        self.cdp.hover_element_by_script(self._extension_card_more_button_script(name))
-        self.cdp.click_element_by_script(self._dropdown_item_script("编辑"))
+        self._open_extension_card_menu_action(name, "编辑")
         self._wait_for_edit_extension_dialog_visible()
         self._wait_for_dialog_extension_groups_ready()
 
@@ -586,13 +584,38 @@ class ExtensionPage(BasePage):
         raise TimeoutError(f"dialog checkbox did not become checked: {label_text}")
 
     def delete_extension(self, name: str) -> None:
-        self.cdp.hover_element_by_script(self._extension_card_script(name))
-        self.cdp.click_element_by_script(self._extension_card_more_button_script(name))
-        self.cdp.click_element_by_script(self._dropdown_item_script("删除"))
+        self._open_extension_card_menu_action(name, "删除")
         self._wait_delete_extension_dialog_visible()
         self._click_overlay_button_wait_loading_then_closed("确定")
         self._wait_for_extension_list_not_loading()
         self.wait_extension_absent(name)
+
+    def _open_extension_card_menu_action(self, name: str, action: str) -> None:
+        # 卡片中心是描述区，先悬浮整卡会让详情气泡遮住标题旁的更多按钮。
+        # 将指针移出卡片并等气泡关闭，再直接悬浮真正的菜单触发器。
+        self.cdp._page().mouse.move(1, 1)
+        deadline = time.monotonic() + config_timeout_seconds(self.config, "page_seconds", 10)
+        while time.monotonic() < deadline:
+            tooltip_visible = self.cdp.evaluate(
+                """
+                () => Array.from(document.querySelectorAll('.el-popper[role="tooltip"]'))
+                    .some(el => {
+                        if (el.classList.contains('el-dropdown__popper')
+                            || el.querySelector('[role="menu"], [role="listbox"]')) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0
+                            && s.display !== 'none' && s.visibility !== 'hidden';
+                    })
+                """
+            )
+            if not tooltip_visible:
+                break
+            time.sleep(0.1)
+        else:
+            raise TimeoutError(f"扩展详情气泡未消失，无法打开操作菜单: {name}")
+        self.cdp.hover_element_by_script(self._extension_card_more_button_script(name))
+        self.cdp.click_element_by_script(self._extension_card_menu_item_script(name, action))
 
     def delete_extension_if_exists(self, name: str) -> None:
         deadline = time.time() + config_timeout_seconds(self.config, "search_result_seconds", 10)
@@ -2374,11 +2397,40 @@ class ExtensionPage(BasePage):
                     && rect.width > 0
                     && rect.height > 0;
             }};
-            const dropdown = Array.from(card.querySelectorAll({self.locator("card_dropdown")!r})).find(visible);
-            if (dropdown) return dropdown;
-            const candidates = Array.from(card.querySelectorAll("button, [role='button'], i, svg"))
-                .filter(visible);
-            return candidates[0] || null;
+            for (const dropdown of card.querySelectorAll({self.locator("card_dropdown")!r})) {{
+                const trigger = Array.from(dropdown.querySelectorAll(
+                    "[aria-haspopup='menu'][aria-controls]"
+                )).find(visible);
+                if (trigger) return trigger;
+            }}
+            return null;
+        }}
+        """
+
+    def _extension_card_menu_item_script(self, name: str, action: str) -> str:
+        return f"""
+        () => {{
+            const trigger = ({self._extension_card_more_button_script(name)})();
+            if (!trigger || trigger.getAttribute('aria-expanded') !== 'true') return null;
+            const menu = document.getElementById(trigger.getAttribute('aria-controls'));
+            if (!menu) return null;
+            const labelledBy = (menu.getAttribute('aria-labelledby') || '').split(/\\s+/);
+            if (labelledBy.some(Boolean) && !labelledBy.includes(trigger.id)) return null;
+            const popper = menu.closest('.el-popper');
+            if (popper && (popper.getAttribute('aria-hidden') === 'true'
+                || Array.from(popper.classList).some(c => c.includes('-leave-')))) return null;
+            const visible = el => {{
+                const r = el.getBoundingClientRect();
+                const s = getComputedStyle(el);
+                return r.width > 0 && r.height > 0
+                    && s.display !== 'none' && s.visibility !== 'hidden';
+            }};
+            const clean = value => String(value || '').replace(/\\s+/g, ' ').trim();
+            if (!visible(menu)) return null;
+            return Array.from(menu.querySelectorAll('[role="menuitem"], .el-dropdown-menu__item'))
+                .find(item => visible(item) && !item.classList.contains('is-disabled')
+                    && item.getAttribute('aria-disabled') !== 'true'
+                    && clean(item.innerText || item.textContent) === {action!r}) || null;
         }}
         """
 

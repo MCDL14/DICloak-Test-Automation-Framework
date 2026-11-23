@@ -64,7 +64,8 @@ def _safe_startup_failure_detail(exc: AppStartupError | CDPConnectionError | OSE
 
 class AutomationRunner:
     PRIORITY_TEST_MODULES = (
-        "tests.p0.environment_management.test_01_kernel_integrity",
+        "tests.p0.environment_management.test_01_download_142_kernel",
+        "tests.p0.environment_management.test_01_download_152_kernel",
     )
 
     def __init__(self, config: dict[str, Any], logger: logging.Logger):

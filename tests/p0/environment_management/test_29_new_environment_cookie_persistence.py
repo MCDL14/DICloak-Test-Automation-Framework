@@ -103,7 +103,7 @@ class TestNewEnvironmentCookiePersistence(unittest.TestCase):
 
             environment_api.create_environment(
                 name=ENVIRONMENT_NAME,
-                browser_version_id="142",
+                browser_version_id="152",
             )
             environment_id = environment_api.last_created_environment_id
             assert_true(bool(environment_id), "创建环境接口未保存响应 data.id")

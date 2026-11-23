@@ -15,11 +15,11 @@ from pages.login_page import LoginPage
 
 
 CASE_MODULE = "环境管理"
-KERNEL_134_LABEL = "ChromeBrowser 134"
-KERNEL_134_PREFIX = "134"
+KERNEL_142_LABEL = "ChromeBrowser 142"
+KERNEL_142_PREFIX = "142"
 
 
-class TestCreate134KernelEnvironment(unittest.TestCase):
+class TestCreate142KernelEnvironment(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.config = load_config(Path("config/config.yaml"))
@@ -32,9 +32,9 @@ class TestCreate134KernelEnvironment(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.cdp.close()
 
-    def test_create_open_verify_close_delete_134_kernel_environment(self) -> None:
-        environment_name = test_name(self.config, "create-134")
-        environment_cleanup_prefix = cleanup_prefix(self.config, "create-134")
+    def test_create_open_verify_close_delete_142_kernel_environment(self) -> None:
+        environment_name = test_name(self.config, "create-142")
+        environment_cleanup_prefix = cleanup_prefix(self.config, "create-142")
         environment_open_timeout = timeout_seconds(self.config, "environment_open_seconds", 90)
         environment_close_timeout = timeout_seconds(self.config, "environment_close_seconds", 90)
         kernel_process_timeout = timeout_seconds(self.config, "kernel_process_seconds", 90)
@@ -60,14 +60,14 @@ class TestCreate134KernelEnvironment(unittest.TestCase):
             environment_page.delete_environments_by_prefix_from_current_list(environment_cleanup_prefix)
             environment_page.wait_no_environment_by_prefix_in_current_list(environment_cleanup_prefix)
 
-            environment_page.create_environment_with_kernel(environment_name, KERNEL_134_LABEL)
+            environment_page.create_environment_with_kernel(environment_name, KERNEL_142_LABEL)
             environment_created = True
             environment_page.wait_environment_visible_in_current_list(environment_name)
 
             assert_equal(
                 environment_page.environment_action_text(environment_name),
                 "打开",
-                f"created 134 kernel environment is not ready to open: {environment_name}",
+                f"created 142 kernel environment is not ready to open: {environment_name}",
             )
             kernel_pid = environment_page.open_environment_and_capture_pid(environment_name)
             assert_true(
@@ -92,8 +92,8 @@ class TestCreate134KernelEnvironment(unittest.TestCase):
             if not kernel_version:
                 kernel_version = kernel_version_from_command_line(kernel_runtime.command_line)
             assert_true(
-                kernel_version.startswith(KERNEL_134_PREFIX),
-                f"kernel version should start with {KERNEL_134_PREFIX}, actual={kernel_version}",
+                kernel_version.startswith(KERNEL_142_PREFIX),
+                f"kernel version should start with {KERNEL_142_PREFIX}, actual={kernel_version}",
             )
 
             environment_page.click_environment_action(environment_name, "关闭")

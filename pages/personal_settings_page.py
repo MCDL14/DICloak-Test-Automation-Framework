@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import time
 from pathlib import Path
 
@@ -55,13 +57,189 @@ class PersonalSettingsPage(BasePage):
         self._wait_for_download_record_kernel_tab()
 
     def download_latest_kernel(self, major_version: str) -> str:
-        # 内核版本区域按“134 版本”这样的标题分组，在该分组里点击“下载”。
+        # 内核版本区域按主版本分组，只点击目标分组内的下载按钮。
+        major_version = self._kernel_major(major_version)
         latest_version = self.latest_kernel_version(major_version)
         self.cdp.click_element_by_script(self._kernel_download_button_script(major_version))
         return latest_version
 
+    @staticmethod
+    def _kernel_major(major_version: str) -> str:
+        major = str(major_version).strip()
+        if not re.fullmatch(r"[1-9][0-9]{1,3}", major):
+            raise ValueError("浏览器内核主版本必须是有效数字")
+        return major
+
+    def _download_record_kernel_states(self) -> list[dict]:
+        states = self.cdp.evaluate(
+            """
+            () => {
+                const root = document.querySelector('#DownloadLog');
+                if (!root) return [];
+                const visible = el => {
+                    const r = el.getBoundingClientRect();
+                    const s = getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && s.display !== 'none'
+                        && s.visibility !== 'hidden';
+                };
+                return Array.from(root.querySelectorAll('ul li')).filter(visible)
+                    .map(row => {
+                        const text = row.innerText || row.textContent || '';
+                        const match = text.match(/Chrome\\s+([0-9]+\\.[0-9]+(?:\\.[0-9]+)+)/);
+                        const button = Array.from(row.querySelectorAll('button'))
+                            .find(b => visible(b) && b.querySelector('.icon-fail'));
+                        const busy = /下载中|正在下载|解压中|正在解压|安装中/.test(text)
+                            || Array.from(row.querySelectorAll('.el-progress, [role=progressbar], .is-loading'))
+                                .some(visible);
+                        return {
+                            version: match ? match[1] : '',
+                            deletable: Boolean(button && !button.disabled),
+                            busy,
+                            failed: /下载失败|解压失败|安装失败|已取消/.test(text),
+                        };
+                    }).filter(row => row.version);
+            }
+            """
+        )
+        return [item for item in states if isinstance(item, dict)] if isinstance(states, list) else []
+
+    def download_record_kernel_versions(self, major_version: str | None = None) -> list[str]:
+        major = self._kernel_major(major_version) if major_version is not None else None
+        return [
+            str(item["version"])
+            for item in self._download_record_kernel_states()
+            if major is None or str(item.get("version", "")).split(".", 1)[0] == major
+        ]
+
+    def delete_downloaded_kernels(self, major_version: str) -> list[str]:
+        """逐一删除目标主版本的记录，返回实际删除成功的完整版本号。"""
+        major = self._kernel_major(major_version)
+        self.open_download_record_kernel_tab()
+        self.refresh_download_record_kernels()
+        removed: list[str] = []
+        deadline = time.monotonic() + timeout_seconds(self.config, "kernel_download_seconds", 300)
+        while time.monotonic() < deadline:
+            records = [
+                item for item in self._download_record_kernel_states()
+                if str(item.get("version", "")).split(".", 1)[0] == major
+            ]
+            if not records:
+                return removed
+            version = str(records[0]["version"])
+            if records[0].get("busy") or not records[0].get("deletable"):
+                raise RuntimeError(f"目标内核当前不可删除: {version}，请确认未被环境占用")
+            self.cdp.click_element_by_script(self._kernel_delete_button_script(version))
+            while time.monotonic() < deadline:
+                if version not in self.download_record_kernel_versions(major):
+                    # 删除会异步重绘列表；必须重新扫描本地版本，不能将短暂空态
+                    # 或其他行减少当作该主版本已经全部删除。
+                    self.refresh_download_record_kernels()
+                    if version not in self.download_record_kernel_versions(major):
+                        if version not in removed:
+                            removed.append(version)
+                        break
+                self._confirm_kernel_deletion_if_visible()
+                time.sleep(0.2)
+            else:
+                raise TimeoutError(f"目标内核删除后仍出现在下载记录中: {version}")
+        raise TimeoutError(f"删除 {major} 内核超时")
+
+    def refresh_download_record_kernels(self) -> None:
+        """使用 APP 下载记录的刷新入口重新扫描，等待刷新结束后再读列表。"""
+        button_script = self._download_record_refresh_button_script()
+        self.cdp.click_element_by_script(button_script)
+        idle_script = f"""
+        () => {{
+            const button = ({button_script})();
+            return Boolean(button && !button.classList.contains('tw-animate-spin'));
+        }}
+        """
+        deadline = time.monotonic() + timeout_seconds(self.config, "page_seconds", 10)
+        while time.monotonic() < deadline:
+            if self.cdp.evaluate(idle_script) is True:
+                return
+            time.sleep(0.1)
+        raise TimeoutError("等待内核下载记录刷新完成超时")
+
+    @staticmethod
+    def _download_record_refresh_button_script() -> str:
+        return """
+        () => {
+            const root = document.querySelector('#DownloadLog');
+            if (!root) return null;
+            return Array.from(root.querySelectorAll('.el-icon.tw-cursor-pointer'))
+                .find(el => {
+                    const r = el.getBoundingClientRect();
+                    const s = getComputedStyle(el);
+                    return !el.closest('ul') && r.width > 0 && r.height > 0
+                        && s.display !== 'none' && s.visibility !== 'hidden';
+                }) || null;
+        }
+        """
+
+    def _kernel_delete_button_script(self, version: str) -> str:
+        return """
+        () => {
+            const expectedVersion = __VERSION__;
+            const root = document.querySelector('#DownloadLog');
+            if (!root) return null;
+            const visible = el => {
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            for (const row of Array.from(root.querySelectorAll('ul li')).filter(visible)) {
+                const match = (row.innerText || row.textContent || '')
+                    .match(/Chrome\\s+([0-9]+\\.[0-9]+(?:\\.[0-9]+)+)/);
+                if (!match || match[1] !== expectedVersion) continue;
+                return Array.from(row.querySelectorAll('button'))
+                    .find(b => visible(b) && !b.disabled && b.querySelector('.icon-fail')) || null;
+            }
+            return null;
+        }
+        """.replace("__VERSION__", json.dumps(version))
+
+    def _confirm_kernel_deletion_if_visible(self) -> None:
+        self.cdp.evaluate(
+            """
+            () => {
+                const visible = el => {
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                for (const box of Array.from(document.querySelectorAll('.el-message-box, .el-dialog')).filter(visible)) {
+                    const text = box.innerText || '';
+                    if (!text.includes('删除') || !text.includes('内核')) continue;
+                    const button = Array.from(box.querySelectorAll('button'))
+                        .find(b => visible(b) && !b.disabled && ['确定', '确认'].includes(b.innerText.trim()));
+                    if (button) { button.click(); return true; }
+                }
+                return false;
+            }
+            """
+        )
+
+    def wait_kernel_download_completed(
+        self, major_version: str, version: str, timeout_seconds: int
+    ) -> None:
+        major = self._kernel_major(major_version)
+        if not re.fullmatch(rf"{re.escape(major)}\.[0-9]+(?:\.[0-9]+)+", version):
+            raise ValueError("下载版本不属于目标内核主版本")
+        self.open_download_record_kernel_tab()
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            for item in self._download_record_kernel_states():
+                if item.get("version") != version:
+                    continue
+                if item.get("failed"):
+                    raise AssertionError(f"内核下载失败: {version}")
+                if item.get("deletable") and not item.get("busy"):
+                    return
+            time.sleep(0.5)
+        raise TimeoutError(f"等待内核下载完成超时: {version}")
+
     def latest_kernel_version(self, major_version: str) -> str:
-        # 从“最新为 Chrome 134.1.26 (20260428)”中提取真实版本号。
+        # 从目标主版本分组的“最新为 Chrome ...”中提取完整版本。
+        major_version = self._kernel_major(major_version)
         script = f"""
         () => {{
             const section = document.querySelector("#CoreVersion");
@@ -318,6 +496,7 @@ class PersonalSettingsPage(BasePage):
         """
 
     def _kernel_download_button_script(self, major_version: str) -> str:
+        major_version = self._kernel_major(major_version)
         return f"""
         () => {{
             const section = document.querySelector("#CoreVersion");
@@ -327,17 +506,22 @@ class PersonalSettingsPage(BasePage):
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             }};
-            const candidates = Array.from(section.querySelectorAll("div"))
-                .filter((el) => visible(el) && (el.innerText || el.textContent || "").includes(expectedTitle));
-            candidates.sort((left, right) => {{
-                const leftRect = left.getBoundingClientRect();
-                const rightRect = right.getBoundingClientRect();
-                return (leftRect.width * leftRect.height) - (rightRect.width * rightRect.height);
-            }});
-            for (const block of candidates) {{
-                const button = Array.from(block.querySelectorAll("button,p,span"))
-                    .find((el) => visible(el) && (el.innerText || el.textContent || "").trim() === "下载");
-                if (button) return button;
+            const clean = value => String(value || '').replace(/\\s+/g, ' ').trim();
+            const headings = Array.from(section.querySelectorAll('div,p,span,h3,h4'))
+                .filter(el => visible(el) && clean(el.innerText || el.textContent) === expectedTitle);
+            for (const heading of headings) {{
+                let block = heading;
+                while (block && block !== section) {{
+                    const titles = Array.from(block.querySelectorAll('div,p,span,h3,h4'))
+                        .filter(visible).map(el => clean(el.innerText || el.textContent))
+                        .filter(text => /^[0-9]+ 版本$/.test(text));
+                    // 不向上匹配包含其它主版本的容器，避免误点其它版本的下载。
+                    if (titles.some(text => text !== expectedTitle)) break;
+                    const button = Array.from(block.querySelectorAll('button,p,span'))
+                        .find(el => visible(el) && !el.disabled && clean(el.innerText || el.textContent) === '下载');
+                    if (button) return button;
+                    block = block.parentElement;
+                }}
             }}
             return null;
         }}

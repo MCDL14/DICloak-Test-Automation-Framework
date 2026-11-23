@@ -1,34 +1,30 @@
 from __future__ import annotations
 
+import copy
+import logging
 import unittest
-from unittest import mock
 
-from tests.p0.environment_management import test_01_kernel_integrity as kernel_integrity
+from core.config import DEFAULT_CONFIG
+from core.runner import AutomationRunner
+from tests.p0.environment_management import test_01_kernel_integrity as old_integrity
 
 
-class KernelIntegrityStageRecoveryTests(unittest.TestCase):
-    def test_later_stage_runs_after_previous_stage_failure(self) -> None:
-        case = object.__new__(kernel_integrity.TestKernelIntegrity)
-        case.logger = mock.MagicMock()
-        failures: list[str] = []
-        executed: list[str] = []
+class KernelDownloadDiscoveryTests(unittest.TestCase):
+    def test_old_kernel_integrity_is_fully_disabled(self) -> None:
+        suite = unittest.defaultTestLoader.loadTestsFromModule(old_integrity)
+        self.assertEqual(suite.countTestCases(), 0)
+        self.assertFalse(hasattr(old_integrity, "TestKernelIntegrity"))
 
-        def fail_copy_validation() -> None:
-            executed.append("copy")
-            raise AssertionError("copied kernel path mismatch")
+    def test_downloads_run_first_and_old_case_is_absent(self) -> None:
+        runner = AutomationRunner(copy.deepcopy(DEFAULT_CONFIG), logging.getLogger("kernel-discovery-test"))
+        suite = runner._prioritize_suite(runner._build_suite(level="p0", module=None, case=None))
+        ids = [case.id() for case in runner._iter_tests(suite)]
 
-        def download_134() -> str:
-            executed.append("download-134")
-            return "downloaded"
-
-        first_result = case._run_validation_stage(failures, "校验 142 内核拷贝", fail_copy_validation)
-        second_result = case._run_validation_stage(failures, "触发 134 内核下载", download_134)
-
-        self.assertIsNone(first_result)
-        self.assertEqual(second_result, "downloaded")
-        self.assertEqual(executed, ["copy", "download-134"])
-        self.assertEqual(len(failures), 1)
-        self.assertIn("copied kernel path mismatch", failures[0])
+        self.assertEqual(len(ids), 101)
+        self.assertTrue(ids[0].endswith("TestDownload142Kernel.test_download_142_kernel_and_verify_environment"))
+        self.assertTrue(ids[1].endswith("TestDownload152Kernel.test_download_152_kernel_and_verify_environment"))
+        self.assertFalse(any("test_01_kernel_integrity" in case_id for case_id in ids))
+        self.assertFalse(any("134_kernel" in case_id for case_id in ids))
 
 
 if __name__ == "__main__":

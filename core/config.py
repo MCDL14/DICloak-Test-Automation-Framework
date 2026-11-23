@@ -181,7 +181,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "environment_batch_create": {
             "create_count": 5,
         },
-        "environment_batch_create_134_kernel": {
+        "environment_batch_create_142_kernel": {
             "create_count": 3,
         },
         "environment_batch_create_multi_group": {
@@ -306,6 +306,12 @@ def load_config(path: Path, *, ignore_runtime_profiles: bool = False) -> dict[st
 
     validate_required_sections(loaded)
     loaded = _merge_external_test_data(config_path, loaded)
+    # 旧账号配置继续沿用原批量数量；显式的新 142 配置优先。
+    test_data = loaded.get("test_data", {})
+    if isinstance(test_data, dict) and "environment_batch_create_142_kernel" not in test_data:
+        legacy_batch = test_data.get("environment_batch_create_134_kernel")
+        if isinstance(legacy_batch, dict):
+            test_data["environment_batch_create_142_kernel"] = deepcopy(legacy_batch)
     merged = deep_merge(DEFAULT_CONFIG, loaded)
     profile_file = "" if ignore_runtime_profiles else str(os.environ.get(ACCOUNT_PROFILE_ENV, "") or "").strip()
     if profile_file:

@@ -92,7 +92,7 @@ class EnvironmentCreateApiClient:
         self,
         *,
         name: str,
-        browser_version_id: str = "142",
+        browser_version_id: str = "152",
         remark: str | None = None,
     ) -> dict[str, object]:
         return build_environment_create_payload(
@@ -106,7 +106,7 @@ class EnvironmentCreateApiClient:
         self,
         *,
         name: str,
-        browser_version_id: str = "142",
+        browser_version_id: str = "152",
         remark: str | None = None,
     ) -> dict[str, object]:
         identity = self.identity()
@@ -378,7 +378,7 @@ def load_environment_create_payload_template(
 def build_environment_create_payload(
     *,
     name: str,
-    browser_version_id: str = "142",
+    browser_version_id: str = "152",
     remark: str | None = None,
     template_path: Path | str = ENVIRONMENT_CREATE_PAYLOAD_TEMPLATE_PATH,
 ) -> dict[str, object]:

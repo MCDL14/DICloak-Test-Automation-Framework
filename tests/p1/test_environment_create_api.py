@@ -24,6 +24,13 @@ from core.environment_create_api import (
 
 
 class EnvironmentCreatePayloadTests(unittest.TestCase):
+    def test_default_environment_payload_uses_152(self) -> None:
+        payload = build_environment_create_payload(name="自动化-默认内核接口环境")
+
+        self.assertEqual(payload["browser_version_id"], "152")
+        self.assertIn("Chrome/152.", payload["ua"])
+        self.assertNotIn("remark", payload)
+
     def test_template_keeps_reference_request_fixed_fields_only(self) -> None:
         template = load_environment_create_payload_template()
 

@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib
 import logging
 import unittest
-from unittest.mock import patch
+from contextlib import ExitStack
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 
 COOKIE_CASES = (
@@ -61,6 +63,31 @@ COOKIE_CASES = (
     ),
 )
 
+LOCAL_STORAGE_CASES = (
+    (
+        "tests.p0.environment_management.test_27_local_storage_data_validation",
+        "TestLocalStorageDataValidation",
+    ),
+    (
+        "tests.p0.environment_management.test_30_new_environment_local_storage_persistence",
+        "TestNewEnvironmentLocalStoragePersistence",
+    ),
+    (
+        "tests.p0.environment_management.test_33_individual_environment_local_storage_sync",
+        "TestIndividualEnvironmentLocalStorageSync",
+    ),
+    (
+        "tests.p0.environment_management.test_38_individual_environment_disable_local_storage_sync",
+        "TestIndividualEnvironmentDisableLocalStorageSync",
+    ),
+    (
+        "tests.p0.global_settings.test_16_disable_local_storage_data_sync",
+        "TestDisableLocalStorageDataSync",
+    ),
+)
+
+DATA_SYNC_CASES = COOKIE_CASES + LOCAL_STORAGE_CASES
+
 
 class _EnvironmentPage:
     def __init__(self, events: list, *, visible: bool = True, action: str = "关闭"):
@@ -90,8 +117,8 @@ class TestCookieBrowserShutdown(unittest.TestCase):
         case.logger = logging.getLogger("cookie-shutdown-integration-test")
         return module, case
 
-    def test_all_cookie_cases_close_kernel_then_wait_for_process_and_app(self) -> None:
-        for module_name, class_name in COOKIE_CASES:
+    def test_all_data_sync_cases_close_kernel_then_wait_for_process_and_app(self) -> None:
+        for module_name, class_name in DATA_SYNC_CASES:
             for app_port in (9222, 9223):
                 with self.subTest(case=class_name, app_port=app_port):
                     module, case = self._case(module_name, class_name, app_port=app_port)
@@ -131,7 +158,7 @@ class TestCookieBrowserShutdown(unittest.TestCase):
                     )
 
     def test_cleanup_without_kernel_endpoint_uses_app_close(self) -> None:
-        for module_name, class_name in COOKIE_CASES:
+        for module_name, class_name in DATA_SYNC_CASES:
             for kernel_pid in (0, 4321):
                 with self.subTest(case=class_name, kernel_pid=kernel_pid):
                     module, case = self._case(module_name, class_name)
@@ -163,7 +190,7 @@ class TestCookieBrowserShutdown(unittest.TestCase):
                     self.assertEqual(events, expected)
 
     def test_browser_close_failure_is_not_replaced_by_app_close(self) -> None:
-        for module_name, class_name in COOKIE_CASES:
+        for module_name, class_name in DATA_SYNC_CASES:
             with self.subTest(case=class_name):
                 module, case = self._case(module_name, class_name)
                 events = []
@@ -188,7 +215,7 @@ class TestCookieBrowserShutdown(unittest.TestCase):
                 self.assertEqual(events, [])
 
     def test_process_exit_timeout_stops_before_app_ready_check(self) -> None:
-        for module_name, class_name in COOKIE_CASES:
+        for module_name, class_name in DATA_SYNC_CASES:
             with self.subTest(case=class_name):
                 module, case = self._case(module_name, class_name)
                 events = []
@@ -210,7 +237,7 @@ class TestCookieBrowserShutdown(unittest.TestCase):
                 self.assertEqual(events, [])
 
     def test_absent_or_closed_environment_is_left_alone(self) -> None:
-        for module_name, class_name in COOKIE_CASES:
+        for module_name, class_name in DATA_SYNC_CASES:
             for visible, action in ((False, "关闭"), (True, "打开")):
                 with self.subTest(case=class_name, visible=visible, action=action):
                     module, case = self._case(module_name, class_name)
@@ -231,6 +258,53 @@ class TestCookieBrowserShutdown(unittest.TestCase):
                     close_browser.assert_not_called()
                     wait_pid.assert_not_called()
                     self.assertEqual(events, [])
+
+    def test_local_storage_read_flow_preserves_kernel_endpoint_for_finally(self) -> None:
+        for module_name, class_name in LOCAL_STORAGE_CASES:
+            for read_fails in (False, True):
+                with self.subTest(case=class_name, read_fails=read_fails), ExitStack() as stack:
+                    module, case = self._case(module_name, class_name, app_port=9223)
+                    page = MagicMock()
+                    page.open_environment_and_capture_pid.return_value = 4321
+                    page.environment_visible_in_current_list.return_value = True
+                    page.environment_action_text.return_value = "关闭"
+
+                    def wait_action(name, action, *, timeout_seconds):
+                        page.environment_action_text.return_value = action
+
+                    page.wait_environment_action_text.side_effect = wait_action
+                    stack.enter_context(patch.object(module, "wait_for_pid_running", return_value=True))
+                    stack.enter_context(patch.object(module, "wait_for_pid_stopped", return_value=True))
+                    stack.enter_context(patch.object(
+                        module, "resolve_kernel_runtime", return_value=SimpleNamespace(cdp_port=18888)
+                    ))
+                    stack.enter_context(patch.object(module, "KernelCDPSession"))
+                    lab_page = stack.enter_context(patch.object(module, "LocalAuthLabPage")).return_value
+                    lab_page.auth_status = "已登录"
+                    lab_page.current_account = "MCDL005"
+                    failure = RuntimeError("local storage page failed")
+                    if read_fails:
+                        lab_page.open.side_effect = failure
+                    close_browser = stack.enter_context(patch.object(module, "close_kernel_browser"))
+                    kwargs = {
+                        "environment_open_timeout": 17,
+                        "environment_close_timeout": 19,
+                        "kernel_process_timeout": 23,
+                        "kernel_cdp_timeout": 29,
+                        "kernel_cdp_probe_timeout": 3,
+                        "http_probe_timeout": 2,
+                        "stage": "测试关闭",
+                    }
+                    if read_fails:
+                        with self.assertRaises(RuntimeError) as raised:
+                            case._open_read_local_storage_status_and_close(page, **kwargs)
+                        self.assertIs(raised.exception, failure)
+                    else:
+                        case._open_read_local_storage_status_and_close(page, **kwargs)
+                    close_browser.assert_called_once_with(
+                        18888, timeout_seconds=19, app_cdp_port=9223
+                    )
+                    page.click_environment_action.assert_not_called()
 
 
 if __name__ == "__main__":
